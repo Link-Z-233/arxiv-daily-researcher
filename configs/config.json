@@ -184,6 +184,24 @@
   },
 
   // ==================================================
+  // LLM Request Pool Configuration
+  // ==================================================
+  "llm_request_pool": {
+    "enabled": true,
+    "requests_per_minute": 30,
+    "log_slow_wait_seconds": 5
+  },
+
+  // ==================================================
+  // Daily Research Configuration
+  // ==================================================
+  "daily_research": {
+    "enable_deep_analysis": true,
+    "persistence_enabled": true,
+    "db_path": "data/daily_research/daily_research.db"
+  },
+
+  // ==================================================
   // PDF Parser Configuration
   // ==================================================
   "pdf_parser": {

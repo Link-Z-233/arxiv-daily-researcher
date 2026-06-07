@@ -154,6 +154,11 @@ class Settings(BaseSettings):
     ENABLE_CONCURRENCY: bool = False  # 是否启用并发
     CONCURRENCY_WORKERS: int = 3  # 并发线程数（建议不超过5）
 
+    # ==================== LLM 请求池配置 ====================
+    LLM_REQUEST_POOL_ENABLED: bool = True  # 是否启用全局 LLM 请求限速
+    LLM_REQUESTS_PER_MINUTE: int = 30  # 全局每分钟 LLM 请求上限
+    LLM_REQUEST_POOL_LOG_SLOW_WAIT_SECONDS: float = 5.0  # 等待超过该秒数时记录日志
+
     # ==================== 报告配置 ====================
     ENABLE_HTML_REPORT: bool = True  # 是否同时生成HTML格式报告
     ENABLE_MARKDOWN_REPORT: bool = True  # 是否生成Markdown格式报告
@@ -161,6 +166,8 @@ class Settings(BaseSettings):
 
     # ==================== Daily Research 模式配置 ====================
     DAILY_ENABLE_DEEP_ANALYSIS: bool = True  # 是否在每日研究模式中执行深度分析
+    DAILY_RESEARCH_PERSISTENCE_ENABLED: bool = True  # 是否启用论文级持久化与断点续跑
+    DAILY_RESEARCH_DB_PATH: Path = DATA_DIR / "daily_research" / "daily_research.db"
 
     # ==================== PDF 解析配置 ====================
     PDF_PARSER_MODE: str = "mineru"  # PDF 解析模式: "mineru" (云端API) 或 "pymupdf" (本地解析)
@@ -370,6 +377,9 @@ class Settings(BaseSettings):
                 paths = config["paths"]
                 if "data_dir" in paths:
                     self.DATA_DIR = self.PROJECT_ROOT / paths["data_dir"]
+                    self.DAILY_RESEARCH_DB_PATH = (
+                        self.DATA_DIR / "daily_research" / "daily_research.db"
+                    )
                 if "reference_pdfs" in paths:
                     self.REF_PDF_DIR = self.PROJECT_ROOT / paths["reference_pdfs"]
                 if "reports" in paths:
@@ -448,6 +458,19 @@ class Settings(BaseSettings):
                 self.ENABLE_CONCURRENCY = conc_cfg.get("enabled", False)
                 self.CONCURRENCY_WORKERS = conc_cfg.get("workers", 3)
 
+            # 加载 LLM 请求池配置
+            if "llm_request_pool" in config:
+                pool_cfg = config["llm_request_pool"]
+                self.LLM_REQUEST_POOL_ENABLED = pool_cfg.get(
+                    "enabled", self.LLM_REQUEST_POOL_ENABLED
+                )
+                self.LLM_REQUESTS_PER_MINUTE = pool_cfg.get(
+                    "requests_per_minute", self.LLM_REQUESTS_PER_MINUTE
+                )
+                self.LLM_REQUEST_POOL_LOG_SLOW_WAIT_SECONDS = pool_cfg.get(
+                    "log_slow_wait_seconds", self.LLM_REQUEST_POOL_LOG_SLOW_WAIT_SECONDS
+                )
+
             # 加载报告设置
             if "report_settings" in config:
                 rpt_cfg = config["report_settings"]
@@ -460,6 +483,11 @@ class Settings(BaseSettings):
                 self.DAILY_ENABLE_DEEP_ANALYSIS = daily_cfg.get(
                     "enable_deep_analysis", True
                 )
+                self.DAILY_RESEARCH_PERSISTENCE_ENABLED = daily_cfg.get(
+                    "persistence_enabled", self.DAILY_RESEARCH_PERSISTENCE_ENABLED
+                )
+                if "db_path" in daily_cfg:
+                    self.DAILY_RESEARCH_DB_PATH = self.PROJECT_ROOT / daily_cfg["db_path"]
 
             # 加载 PDF 解析配置
             if "pdf_parser" in config:
@@ -617,6 +645,7 @@ class Settings(BaseSettings):
         (self.REPORTS_DIR / "keyword_trend").mkdir(parents=True, exist_ok=True)
         self.DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
         self.HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        self.DAILY_RESEARCH_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.REPORT_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 
     def load_report_css(self, css_name: str = "html_report.css") -> str:

@@ -17,6 +17,7 @@ from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from config import settings
+from utils.llm_request_pool import call_chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,8 @@ def _llm_call_with_retry(client, model_name: str, temperature: float, prompt: st
     """带自动重试的 LLM 调用（模块级，避免每次调用重建 retry 装饰器）。"""
     estimated_prompt_tokens = len(prompt) // 4  # 用于重试失败时的近似计数
     try:
-        resp = client.chat.completions.create(
+        resp = call_chat_completion(
+            client,
             model=model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=temperature,

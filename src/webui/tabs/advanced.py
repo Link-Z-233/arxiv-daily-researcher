@@ -70,6 +70,64 @@ def render(_env_values: dict, config_values: dict):
 
     st.divider()
 
+    # ---- LLM Request Pool ----
+    st.markdown(f'<p class="section-title">🚦 {t("llm_pool_title")}</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="hint-text">{t("llm_pool_hint")}</p>', unsafe_allow_html=True)
+
+    col4a, col4b, col4c = st.columns(3)
+    with col4a:
+        st.toggle(
+            t("enable_llm_pool"),
+            value=flat.get("llm_request_pool_enabled", True),
+            key="llm_request_pool_enabled",
+        )
+    with col4b:
+        st.number_input(
+            t("llm_rpm_label"),
+            min_value=1,
+            max_value=600,
+            value=flat.get("llm_requests_per_minute", 30),
+            key="llm_requests_per_minute",
+        )
+    with col4c:
+        st.number_input(
+            t("llm_slow_wait_label"),
+            min_value=0.0,
+            max_value=120.0,
+            value=float(flat.get("llm_request_pool_log_slow_wait_seconds", 5.0)),
+            key="llm_request_pool_log_slow_wait_seconds",
+        )
+
+    st.divider()
+
+    # ---- Daily Research Persistence ----
+    st.markdown(
+        f'<p class="section-title">💾 {t("daily_persistence_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(f'<p class="hint-text">{t("daily_persistence_hint")}</p>', unsafe_allow_html=True)
+
+    col4d, col4e = st.columns(2)
+    with col4d:
+        st.toggle(
+            t("enable_daily_persistence"),
+            value=flat.get("daily_research_persistence_enabled", True),
+            key="daily_research_persistence_enabled",
+        )
+    with col4e:
+        st.toggle(
+            t("daily_deep_analysis_label"),
+            value=flat.get("daily_enable_deep_analysis", True),
+            key="daily_enable_deep_analysis",
+        )
+    st.text_input(
+        t("daily_db_path_label"),
+        value=flat.get("daily_research_db_path", "data/daily_research/daily_research.db"),
+        key="daily_research_db_path",
+    )
+
+    st.divider()
+
     # ---- Report & Token Tracking ----
     st.markdown(
         f'<p class="section-title">📊 {t("advanced_reports_title")}</p>',
@@ -228,6 +286,18 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "mineru_model_version": st.session_state.get("mineru_model_version", "pipeline"),
         "concurrency_enabled": st.session_state.get("concurrency_enabled", False),
         "concurrency_workers": st.session_state.get("concurrency_workers", 3),
+        "llm_request_pool_enabled": st.session_state.get("llm_request_pool_enabled", True),
+        "llm_requests_per_minute": st.session_state.get("llm_requests_per_minute", 30),
+        "llm_request_pool_log_slow_wait_seconds": st.session_state.get(
+            "llm_request_pool_log_slow_wait_seconds", 5.0
+        ),
+        "daily_research_persistence_enabled": st.session_state.get(
+            "daily_research_persistence_enabled", True
+        ),
+        "daily_research_db_path": st.session_state.get(
+            "daily_research_db_path", "data/daily_research/daily_research.db"
+        ),
+        "daily_enable_deep_analysis": st.session_state.get("daily_enable_deep_analysis", True),
         "token_tracking_enabled": st.session_state.get("token_tracking_enabled", True),
         "auto_update_enabled": st.session_state.get("auto_update_enabled", True),
         "keyword_tracker_enabled": st.session_state.get("keyword_tracker_enabled", True),

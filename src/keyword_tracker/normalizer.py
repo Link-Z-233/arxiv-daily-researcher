@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 
 from config import settings
+from utils.llm_request_pool import call_chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,8 @@ class KeywordNormalizer:
         prompt = self._build_prompt(keywords, existing_canonical)
 
         try:
-            response = self.client.chat.completions.create(
+            response = call_chat_completion(
+                self.client,
                 model=self.model,
                 messages=[
                     {

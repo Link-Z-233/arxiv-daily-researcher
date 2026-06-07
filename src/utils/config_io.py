@@ -360,6 +360,12 @@ def build_config_dict(
     log_keep_days: int = 30,
     concurrency_enabled: bool = False,
     concurrency_workers: int = 3,
+    llm_request_pool_enabled: bool = True,
+    llm_requests_per_minute: int = 30,
+    llm_request_pool_log_slow_wait_seconds: float = 5.0,
+    daily_research_persistence_enabled: bool = True,
+    daily_research_db_path: str = "data/daily_research/daily_research.db",
+    daily_enable_deep_analysis: bool = True,
     pdf_parser_mode: str = "mineru",
     mineru_model_version: str = "pipeline",
     mineru_poll_interval: int = 3,
@@ -512,6 +518,16 @@ def build_config_dict(
         "concurrency": {
             "enabled": concurrency_enabled,
             "workers": concurrency_workers,
+        },
+        "llm_request_pool": {
+            "enabled": llm_request_pool_enabled,
+            "requests_per_minute": llm_requests_per_minute,
+            "log_slow_wait_seconds": llm_request_pool_log_slow_wait_seconds,
+        },
+        "daily_research": {
+            "enable_deep_analysis": daily_enable_deep_analysis,
+            "persistence_enabled": daily_research_persistence_enabled,
+            "db_path": daily_research_db_path,
         },
         "pdf_parser": {
             "mode": pdf_parser_mode,
@@ -681,6 +697,20 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["concurrency_enabled"] = cc.get("enabled", False)
     flat["concurrency_workers"] = cc.get("workers", 3)
 
+    # LLM request pool
+    lp = config.get("llm_request_pool", {})
+    flat["llm_request_pool_enabled"] = lp.get("enabled", True)
+    flat["llm_requests_per_minute"] = lp.get("requests_per_minute", 30)
+    flat["llm_request_pool_log_slow_wait_seconds"] = lp.get("log_slow_wait_seconds", 5.0)
+
+    # Daily research
+    dr = config.get("daily_research", {})
+    flat["daily_enable_deep_analysis"] = dr.get("enable_deep_analysis", True)
+    flat["daily_research_persistence_enabled"] = dr.get("persistence_enabled", True)
+    flat["daily_research_db_path"] = dr.get(
+        "db_path", "data/daily_research/daily_research.db"
+    )
+
     # PDF parser
     pp = config.get("pdf_parser", {})
     flat["pdf_parser_mode"] = pp.get("mode", "mineru")
@@ -754,9 +784,11 @@ def validate_llm_connection(api_key: str, base_url: str, model_name: str) -> Tup
 
     try:
         from openai import OpenAI
+        from utils.llm_request_pool import call_chat_completion
 
         client = OpenAI(api_key=api_key, base_url=base_url, timeout=15)
-        response = client.chat.completions.create(
+        response = call_chat_completion(
+            client,
             model=model_name,
             messages=[{"role": "user", "content": "Hi"}],
             max_tokens=5,
@@ -861,4 +893,3 @@ def validate_mineru_connection(api_key: str) -> Tuple[bool, str]:
 
     except Exception as e:
         return False, f"⚠️ 无法连接 MinerU API: {e}"
-

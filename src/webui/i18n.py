@@ -477,6 +477,28 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "推荐：3-5，过高可能触发速率限制。",
         "en": "Recommended: 3-5. Higher values may trigger rate limits.",
     },
+    "llm_pool_title": {"zh": "LLM 请求池", "en": "LLM Request Pool"},
+    "llm_pool_hint": {
+        "zh": "全局限制 LLM 请求速率，避免并发任务触发 API 限流。",
+        "en": "Globally limit LLM request rate to avoid API throttling.",
+    },
+    "enable_llm_pool": {"zh": "启用 LLM 请求池", "en": "Enable LLM request pool"},
+    "llm_rpm_label": {"zh": "每分钟请求数", "en": "Requests per minute"},
+    "llm_slow_wait_label": {"zh": "慢等待日志阈值（秒）", "en": "Slow-wait log threshold (seconds)"},
+    "daily_persistence_title": {
+        "zh": "每日研究持久化",
+        "en": "Daily Research Persistence",
+    },
+    "daily_persistence_hint": {
+        "zh": "保存论文级评分与分析进度，用于断点续跑和失败恢复。",
+        "en": "Save paper-level scoring and analysis progress for resume and recovery.",
+    },
+    "enable_daily_persistence": {
+        "zh": "启用论文级持久化",
+        "en": "Enable paper-level persistence",
+    },
+    "daily_db_path_label": {"zh": "持久化数据库路径", "en": "Persistence database path"},
+    "daily_deep_analysis_label": {"zh": "启用每日深度分析", "en": "Enable daily deep analysis"},
     "advanced_reports_title": {"zh": "功能开关", "en": "Feature Toggles"},
     "html_reports_label": {"zh": "HTML 报告", "en": "HTML reports"},
     "token_tracking_label": {"zh": "Token 用量追踪", "en": "Token tracking"},

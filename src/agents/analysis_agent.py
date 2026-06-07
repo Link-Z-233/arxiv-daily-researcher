@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 
 from config import settings
 from parsers.mineru_parser import MineruParser
+from utils.llm_request_pool import call_chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,8 @@ class AnalysisAgent:
         )
         def _do_call():
             try:
-                resp = self.cheap_client.chat.completions.create(
+                resp = call_chat_completion(
+                    self.cheap_client,
                     model=settings.CHEAP_LLM.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=settings.CHEAP_LLM.temperature,
@@ -146,7 +148,8 @@ class AnalysisAgent:
         )
         def _do_call():
             try:
-                resp = self.cheap_client.chat.completions.create(
+                resp = call_chat_completion(
+                    self.cheap_client,
                     model=settings.CHEAP_LLM.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3,
@@ -181,7 +184,8 @@ class AnalysisAgent:
         )
         def _do_call():
             try:
-                resp = self.smart_client.chat.completions.create(
+                resp = call_chat_completion(
+                    self.smart_client,
                     model=settings.SMART_LLM.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=settings.SMART_LLM.temperature,
