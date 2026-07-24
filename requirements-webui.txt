@@ -1,0 +1,6 @@
+# The WebUI is intentionally isolated from the worker's PDF/LLM stack.
+# Streamlit itself brings the data/visualisation dependencies it needs.
+json5==0.13.0
+requests==2.32.5
+streamlit>=1.30.0
+webdavclient3>=3.14.0

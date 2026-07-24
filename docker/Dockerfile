@@ -11,15 +11,14 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     cron \
     tzdata \
-    git \
     && rm -rf /var/lib/apt/lists/* \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt
+COPY requirements-core.txt .
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements-core.txt
 
 COPY main.py VERSION* ./
 COPY src/ ./src/

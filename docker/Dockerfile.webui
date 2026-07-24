@@ -9,8 +9,8 @@ ENV TZ=Asia/Shanghai \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt
+COPY requirements-webui.txt .
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements-webui.txt
 
 COPY src/utils/config_io.py ./src/utils/
 COPY src/utils/webdav_sync.py ./src/utils/
