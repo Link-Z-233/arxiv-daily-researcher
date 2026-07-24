@@ -84,12 +84,14 @@ class ArxivSource(BasePaperSource):
 
         参数:
             history_dir: 历史记录存储目录
-            max_results: 每个领域最多抓取的论文数
+            max_results: 兼容旧配置的参数。日报抓取不再按数量截断，始终扫描时间窗口内的全部结果。
             proxy_dict: 代理配置字典，如 {"http": "...", "https": "..."}
         """
         super().__init__("arxiv", history_dir)
         self.max_results = max_results
-        self.client = arxiv.Client(page_size=100, delay_seconds=6.0, num_retries=3)  # 避免 429 错误
+        # arXiv API 对分页请求有严格的速率要求。max_results 只保留用于兼容旧配置，
+        # 日报查询使用 max_results=None，不能因为候选数量达到配置值而漏掉论文。
+        self.client = arxiv.Client(page_size=100, delay_seconds=6.0, num_retries=3)
 
         # 注入代理配置到 arxiv.Client 的内部 requests.Session
         if proxy_dict:
@@ -102,6 +104,52 @@ class ArxivSource(BasePaperSource):
 
     def can_download_pdf(self) -> bool:
         return True
+
+    @staticmethod
+    def _format_api_timestamp(value: datetime) -> str:
+        """格式化为 arXiv API 使用的 UTC 时间戳。"""
+        return value.astimezone(timezone.utc).strftime("%Y%m%d%H%M")
+
+    @staticmethod
+    def _metadata_from_result(result) -> PaperMetadata:
+        """将 arXiv 客户端结果转换为统一元数据。"""
+        return PaperMetadata(
+            paper_id=result.get_short_id(),
+            title=result.title,
+            authors=[author.name for author in result.authors],
+            abstract=result.summary,
+            published_date=result.published,
+            url=result.entry_id,
+            source="arxiv",
+            pdf_url=result.pdf_url,
+            doi=result.doi,
+            categories=list(result.categories) if result.categories else [],
+        )
+
+    def _fetch_query_results(
+        self,
+        search: arxiv.Search,
+        cutoff_date: datetime,
+        boundary_field: str,
+        fetch_timeout_seconds: int,
+    ) -> tuple[list, int]:
+        """
+        获取一个无数量上限的查询结果。
+
+        arxiv.Client 会按 page_size 自动分页；这里仅在排序字段早于时间边界时
+        停止，因此不会因为历史记录数量或 max_results 配置提前结束。
+        """
+        results = []
+        api_total = 0
+        with _timeout_guard(fetch_timeout_seconds):
+            for result in self.client.results(search):
+                api_total += 1
+                boundary = getattr(result, boundary_field)
+                if boundary < cutoff_date:
+                    # 两个查询都按边界字段降序排列，可以安全地停止后续分页。
+                    break
+                results.append(result)
+        return results, api_total
 
     def fetch_papers(self, days: int, domains: List[str] = None, **kwargs) -> List[PaperMetadata]:
         """
@@ -119,6 +167,7 @@ class ArxivSource(BasePaperSource):
 
         all_papers = {}
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+        now_date = datetime.now(timezone.utc)
 
         try:
             from config import settings as _settings
@@ -135,6 +184,7 @@ class ArxivSource(BasePaperSource):
         logger.info("[ArXiv] 开始抓取论文")
         logger.info(f"  目标领域: {domains}")
         logger.info(f"  时间范围: 最近 {days} 天")
+        logger.info("  抓取策略: 按提交时间和最后更新时间完整分页（不受 max_results 限制）")
 
         # 记录因严重错误失败的领域及其最后错误信息
         failed_domains: list = []
@@ -143,11 +193,34 @@ class ArxivSource(BasePaperSource):
             query = f"cat:{domain}"
             logger.info(f"  正在抓取领域 {domain}...")
 
-            # 内部请求量为用户配置的 3 倍，确保能在历史记录中找到足够的新论文
-            internal_max = self.max_results * 3
-
-            search = arxiv.Search(
-                query=query, max_results=internal_max, sort_by=arxiv.SortCriterion.SubmittedDate
+            # 第一个查询覆盖时间窗口内首次提交的论文。查询本身带边界，且
+            # max_results=None 让 arxiv.Client 继续请求全部分页。
+            submitted_query = (
+                f"{query} AND submittedDate:"
+                f"[{self._format_api_timestamp(cutoff_date)} TO "
+                f"{self._format_api_timestamp(now_date)}]"
+            )
+            searches = (
+                (
+                    "submitted",
+                    arxiv.Search(
+                        query=submitted_query,
+                        max_results=None,
+                        sort_by=arxiv.SortCriterion.SubmittedDate,
+                        sort_order=arxiv.SortOrder.Descending,
+                    ),
+                    "published",
+                ),
+                (
+                    "updated",
+                    arxiv.Search(
+                        query=query,
+                        max_results=None,
+                        sort_by=arxiv.SortCriterion.LastUpdatedDate,
+                        sort_order=arxiv.SortOrder.Descending,
+                    ),
+                    "updated",
+                ),
             )
 
             # 添加重试机制
@@ -159,61 +232,44 @@ class ArxivSource(BasePaperSource):
 
             while retry_count <= max_retries:
                 try:
+                    domain_papers = {}
                     count = 0
                     api_total = 0
                     skipped_processed = 0
                     skipped_old = 0
-                    consecutive_processed = 0
-                    # 早停阈值：连续遇到已处理论文超过此数量则认为已到达上次抓取边界
-                    early_stop_threshold = 50
-
-                    with _timeout_guard(fetch_timeout_seconds):
-                        for result in self.client.results(search):
-                            api_total += 1
+                    for query_kind, search, boundary_field in searches:
+                        query_results, query_total = self._fetch_query_results(
+                            search,
+                            cutoff_date,
+                            boundary_field,
+                            fetch_timeout_seconds,
+                        )
+                        api_total += query_total
+                        for result in query_results:
                             paper_id = result.get_short_id()
 
-                            # 去重：跳过已处理的论文
+                            # 同一版本可能同时出现在 submitted/updated 查询中。
+                            if paper_id in domain_papers:
+                                continue
+
+                            # 历史记录只跳过已经成功处理的精确版本；不能用连续已处理
+                            # 的数量作为早停条件，否则会漏掉后续的新版本。
                             if self.is_processed(paper_id):
                                 skipped_processed += 1
-                                consecutive_processed += 1
-                                # 早停：连续遇到大量已处理论文，说明已到达历史边界
-                                if consecutive_processed >= early_stop_threshold:
-                                    logger.info(
-                                        f"    连续 {early_stop_threshold} 篇已处理，已到达历史边界，停止继续获取"
-                                    )
-                                    break
                                 continue
 
-                            # 遇到新论文时重置连续计数器
-                            consecutive_processed = 0
-
-                            # 去重：跳过本次已抓取的论文
-                            if paper_id in all_papers:
-                                continue
-
-                            # 时间过滤
-                            if result.published < cutoff_date:
+                            boundary = getattr(result, boundary_field)
+                            if boundary < cutoff_date:
                                 skipped_old += 1
                                 continue
 
-                            # 转换为统一格式
-                            metadata = PaperMetadata(
-                                paper_id=paper_id,
-                                title=result.title,
-                                authors=[author.name for author in result.authors],
-                                abstract=result.summary,
-                                published_date=result.published,
-                                url=result.entry_id,
-                                source="arxiv",
-                                pdf_url=result.pdf_url,
-                                doi=result.doi,
-                                categories=list(result.categories) if result.categories else [],
-                            )
-                            all_papers[paper_id] = metadata
-                            count += 1
+                            domain_papers[paper_id] = self._metadata_from_result(result)
+
+                    all_papers.update(domain_papers)
+                    count = len(domain_papers)
 
                     # 增强诊断日志
-                    logger.info(f"    领域 {domain}: 发现 {count} 篇新论文")
+                    logger.info(f"    领域 {domain}: 发现 {count} 篇新论文（提交/更新查询 API 结果 {api_total} 条）")
                     if api_total > 0 and count == 0:
                         logger.info(
                             f"    诊断信息: API 返回 {api_total} 篇，"
@@ -272,18 +328,13 @@ class ArxivSource(BasePaperSource):
         papers = list(all_papers.values())
         logger.info(f"[ArXiv] 总计发现 {len(papers)} 篇新论文")
 
-        # 若所有领域均因错误失败且没有抓取到任何论文，则抛出异常使上层正确报错
-        if failed_domains and len(papers) == 0:
+        # 任意领域失败都必须明确报错。部分领域成功不能伪装成完整日报，
+        # 否则漏抓会被当作“当天没有论文”，并在之后失去补抓机会。
+        if failed_domains:
             domain_errors = "; ".join(f"{d}({e})" for d, e in failed_domains)
             raise ArxivFetchError(
-                f"ArXiv 抓取失败，所有领域均未能获取论文。失败领域及错误: {domain_errors}"
-            )
-        elif failed_domains:
-            # 部分领域失败但其他领域成功获取了论文，只记录警告
-            domain_errors = "; ".join(f"{d}({e})" for d, e in failed_domains)
-            logger.warning(
-                f"[ArXiv] 部分领域抓取失败（{len(failed_domains)}/{len(domains)} 个），"
-                f"但已成功获取 {len(papers)} 篇论文。失败领域: {domain_errors}"
+                f"ArXiv 抓取未完成，失败领域及错误: {domain_errors}；"
+                f"已暂存 {len(papers)} 篇结果，下一次运行应重试失败领域"
             )
 
         return papers
@@ -366,6 +417,7 @@ class ArxivSource(BasePaperSource):
         max_retries = 3
         retry_count = 0
         base_wait_time = 60
+        last_error: Exception | None = None
 
         while retry_count <= max_retries:
             papers = []  # 每次重试前清空，防止重复积累
@@ -389,10 +441,12 @@ class ArxivSource(BasePaperSource):
                         papers.append(metadata)
 
                 logger.info(f"[ArXiv] 关键词搜索完成: 共 {len(papers)} 篇论文")
+                last_error = None
                 break
 
             except Exception as e:
                 error_msg = str(e)
+                last_error = e
                 if isinstance(e, _ArxivTimeoutError):
                     retry_count += 1
                     if retry_count <= max_retries:
@@ -417,5 +471,8 @@ class ArxivSource(BasePaperSource):
                 else:
                     logger.error(f"  关键词搜索失败: {e}")
                     break
+
+        if last_error is not None:
+            raise ArxivFetchError(f"ArXiv 关键词搜索失败: {last_error}") from last_error
 
         return papers

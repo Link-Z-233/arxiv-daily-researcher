@@ -181,11 +181,11 @@ class SearchAgent:
                     papers = source.fetch_papers(days=days)
                     results[source_name] = papers
 
-            except Exception as e:
-                logger.error(f"[{source_name}] 抓取失败: {e}")
-                import traceback
-
-                traceback.print_exc()
+            except Exception:
+                # 抓取错误不能被转换为空列表，否则上层会生成看似成功但实际
+                # 漏论文的日报。让调用方决定是否重试/终止本次运行。
+                logger.exception(f"[{source_name}] 抓取失败")
+                raise
 
         # 统计
         total = sum(len(papers) for papers in results.values())
