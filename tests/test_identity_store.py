@@ -13,6 +13,7 @@ from sources.arxiv_source import ArxivSource  # noqa: E402
 from sources.base_source import PaperMetadata, split_arxiv_version  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from report.daily.reporter import Reporter  # noqa: E402
+from agents.analysis_agent import WeightedScoreResponse  # noqa: E402
 
 
 def _paper(paper_id: str) -> PaperMetadata:
@@ -115,6 +116,42 @@ class IdentityStoreTests(unittest.TestCase):
             Reporter._paper_status_label({"paper_metadata": paper, "is_retry": True}),
             "↻ 重试",
         )
+
+    def test_stage_state_keeps_score_when_translation_or_analysis_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(1)
+            paper = _paper("2501.12345v1")
+            store.upsert_paper_seen(run_id, "arxiv", paper)
+            score = WeightedScoreResponse(
+                total_score=4,
+                keyword_scores={"quantum": 4},
+                author_bonus=0,
+                expert_authors_found=[],
+                passing_score=3,
+                is_qualified=True,
+                reasoning="relevant",
+                tldr="A concise TLDR",
+                extracted_keywords=["quantum"],
+            )
+            scored = {"paper_metadata": paper, "paper_id": paper.paper_id, "score_response": score}
+            store.update_score(run_id, "arxiv", scored)
+            record = store.get_paper_record("arxiv", paper.paper_id)
+            self.assertEqual(record["score_status"], "succeeded")
+            self.assertEqual(record["translation_status"], "pending")
+            self.assertIsNone(store.hydrate_scored_paper(paper, record))
+            self.assertEqual(store.hydrate_scored_paper(paper, record, False)["score_response"].tldr,
+                             "A concise TLDR")
+
+            store.update_error(run_id, "arxiv", paper.paper_id, "translation down", stage="translation")
+            failed = store.get_paper_record("arxiv", paper.paper_id)
+            self.assertEqual(failed["translation_status"], "failed")
+            self.assertEqual(failed["retry_count"], 1)
+
+            store.update_translation(run_id, "arxiv", paper.paper_id, "中文摘要")
+            store.update_analysis(run_id, "arxiv", paper.paper_id, {"summary": "analysis"})
+            hydrated = store.hydrate_analysis(store.get_paper_record("arxiv", paper.paper_id))
+            self.assertEqual(hydrated, {"summary": "analysis"})
 
 
 if __name__ == "__main__":

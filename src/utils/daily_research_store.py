@@ -73,6 +73,7 @@ class DailyResearchStore:
                 """
             )
             self._migrate_paper_identity(conn)
+            self._migrate_stage_state(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_papers_run ON daily_papers(run_id)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_papers_completed ON daily_papers(completed_at)"
@@ -133,6 +134,37 @@ class DailyResearchStore:
                     (canonical_id, desired_version, row["source"], row["paper_id"]),
                 )
 
+    @staticmethod
+    def _migrate_stage_state(conn):
+        """Add explicit stage states to databases created before the state model."""
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        additions = {
+            "score_status": "TEXT NOT NULL DEFAULT 'pending'",
+            "translation_status": "TEXT NOT NULL DEFAULT 'pending'",
+            "analysis_status": "TEXT NOT NULL DEFAULT 'pending'",
+            "retry_count": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE daily_papers ADD COLUMN {name} {definition}")
+
+        conn.execute(
+            "UPDATE daily_papers SET score_status = 'succeeded' "
+            "WHERE score_json IS NOT NULL AND score_status = 'pending'"
+        )
+        conn.execute(
+            "UPDATE daily_papers SET translation_status = 'succeeded' "
+            "WHERE abstract_cn IS NOT NULL AND trim(abstract_cn) <> '' "
+            "AND translation_status = 'pending'"
+        )
+        conn.execute(
+            "UPDATE daily_papers SET analysis_status = 'succeeded' "
+            "WHERE analysis_json IS NOT NULL AND analysis_status = 'pending'"
+        )
+
     def start_run(self, total_papers: int) -> str:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         now = datetime.now().isoformat()
@@ -145,6 +177,13 @@ class DailyResearchStore:
                 (run_id, now, "running", total_papers),
             )
         return run_id
+
+    def set_run_total(self, run_id: str, total_papers: int):
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE daily_runs SET total_papers = ? WHERE run_id = ?",
+                (total_papers, run_id),
+            )
 
     def complete_run(self, run_id: str, report_paths: Optional[Dict[str, Any]] = None):
         now = datetime.now().isoformat()
@@ -181,6 +220,16 @@ class DailyResearchStore:
                 "SELECT * FROM daily_papers WHERE source = ? AND paper_id = ?",
                 (source, paper_id),
             ).fetchone()
+
+    @staticmethod
+    def _analysis_json(analysis: Any) -> str:
+        if hasattr(analysis, "model_dump"):
+            payload = analysis.model_dump(mode="json")
+        elif isinstance(analysis, dict):
+            payload = analysis
+        else:
+            payload = dict(analysis)
+        return json.dumps(payload, ensure_ascii=False)
 
     def get_previous_version_record(
         self, source: str, paper: "PaperMetadata"
@@ -243,6 +292,7 @@ class DailyResearchStore:
             )
 
     def update_scored_paper(self, run_id: str, source: str, scored: Dict[str, Any]):
+        """Persist a complete score result for backward-compatible callers."""
         now = datetime.now().isoformat()
         paper = scored["paper_metadata"]
         score_response = scored["score_response"]
@@ -252,9 +302,10 @@ class DailyResearchStore:
                 INSERT INTO daily_papers(
                     source, paper_id, canonical_id, version,
                     first_seen_at, last_seen_at, run_id, paper_json,
-                    score_json, abstract_cn, scored_at, translated_at, last_error
+                    score_json, abstract_cn, scored_at, translated_at,
+                    score_status, translation_status, last_error
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(source, paper_id) DO UPDATE SET
                     canonical_id = excluded.canonical_id,
                     version = excluded.version,
@@ -265,6 +316,8 @@ class DailyResearchStore:
                     abstract_cn = excluded.abstract_cn,
                     scored_at = excluded.scored_at,
                     translated_at = excluded.translated_at,
+                    score_status = excluded.score_status,
+                    translation_status = excluded.translation_status,
                     last_error = NULL
                 """,
                 (
@@ -280,7 +333,61 @@ class DailyResearchStore:
                     scored.get("abstract_cn", ""),
                     now,
                     now if scored.get("abstract_cn") else None,
+                    "succeeded",
+                    "succeeded" if scored.get("abstract_cn") else "pending",
                 ),
+            )
+
+    def update_score(
+        self, run_id: str, source: str, scored: Dict[str, Any]
+    ) -> None:
+        """Persist score/TLDR before attempting translation."""
+        now = datetime.now().isoformat()
+        paper = scored["paper_metadata"]
+        score_response = scored["score_response"]
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE daily_papers
+                SET run_id = ?, paper_json = ?, score_json = ?, scored_at = ?,
+                    score_status = 'succeeded', last_error = NULL
+                WHERE source = ? AND paper_id = ?
+                """,
+                (
+                    run_id,
+                    json.dumps(paper.to_dict(), ensure_ascii=False),
+                    score_response.model_dump_json(),
+                    now,
+                    source,
+                    scored["paper_id"],
+                ),
+            )
+
+    def update_translation(self, run_id: str, source: str, paper_id: str, translation: str):
+        """Persist a successful non-empty abstract translation."""
+        if not translation or not translation.strip():
+            raise ValueError("translation must be non-empty")
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE daily_papers
+                SET run_id = ?, abstract_cn = ?, translated_at = ?,
+                    translation_status = 'succeeded', last_error = NULL
+                WHERE source = ? AND paper_id = ?
+                """,
+                (run_id, translation.strip(), now, source, paper_id),
+            )
+
+    def mark_translation_not_required(self, run_id: str, source: str, paper_id: str):
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE daily_papers
+                SET run_id = ?, translation_status = 'not_required', last_error = NULL
+                WHERE source = ? AND paper_id = ?
+                """,
+                (run_id, source, paper_id),
             )
 
     def update_analysis(self, run_id: str, source: str, paper_id: str, analysis: "Stage2Response"):
@@ -289,22 +396,39 @@ class DailyResearchStore:
             conn.execute(
                 """
                 UPDATE daily_papers
-                SET run_id = ?, analysis_json = ?, analyzed_at = ?, last_error = NULL
+                SET run_id = ?, analysis_json = ?, analyzed_at = ?,
+                    analysis_status = 'succeeded', last_error = NULL
                 WHERE source = ? AND paper_id = ?
                 """,
-                (run_id, analysis.model_dump_json(), now, source, paper_id),
+                (run_id, self._analysis_json(analysis), now, source, paper_id),
             )
 
-    def update_error(self, run_id: str, source: str, paper_id: str, error: str):
+    def mark_analysis_not_required(self, run_id: str, source: str, paper_id: str):
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE daily_papers
+                SET run_id = ?, analysis_status = 'not_required', last_error = NULL
+                WHERE source = ? AND paper_id = ?
+                """,
+                (run_id, source, paper_id),
+            )
+
+    def update_error(
+        self, run_id: str, source: str, paper_id: str, error: str, stage: str = "general"
+    ):
         now = datetime.now().isoformat()
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 UPDATE daily_papers
-                SET run_id = ?, last_seen_at = ?, last_error = ?
+                SET run_id = ?, last_seen_at = ?, last_error = ?, retry_count = retry_count + 1,
+                    score_status = CASE WHEN ? = 'score' THEN 'failed' ELSE score_status END,
+                    translation_status = CASE WHEN ? = 'translation' THEN 'failed' ELSE translation_status END,
+                    analysis_status = CASE WHEN ? = 'analysis' THEN 'failed' ELSE analysis_status END
                 WHERE source = ? AND paper_id = ?
                 """,
-                (run_id, now, error[:4000], source, paper_id),
+                (run_id, now, error[:4000], stage, stage, stage, source, paper_id),
             )
 
     def mark_completed(self, run_id: str, source: str, paper_id: str):
@@ -320,9 +444,16 @@ class DailyResearchStore:
             )
 
     def hydrate_scored_paper(
-        self, paper: "PaperMetadata", record: sqlite3.Row
+        self, paper: "PaperMetadata", record: sqlite3.Row, require_translation: bool = True
     ) -> Optional[Dict[str, Any]]:
         if not record or not record["score_json"]:
+            return None
+        if record["score_status"] != "succeeded":
+            return None
+        if require_translation and record["translation_status"] not in (
+            "succeeded",
+            "not_required",
+        ):
             return None
 
         from agents.analysis_agent import WeightedScoreResponse
@@ -348,6 +479,6 @@ class DailyResearchStore:
     def hydrate_analysis(self, record: sqlite3.Row) -> Optional["Stage2Response"]:
         if not record or not record["analysis_json"]:
             return None
-        from agents.analysis_agent import Stage2Response
-
-        return Stage2Response.model_validate_json(record["analysis_json"])
+        if record["analysis_status"] != "succeeded":
+            return None
+        return json.loads(record["analysis_json"])

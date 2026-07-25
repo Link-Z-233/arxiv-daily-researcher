@@ -411,22 +411,9 @@ class AnalysisAgent:
 
         except Exception as e:
             logger.error(f"论文评分失败 [{title[:50]}]: {e}")
-            import traceback
-
-            traceback.print_exc()
-
-            # 返回默认低分
-            return WeightedScoreResponse(
-                total_score=0.0,
-                keyword_scores={kw: 0.0 for kw in keywords_dict.keys()},
-                author_bonus=0.0,
-                expert_authors_found=[],
-                passing_score=passing_score,
-                is_qualified=False,
-                reasoning=f"评分失败: {str(e)}",
-                tldr="评分失败，无法生成摘要",
-                extracted_keywords=[],
-            )
+            # A synthetic zero score hides outages and permanently loses TLDR
+            # data. Let the pipeline persist the failure and retry the stage.
+            raise RuntimeError(f"论文评分失败 [{title[:50]}]: {e}") from e
 
     # ======================================================================
     # 摘要翻译
@@ -454,12 +441,14 @@ class AnalysisAgent:
 
         try:
             translation = self._call_cheap_llm_plain(prompt)
+            if not translation or not translation.strip():
+                raise RuntimeError("LLM 返回空摘要翻译")
             logger.info(f"摘要翻译完成 [{abstract[:30]}...]")
-            return translation
+            return translation.strip()
 
         except Exception as e:
             logger.error(f"摘要翻译失败: {e}")
-            return ""
+            raise RuntimeError(f"摘要翻译失败: {e}") from e
 
     # ======================================================================
     # 深度分析（使用新模板系统）

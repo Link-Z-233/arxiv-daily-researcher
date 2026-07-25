@@ -17,6 +17,7 @@
 import hashlib
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from pathlib import Path
@@ -44,31 +45,38 @@ def _score_single_paper(
     translation_cache,
     cache_lock,
     keyword_tracker,
+    score_response=None,
+    abstract_cn=None,
+    translate=True,
 ):
     """
     对单篇论文进行评分和翻译（供并发调用）。
 
     线程安全：translation_cache 通过 cache_lock 保护。
     """
-    score_response = analysis_agent.score_paper_with_keywords(
-        title=paper.title,
-        authors=paper.get_authors_string(),
-        abstract=paper.abstract,
-        keywords_dict=all_keywords,
-    )
+    if score_response is None:
+        score_response = analysis_agent.score_paper_with_keywords(
+            title=paper.title,
+            authors=paper.get_authors_string(),
+            abstract=paper.abstract,
+            keywords_dict=all_keywords,
+        )
 
-    abstract_cn = ""
-    if paper.abstract and paper.abstract.strip():
+    if abstract_cn is None:
+        abstract_cn = ""
+    if translate and abstract_cn == "" and paper.abstract and paper.abstract.strip():
         abstract_hash = hashlib.md5(paper.abstract.encode("utf-8")).hexdigest()
 
         with cache_lock:
             cached = translation_cache.get(abstract_hash)
 
-        if cached is not None:
+        if cached:
             abstract_cn = cached
             logger.debug(f"使用缓存的翻译: {paper.title[:30]}...")
         else:
             abstract_cn = analysis_agent.translate_abstract(paper.abstract)
+            if not abstract_cn or not abstract_cn.strip():
+                raise RuntimeError("摘要翻译返回空结果")
             with cache_lock:
                 translation_cache[abstract_hash] = abstract_cn
             logger.debug(f"翻译并缓存: {paper.title[:30]}...")
@@ -107,21 +115,42 @@ def _deep_analyze_single_paper(paper_info, analysis_agent):
     paper_meta = paper_info.get("paper_metadata")
     pdf_url = paper_meta.get_best_pdf_url() if paper_meta else paper_info.get("pdf_url")
 
-    analysis = analysis_agent.deep_analyze(
-        title=paper_info["title"],
-        pdf_url=pdf_url,
-        abstract=paper_info["abstract"],
-        fallback_to_abstract=True,
-    )
+    max_attempts = max(1, int(getattr(settings, "RETRY_MAX_ATTEMPTS", 3)))
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            analysis = analysis_agent.deep_analyze(
+                title=paper_info["title"],
+                pdf_url=pdf_url,
+                abstract=paper_info["abstract"],
+                fallback_to_abstract=True,
+            )
+            if analysis:
+                return {
+                    "paper_id": paper_info["paper_id"],
+                    "analysis": analysis,
+                    "paper_meta": paper_meta,
+                    "title": paper_info["title"],
+                }
+            last_error = RuntimeError("深度分析未返回结果")
+        except Exception as exc:
+            last_error = exc
 
-    if analysis:
-        return {
-            "paper_id": paper_info["paper_id"],
-            "analysis": analysis,
-            "paper_meta": paper_meta,
-            "title": paper_info["title"],
-        }
-    return None
+        if attempt < max_attempts:
+            wait_seconds = min(
+                int(getattr(settings, "RETRY_MIN_WAIT", 2)) * (2 ** (attempt - 1)),
+                int(getattr(settings, "RETRY_MAX_WAIT", 30)),
+            )
+            logger.warning(
+                "深度分析失败，将重试 (%s/%s)，等待 %ss: %s",
+                attempt,
+                max_attempts,
+                wait_seconds,
+                last_error,
+            )
+            time.sleep(wait_seconds)
+
+    raise RuntimeError(f"深度分析在 {max_attempts} 次尝试后仍失败: {last_error}") from last_error
 
 
 def _score_or_hydrate_paper(
@@ -142,17 +171,63 @@ def _score_or_hydrate_paper(
         existing_record = store.get_paper_record(source, paper.paper_id)
         store.upsert_paper_seen(run_id, source, paper)
         record = store.get_paper_record(source, paper.paper_id)
-        hydrated = store.hydrate_scored_paper(paper, record)
+        hydrated = store.hydrate_scored_paper(paper, record, require_translation=False)
         if hydrated:
+            scored = hydrated
+            score_is_new = False
             logger.debug(f"复用已持久化评分: {paper.title[:30]}...")
-            _add_paper_delivery_context(
-                hydrated,
-                paper,
-                existing_record,
-                store.get_previous_version_record(source, paper),
-                previous_version_info,
+        else:
+            score_response = analysis_agent.score_paper_with_keywords(
+                title=paper.title,
+                authors=paper.get_authors_string(),
+                abstract=paper.abstract,
+                keywords_dict=all_keywords,
             )
-            return hydrated
+            scored = _score_single_paper(
+                paper,
+                source,
+                analysis_agent,
+                all_keywords,
+                translation_cache,
+                cache_lock,
+                keyword_tracker,
+                score_response=score_response,
+                abstract_cn="",
+                translate=False,
+            )
+            store.update_score(run_id, source, scored)
+            score_is_new = True
+
+        record = store.get_paper_record(source, paper.paper_id)
+        translation_required = bool(paper.abstract and paper.abstract.strip())
+        translation_done = record["translation_status"] in ("succeeded", "not_required")
+        if translation_required and not translation_done:
+            abstract_hash = hashlib.md5(paper.abstract.encode("utf-8")).hexdigest()
+            with cache_lock:
+                cached = translation_cache.get(abstract_hash)
+            if cached:
+                abstract_cn = cached
+            else:
+                abstract_cn = analysis_agent.translate_abstract(paper.abstract)
+                if not abstract_cn or not abstract_cn.strip():
+                    raise RuntimeError("摘要翻译返回空结果")
+                with cache_lock:
+                    translation_cache[abstract_hash] = abstract_cn
+            store.update_translation(run_id, source, paper.paper_id, abstract_cn)
+            scored["abstract_cn"] = abstract_cn
+        elif not translation_required:
+            store.mark_translation_not_required(run_id, source, paper.paper_id)
+        elif record["abstract_cn"]:
+            scored["abstract_cn"] = record["abstract_cn"]
+
+        _add_paper_delivery_context(
+            scored,
+            paper,
+            existing_record,
+            store.get_previous_version_record(source, paper),
+            previous_version_info,
+        )
+        return scored
 
     scored = _score_single_paper(
         paper,
@@ -163,9 +238,6 @@ def _score_or_hydrate_paper(
         cache_lock,
         keyword_tracker,
     )
-
-    if store:
-        store.update_scored_paper(run_id, source, scored)
 
     _add_paper_delivery_context(
         scored,
@@ -221,6 +293,8 @@ def _mark_completed_papers(
                 logger.info(f"保留未完成深度分析的论文，等待下次恢复: {paper_id}")
                 continue
 
+            if store and not requires_analysis:
+                store.mark_analysis_not_required(run_id, source, paper_id)
             search_agent.mark_as_processed(paper_id, source)
             if store:
                 store.mark_completed(run_id, source, paper_id)
@@ -237,6 +311,8 @@ class DailyResearchPipeline:
         """
         执行每日研究完整流程。
         """
+        store = None
+        run_id = None
         try:
             print("\n" + "=" * 80)
             print("🚀 多数据源研究系统启动")
@@ -248,6 +324,11 @@ class DailyResearchPipeline:
 
             if settings.TOKEN_TRACKING_ENABLED:
                 token_counter.reset()
+
+            if settings.DAILY_RESEARCH_PERSISTENCE_ENABLED:
+                store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
+                run_id = store.start_run(0)
+                logger.info(f"论文级持久化已启用: {settings.DAILY_RESEARCH_DB_PATH}")
 
             # ==================== 阶段1: 配置加载 ====================
             logger.info(">>> 阶段1: 加载配置...")
@@ -279,6 +360,8 @@ class DailyResearchPipeline:
                         NotifierAgent().notify(fail_result)
                     except Exception:
                         pass
+                if store and run_id:
+                    store.fail_run(run_id, fail_result.error_message)
                 return fail_result
 
             logger.info("关键词准备完成:")
@@ -336,6 +419,8 @@ class DailyResearchPipeline:
                         )
                     except Exception as ne:
                         logger.warning(f"发送错误通知失败: {ne}")
+                if store and run_id:
+                    store.fail_run(run_id, error_detail)
                 return fetch_fail_result
 
             total_papers_count = sum(len(papers) for papers in papers_by_source.values())
@@ -351,16 +436,16 @@ class DailyResearchPipeline:
                         NotifierAgent().notify(no_papers_result)
                     except Exception:
                         pass
+                if store and run_id:
+                    store.complete_run(run_id, {})
                 return no_papers_result
 
             logger.info(
                 f"成功抓取 {total_papers_count} 篇新论文（来自 {len(papers_by_source)} 个数据源）"
             )
 
-            if settings.DAILY_RESEARCH_PERSISTENCE_ENABLED:
-                store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
-                run_id = store.start_run(total_papers_count)
-                logger.info(f"论文级持久化已启用: {settings.DAILY_RESEARCH_DB_PATH}")
+            if store and run_id:
+                store.set_run_total(run_id, total_papers_count)
 
             # ==================== 阶段4: 对所有论文评分 ====================
             logger.info(">>> 阶段4: 对所有论文进行加权评分...")
@@ -380,6 +465,7 @@ class DailyResearchPipeline:
 
             translation_cache = {}
             cache_lock = threading.Lock()
+            stage_errors = []
             logger.debug("翻译缓存已启用")
 
             for source, papers in papers_by_source.items():
@@ -423,7 +509,11 @@ class DailyResearchPipeline:
                                     paper = futures[future]
                                     logger.error(f"论文评分异常 ({paper.title[:30]}...): {e}")
                                     if store:
-                                        store.update_error(run_id, source, paper.paper_id, str(e))
+                                        stage = "translation" if "翻译" in str(e) else "score"
+                                        store.update_error(
+                                            run_id, source, paper.paper_id, str(e), stage=stage
+                                        )
+                                    stage_errors.append((source, paper.paper_id, str(e)))
                                 pbar.update(1)
                 else:
                     with tqdm(
@@ -451,7 +541,11 @@ class DailyResearchPipeline:
                             except Exception as e:
                                 logger.error(f"论文评分异常 ({paper.title[:30]}...): {e}")
                                 if store:
-                                    store.update_error(run_id, source, paper.paper_id, str(e))
+                                    stage = "translation" if "翻译" in str(e) else "score"
+                                    store.update_error(
+                                        run_id, source, paper.paper_id, str(e), stage=stage
+                                    )
+                                stage_errors.append((source, paper.paper_id, str(e)))
                                 pbar.update(1)
                                 continue
 
@@ -463,6 +557,12 @@ class DailyResearchPipeline:
                 qualified_count = sum(1 for p in scored_papers if p["score_response"].is_qualified)
                 logger.info(f"    [{source}] 评分完成: {qualified_count}/{len(papers)} 篇及格")
 
+            if stage_errors:
+                details = "; ".join(
+                    f"{source}:{paper_id} - {error}" for source, paper_id, error in stage_errors
+                )
+                raise RuntimeError(f"评分/翻译阶段失败，未生成日报: {details}")
+
             if translation_cache:
                 cache_savings = total_papers_count - len(translation_cache)
                 if cache_savings > 0:
@@ -470,6 +570,7 @@ class DailyResearchPipeline:
 
             # ==================== 阶段5: 深度分析及格论文 ====================
             analyses_by_source: Dict[str, List[Dict[str, Any]]] = {}
+            analysis_errors = []
 
             if not settings.DAILY_ENABLE_DEEP_ANALYSIS:
                 logger.info(
@@ -573,7 +674,11 @@ class DailyResearchPipeline:
                                                     source,
                                                     paper_info["paper_id"],
                                                     "深度分析未返回结果",
+                                                    stage="analysis",
                                                 )
+                                            analysis_errors.append(
+                                                (source, paper_info["paper_id"], "深度分析未返回结果")
+                                            )
                                             pbar.write(f"  ✗ 失败: {paper_info['title'][:55]}...")
                                     except Exception as e:
                                         logger.error(
@@ -585,7 +690,11 @@ class DailyResearchPipeline:
                                                 source,
                                                 paper_info["paper_id"],
                                                 str(e),
+                                                stage="analysis",
                                             )
+                                        analysis_errors.append(
+                                            (source, paper_info["paper_id"], str(e))
+                                        )
                                         pbar.write(f"  ✗ 异常: {paper_info['title'][:55]}...")
                                     pbar.update(1)
                     else:
@@ -599,9 +708,8 @@ class DailyResearchPipeline:
                                 pbar.set_description(f"🔬 [{source}] [{idx}/{len(papers_to_analyze)}]")
                                 pbar.set_postfix_str(f"{paper_info['title'][:35]}...")
 
-                                result = _deep_analyze_single_paper(paper_info, analysis_agent)
-
-                                if result:
+                                try:
+                                    result = _deep_analyze_single_paper(paper_info, analysis_agent)
                                     qualified_papers_with_analysis.append(
                                         {"paper_id": result["paper_id"], "analysis": result["analysis"]}
                                     )
@@ -619,14 +727,19 @@ class DailyResearchPipeline:
                                         )
                                     else:
                                         pbar.write(f"  ✓ 完成: {result['title'][:55]}...")
-                                else:
+                                except Exception as e:
+                                    logger.error(
+                                        f"深度分析异常 ({paper_info['title'][:30]}...): {e}"
+                                    )
                                     if store:
                                         store.update_error(
                                             run_id,
                                             source,
                                             paper_info["paper_id"],
-                                            "深度分析未返回结果",
+                                            str(e),
+                                            stage="analysis",
                                         )
+                                    analysis_errors.append((source, paper_info["paper_id"], str(e)))
                                     pbar.write(f"  ✗ 失败: {paper_info['title'][:55]}...")
 
                                 pbar.update(1)
@@ -635,6 +748,13 @@ class DailyResearchPipeline:
                     logger.info(
                         f"    [{source}] 深度分析完成: {len(qualified_papers_with_analysis)}/{len(papers_with_pdf)} 篇成功"
                     )
+
+            if analysis_errors:
+                details = "; ".join(
+                    f"{source}:{paper_id} - {error}"
+                    for source, paper_id, error in analysis_errors
+                )
+                raise RuntimeError(f"深度分析阶段失败，未生成日报: {details}")
 
             # ==================== 阶段6: 生成分数据源报告 ====================
             logger.info(">>> 阶段6: 生成分数据源研究报告...")
