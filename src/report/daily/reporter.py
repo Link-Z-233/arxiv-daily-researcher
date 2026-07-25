@@ -73,6 +73,30 @@ class Reporter:
         """获取数据源的显示名称"""
         return SOURCE_DISPLAY_NAMES.get(source, source.upper())
 
+    @staticmethod
+    def _paper_status_label(paper: Dict[str, Any]) -> str:
+        """Build a visible version/retry label for a paper entry."""
+        paper_meta = paper.get("paper_metadata")
+        revision = paper.get("revision") or {}
+        version = getattr(paper_meta, "version", None)
+        if revision:
+            current = revision.get("version", version)
+            previous = revision.get("previous_version")
+            pushed_at = revision.get("previous_pushed_at")
+            pushed_text = str(pushed_at or "").replace("T", " ")[:19]
+            label = f"🔁 修订版 v{current}" if current is not None else "🔁 修订版"
+            if previous is not None:
+                label += f"（上一版本 v{previous}"
+                if pushed_text:
+                    label += f" 于 {pushed_text} 推送"
+                label += "）"
+            return label
+        if paper.get("is_retry"):
+            return "↻ 重试"
+        if version is not None:
+            return f"v{version}"
+        return ""
+
     def generate_reports_by_source(
         self,
         scored_papers_by_source: Dict[str, List[Dict[str, Any]]],
@@ -383,11 +407,14 @@ class Reporter:
         title = paper_meta.title if paper_meta else paper.get("title", "Unknown")
 
         # 生成标题行
+        status_label = self._paper_status_label(paper)
+        title_with_status = f"{title[:100]}  `{status_label}`" if status_label else title[:100]
         if is_qualified_section:
-            lines.append(f"### {idx}. {title[:100]}")
+            lines.append(f"### {idx}. {title_with_status}")
         else:
             status_icon = qualified_icon if score_resp.is_qualified else unqualified_icon
-            lines.append(f"### {idx}. {status_icon} {title}")
+            title_with_status = f"{title}  `{status_label}`" if status_label else title
+            lines.append(f"### {idx}. {status_icon} {title_with_status}")
         lines.append("")
 
         # 获取模块配置
@@ -558,12 +585,14 @@ class Reporter:
             parts.append(f'<div class="card {cls}">')
 
             # 标题行
+            status_label = self._paper_status_label(paper)
+            status_html = f' <span class="revision-label">{h(status_label)}</span>' if status_label else ""
             if url:
                 parts.append(
-                    f'<div class="card-title"><a href="{h(url)}" target="_blank">{idx}. {h(title)}</a>'
+                    f'<div class="card-title"><a href="{h(url)}" target="_blank">{idx}. {h(title)}</a>{status_html}'
                 )
             else:
-                parts.append(f'<div class="card-title">{idx}. {h(title)}')
+                parts.append(f'<div class="card-title">{idx}. {h(title)}{status_html}')
             parts.append(f'<span class="badge {cls}">{badge_text}</span></div>')
 
             # 分数和元数据
@@ -582,6 +611,10 @@ class Reporter:
             parts.append(
                 f'<div class="field"><span class="field-label">Published:</span> {h(published)}</div>'
             )
+            if paper_meta and paper_meta.version is not None:
+                parts.append(
+                    f'<div class="field"><span class="field-label">Version:</span> v{paper_meta.version}</div>'
+                )
 
             # TLDR
             if sr.tldr and sr.tldr != "评分失败，无法生成摘要":

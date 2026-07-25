@@ -124,6 +124,7 @@ class ArxivSource(BasePaperSource):
             pdf_url=result.pdf_url,
             doi=result.doi,
             categories=list(result.categories) if result.categories else [],
+            updated_date=result.updated,
         )
 
     def _fetch_query_results(

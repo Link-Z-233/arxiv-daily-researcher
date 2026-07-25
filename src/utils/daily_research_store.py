@@ -54,6 +54,8 @@ class DailyResearchStore:
                 CREATE TABLE IF NOT EXISTS daily_papers (
                     source TEXT NOT NULL,
                     paper_id TEXT NOT NULL,
+                    canonical_id TEXT NOT NULL DEFAULT '',
+                    version INTEGER NOT NULL DEFAULT 0,
                     first_seen_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
                     run_id TEXT,
@@ -70,10 +72,66 @@ class DailyResearchStore:
                 )
                 """
             )
+            self._migrate_paper_identity(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_papers_run ON daily_papers(run_id)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_papers_completed ON daily_papers(completed_at)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_daily_papers_identity "
+                "ON daily_papers(source, canonical_id, version)"
+            )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS paper_deliveries (
+                    delivery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    canonical_id TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 0,
+                    report_path TEXT,
+                    delivered_at TEXT NOT NULL,
+                    UNIQUE(run_id, source, paper_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_paper_deliveries_identity "
+                "ON paper_deliveries(source, canonical_id, version)"
+            )
+
+    @staticmethod
+    def _migrate_paper_identity(conn):
+        """Add identity columns to databases created by the first persistence patch."""
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        if "canonical_id" not in columns:
+            conn.execute(
+                "ALTER TABLE daily_papers ADD COLUMN canonical_id TEXT NOT NULL DEFAULT ''"
+            )
+        if "version" not in columns:
+            conn.execute(
+                "ALTER TABLE daily_papers ADD COLUMN version INTEGER NOT NULL DEFAULT 0"
+            )
+
+        from sources.base_source import paper_identity
+
+        rows = conn.execute(
+            "SELECT source, paper_id, canonical_id, version FROM daily_papers"
+        ).fetchall()
+        for row in rows:
+            canonical_id, version = paper_identity(row["source"], row["paper_id"])
+            desired_version = version if version is not None else 0
+            if row["canonical_id"] != canonical_id or row["version"] != desired_version:
+                conn.execute(
+                    "UPDATE daily_papers SET canonical_id = ?, version = ? "
+                    "WHERE source = ? AND paper_id = ?",
+                    (canonical_id, desired_version, row["source"], row["paper_id"]),
+                )
 
     def start_run(self, total_papers: int) -> str:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -124,6 +182,36 @@ class DailyResearchStore:
                 (source, paper_id),
             ).fetchone()
 
+    def get_previous_version_record(
+        self, source: str, paper: "PaperMetadata"
+    ) -> Optional[sqlite3.Row]:
+        """Return the latest completed earlier version of an arXiv paper."""
+        if getattr(paper, "version", None) is None:
+            return None
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM daily_papers
+                WHERE source = ? AND canonical_id = ? AND version < ?
+                  AND completed_at IS NOT NULL
+                ORDER BY version DESC, completed_at DESC
+                LIMIT 1
+                """,
+                (source, paper.canonical_id, paper.version),
+            ).fetchone()
+
+    def get_version_records(self, source: str, canonical_id: str) -> list[sqlite3.Row]:
+        """Return all persisted versions for one canonical paper."""
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM daily_papers
+                WHERE source = ? AND canonical_id = ?
+                ORDER BY version ASC, first_seen_at ASC
+                """,
+                (source, canonical_id),
+            ).fetchall()
+
     def upsert_paper_seen(self, run_id: str, source: str, paper: "PaperMetadata"):
         now = datetime.now().isoformat()
         paper_json = json.dumps(paper.to_dict(), ensure_ascii=False)
@@ -131,15 +219,27 @@ class DailyResearchStore:
             conn.execute(
                 """
                 INSERT INTO daily_papers(
-                    source, paper_id, first_seen_at, last_seen_at, run_id, paper_json
+                    source, paper_id, canonical_id, version,
+                    first_seen_at, last_seen_at, run_id, paper_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source, paper_id) DO UPDATE SET
+                    canonical_id = excluded.canonical_id,
+                    version = excluded.version,
                     last_seen_at = excluded.last_seen_at,
                     run_id = excluded.run_id,
                     paper_json = excluded.paper_json
                 """,
-                (source, paper.paper_id, now, now, run_id, paper_json),
+                (
+                    source,
+                    paper.paper_id,
+                    paper.canonical_id or paper.paper_id,
+                    paper.version or 0,
+                    now,
+                    now,
+                    run_id,
+                    paper_json,
+                ),
             )
 
     def update_scored_paper(self, run_id: str, source: str, scored: Dict[str, Any]):
@@ -150,11 +250,14 @@ class DailyResearchStore:
             conn.execute(
                 """
                 INSERT INTO daily_papers(
-                    source, paper_id, first_seen_at, last_seen_at, run_id, paper_json,
+                    source, paper_id, canonical_id, version,
+                    first_seen_at, last_seen_at, run_id, paper_json,
                     score_json, abstract_cn, scored_at, translated_at, last_error
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(source, paper_id) DO UPDATE SET
+                    canonical_id = excluded.canonical_id,
+                    version = excluded.version,
                     last_seen_at = excluded.last_seen_at,
                     run_id = excluded.run_id,
                     paper_json = excluded.paper_json,
@@ -167,6 +270,8 @@ class DailyResearchStore:
                 (
                     source,
                     scored["paper_id"],
+                    paper.canonical_id or paper.paper_id,
+                    paper.version or 0,
                     now,
                     now,
                     run_id,
@@ -235,6 +340,8 @@ class DailyResearchStore:
             "published": paper.published_date.strftime("%Y-%m-%d")
             if paper.published_date
             else "N/A",
+            "canonical_id": paper.canonical_id,
+            "version": paper.version,
             "score_response": score_response,
         }
 

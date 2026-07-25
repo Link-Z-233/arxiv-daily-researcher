@@ -134,14 +134,24 @@ def _score_or_hydrate_paper(
     cache_lock,
     keyword_tracker,
     store,
+    previous_version_info=None,
 ):
     """Reuse persisted scoring when available, otherwise score and persist."""
+    existing_record = None
     if store:
+        existing_record = store.get_paper_record(source, paper.paper_id)
         store.upsert_paper_seen(run_id, source, paper)
         record = store.get_paper_record(source, paper.paper_id)
         hydrated = store.hydrate_scored_paper(paper, record)
         if hydrated:
             logger.debug(f"复用已持久化评分: {paper.title[:30]}...")
+            _add_paper_delivery_context(
+                hydrated,
+                paper,
+                existing_record,
+                store.get_previous_version_record(source, paper),
+                previous_version_info,
+            )
             return hydrated
 
     scored = _score_single_paper(
@@ -157,7 +167,39 @@ def _score_or_hydrate_paper(
     if store:
         store.update_scored_paper(run_id, source, scored)
 
+    _add_paper_delivery_context(
+        scored,
+        paper,
+        existing_record,
+        store.get_previous_version_record(source, paper) if store else None,
+        previous_version_info,
+    )
+
     return scored
+
+
+def _add_paper_delivery_context(
+    scored, paper, existing_record=None, previous_record=None, previous_history=None
+):
+    """Attach retry/revision metadata consumed by report renderers."""
+    if existing_record is not None and existing_record["completed_at"] is None:
+        scored["is_retry"] = True
+
+    previous_version = None
+    previous_pushed_at = None
+    if previous_record is not None:
+        previous_version = previous_record["version"]
+        previous_pushed_at = previous_record["completed_at"]
+    elif previous_history:
+        previous_version = previous_history.get("version")
+        previous_pushed_at = previous_history.get("processed_at")
+
+    if previous_version is not None:
+        scored["revision"] = {
+            "version": paper.version,
+            "previous_version": previous_version,
+            "previous_pushed_at": previous_pushed_at,
+        }
 
 
 def _mark_completed_papers(
@@ -367,6 +409,9 @@ class DailyResearchPipeline:
                                     cache_lock,
                                     keyword_tracker,
                                     store,
+                                    search_agent.get_previous_processed_version(
+                                        paper.paper_id, source
+                                    ),
                                 ): paper
                                 for paper in papers
                             }
@@ -399,6 +444,9 @@ class DailyResearchPipeline:
                                     cache_lock,
                                     keyword_tracker,
                                     store,
+                                    search_agent.get_previous_processed_version(
+                                        paper.paper_id, source
+                                    ),
                                 )
                             except Exception as e:
                                 logger.error(f"论文评分异常 ({paper.title[:30]}...): {e}")

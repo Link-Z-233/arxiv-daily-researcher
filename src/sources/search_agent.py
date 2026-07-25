@@ -254,6 +254,13 @@ class SearchAgent:
         elif "openalex" in self.sources:
             self.sources["openalex"].mark_as_processed(paper_id)
 
+    def get_previous_processed_version(self, paper_id: str, source: str):
+        """Return legacy-history information for the previous arXiv version."""
+        source_obj = self.get_source(source)
+        if source_obj is None:
+            return None
+        return source_obj.get_previous_processed_version(paper_id)
+
     def get_source(self, source_name: str) -> Optional[BasePaperSource]:
         """获取指定的数据源实例"""
         if source_name == "arxiv":

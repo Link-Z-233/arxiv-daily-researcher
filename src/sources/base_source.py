@@ -6,6 +6,7 @@
 
 import json
 import logging
+import re
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -14,6 +15,32 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
+
+_ARXIV_VERSION_RE = re.compile(r"^(?P<canonical>.+?)(?:v(?P<version>[0-9]+))$")
+
+
+def split_arxiv_version(paper_id: str) -> tuple[str, Optional[int]]:
+    """Return an arXiv canonical identifier and its explicit version."""
+    value = str(paper_id or "").strip()
+    match = _ARXIV_VERSION_RE.match(value)
+    if not match:
+        return value, None
+    return match.group("canonical"), int(match.group("version"))
+
+
+def paper_identity(source: str, paper_id: str) -> tuple[str, Optional[int]]:
+    """Return the stable identity tuple used by history and persistence."""
+    if source == "arxiv":
+        return split_arxiv_version(paper_id)
+    return str(paper_id or ""), None
+
+
+def history_key(source: str, paper_id: str) -> str:
+    """Encode a source/canonical/version pair for legacy JSON history."""
+    canonical, version = paper_identity(source, paper_id)
+    if source == "arxiv" and version is not None:
+        return f"{canonical}@v{version}"
+    return canonical
 
 
 @dataclass
@@ -39,6 +66,27 @@ class PaperMetadata:
     semantic_scholar_tldr: Optional[str] = None  # Semantic Scholar AI生成的TLDR
     arxiv_id: Optional[str] = None  # arXiv ID（期刊论文可能也有arXiv版本）
     arxiv_url: Optional[str] = None  # arXiv论文页面URL
+    canonical_id: Optional[str] = None  # 稳定的论文标识（arXiv 去除 vN 后的 ID）
+    version: Optional[int] = None  # arXiv 版本号，如 1、2
+    updated_date: Optional[datetime] = None  # arXiv 最后更新时间
+
+    def __post_init__(self):
+        if self.source == "arxiv":
+            parsed_canonical, parsed_version = split_arxiv_version(self.paper_id)
+            self.canonical_id = self.canonical_id or parsed_canonical
+            if self.version is None:
+                self.version = parsed_version
+        else:
+            self.canonical_id = self.canonical_id or self.paper_id
+
+    @property
+    def identity(self) -> tuple[str, Optional[int]]:
+        """Stable canonical/version identity for this paper."""
+        return self.canonical_id or self.paper_id, self.version
+
+    @property
+    def version_label(self) -> str:
+        return f"v{self.version}" if self.version is not None else ""
 
     def has_pdf_access(self) -> bool:
         """是否可以下载PDF进行深度分析"""
@@ -78,6 +126,9 @@ class PaperMetadata:
             "semantic_scholar_tldr": self.semantic_scholar_tldr,
             "arxiv_id": self.arxiv_id,
             "arxiv_url": self.arxiv_url,
+            "canonical_id": self.canonical_id,
+            "version": self.version,
+            "updated_date": self.updated_date.isoformat() if self.updated_date else None,
         }
 
 
@@ -141,20 +192,46 @@ class BasePaperSource(ABC):
     def is_processed(self, paper_id: str) -> bool:
         """检查论文是否已处理过（线程安全）"""
         with self._history_lock:
-            return paper_id in self.history
+            return history_key(self.source_name, paper_id) in self.history
 
     def mark_as_processed(self, paper_id: str):
         """标记论文为已处理（线程安全）"""
         with self._history_lock:
-            self.history[paper_id] = datetime.now().isoformat()
+            self.history[history_key(self.source_name, paper_id)] = datetime.now().isoformat()
             self._save_history()
+
+    def get_previous_processed_version(self, paper_id: str) -> Optional[Dict[str, Any]]:
+        """Return the latest processed arXiv version before ``paper_id``."""
+        if self.source_name != "arxiv":
+            return None
+        canonical, version = split_arxiv_version(paper_id)
+        if version is None:
+            return None
+        candidates = []
+        with self._history_lock:
+            for key, processed_at in self.history.items():
+                if key.startswith(f"{canonical}@v"):
+                    try:
+                        previous_version = int(key.rsplit("@v", 1)[1])
+                    except ValueError:
+                        continue
+                    if previous_version < version:
+                        candidates.append((previous_version, processed_at))
+        if not candidates:
+            return None
+        previous_version, processed_at = max(candidates, key=lambda item: item[0])
+        return {"version": previous_version, "processed_at": processed_at}
 
     def _load_history(self):
         """从文件加载历史记录"""
         if self.history_file.exists():
             try:
                 with open(self.history_file, "r", encoding="utf-8") as f:
-                    self.history = json.load(f)
+                    raw_history = json.load(f)
+                    self.history = {
+                        history_key(self.source_name, paper_id): processed_at
+                        for paper_id, processed_at in raw_history.items()
+                    }
                 logger.debug(f"[{self.source_name}] 加载历史记录: {len(self.history)} 条")
             except Exception as e:
                 logger.warning(f"[{self.source_name}] 加载历史记录失败: {e}")
