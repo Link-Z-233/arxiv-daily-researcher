@@ -10,6 +10,7 @@ import sys
 import argparse
 from pathlib import Path
 from datetime import date, timedelta
+from typing import Any, Optional, Sequence
 
 # 将 src 目录加入 Python 模块搜索路径
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
@@ -21,7 +22,7 @@ from utils.run_lock import run_lock
 logger = setup_logger("Main")
 
 
-def parse_args():
+def parse_args(argv: Optional[Sequence[str]] = None):
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
         description="ArXiv Daily Researcher — 多数据源论文研究系统",
@@ -76,10 +77,38 @@ def parse_args():
         default=None,
         help="[trend_research] 限制搜索的 ArXiv 分类，多个用空格分隔，如 quant-ph cond-mat.mes-hall；不指定则不限制分类",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-if __name__ == "__main__":
+def _result_exit_code(result: Any) -> int:
+    """Map an explicit pipeline result to a shell-compatible exit code.
+
+    Both pipelines return a result object with a boolean ``success`` field.
+    Treating a missing or malformed result as failure is intentional: a cron
+    task must not look healthy merely because an implementation path forgot to
+    return its outcome.
+    """
+    if getattr(result, "interrupted", False):
+        logger.warning("任务已中断")
+        return 130
+
+    success = getattr(result, "success", None)
+    if success is True:
+        return 0
+    if success is False:
+        error = getattr(result, "error_message", None)
+        if error:
+            logger.error("任务失败: %s", error)
+        else:
+            logger.error("任务失败，但未提供错误信息")
+        return 1
+
+    logger.error("任务未返回有效运行结果，按失败处理: %r", result)
+    return 1
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Run one selected pipeline and return its process exit code."""
     settings.ensure_directories()
 
     # 自动更新检查
@@ -91,7 +120,7 @@ if __name__ == "__main__":
         except Exception as e:
             logger.warning(f"自动更新检查失败: {e}")
 
-    args = parse_args()
+    args = parse_args(argv)
 
     if args.mode == "trend_research":
         # 研究趋势分析模式
@@ -100,7 +129,7 @@ if __name__ == "__main__":
 
         if not args.keywords:
             print("错误: trend_research 模式必须指定 --keywords 参数")
-            sys.exit(1)
+            return 1
 
         date_to = date.today()
         if args.date_to:
@@ -124,7 +153,7 @@ if __name__ == "__main__":
             date_to=date_to,
             categories=args.categories,
         ):
-            TrendResearchPipeline(
+            result = TrendResearchPipeline(
                 settings=settings,
                 keywords=args.keywords,
                 date_from=date_from,
@@ -133,12 +162,22 @@ if __name__ == "__main__":
                 max_results=max_results,
                 categories=args.categories,
             ).run()
-    else:
-        # 每日研究模式（默认）
-        log_file = setup_run_log("daily_research")
-        logger.info(f"每日研究日志文件: {log_file}")
+        return _result_exit_code(result)
 
-        from modes.daily_research import DailyResearchPipeline
+    # 每日研究模式（默认）
+    log_file = setup_run_log("daily_research")
+    logger.info(f"每日研究日志文件: {log_file}")
 
-        with run_lock("daily_research"):
-            DailyResearchPipeline().run()
+    from modes.daily_research import DailyResearchPipeline
+
+    with run_lock("daily_research"):
+        result = DailyResearchPipeline().run()
+    return _result_exit_code(result)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        logger.warning("任务被用户或停止信号中断")
+        sys.exit(130)

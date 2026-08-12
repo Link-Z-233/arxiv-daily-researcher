@@ -25,6 +25,7 @@ from sources.arxiv_source import ArxivSource
 from agents.trend_agent import TrendAgent
 from report.trend.reporter import TrendReporter
 from notifications import NotifierAgent
+from notifications.notifier import TrendRunResult
 
 logger = setup_logger("TrendResearch")
 
@@ -60,8 +61,8 @@ class TrendResearchPipeline:
         self.max_results = max_results
         self.categories = categories or []
 
-    def run(self):
-        """执行研究趋势分析完整流程"""
+    def run(self) -> TrendRunResult:
+        """Execute the trend pipeline and always return an explicit result."""
         try:
             print("\n" + "=" * 80)
             print("🔬 研究趋势分析模式启动")
@@ -101,7 +102,13 @@ class TrendResearchPipeline:
                 logger.info("未搜索到任何论文。")
                 print("\n未搜索到任何论文，程序退出。")
                 self._send_result_notification(total_papers=0, report_paths={}, success=True)
-                return
+                return TrendRunResult(
+                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    keywords=self.keywords,
+                    date_from=str(self.date_from),
+                    date_to=str(self.date_to),
+                    success=True,
+                )
 
             logger.info(f"搜索到 {len(papers)} 篇论文")
             print(f"  搜索到 {len(papers)} 篇论文")
@@ -190,9 +197,33 @@ class TrendResearchPipeline:
                 print(f"   • [{fmt}] {path}")
             print("=" * 80 + "\n")
 
+            return TrendRunResult(
+                run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                keywords=self.keywords,
+                date_from=str(self.date_from),
+                date_to=str(self.date_to),
+                total_papers=len(papers),
+                tldr_count=tldr_count,
+                trend_skills_count=analysis_count,
+                report_paths={key: str(value) for key, value in report_paths.items()},
+                success=True,
+                token_usage=(
+                    token_counter.get_summary() if settings.TOKEN_TRACKING_ENABLED else {}
+                ),
+            )
+
         except KeyboardInterrupt:
             logger.warning("\n用户中断程序执行")
             print("\n⚠️  程序已被用户中断")
+            return TrendRunResult(
+                run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                keywords=self.keywords,
+                date_from=str(self.date_from),
+                date_to=str(self.date_to),
+                success=False,
+                interrupted=True,
+                error_message="用户中断程序执行",
+            )
         except Exception as e:
             logger.error(f"研究趋势分析出错: {e}", exc_info=True)
             print(f"\n❌ 研究趋势分析失败: {e}")
@@ -201,7 +232,14 @@ class TrendResearchPipeline:
             traceback.print_exc()
 
             self._send_error_notification(str(e))
-            raise
+            return TrendRunResult(
+                run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                keywords=self.keywords,
+                date_from=str(self.date_from),
+                date_to=str(self.date_to),
+                success=False,
+                error_message=str(e),
+            )
 
     # ==================== TLDR 生成辅助 ====================
 

@@ -127,6 +127,7 @@ class RunResult:
     total_qualified: int = 0
     total_analyzed: int = 0
     success: bool = True
+    interrupted: bool = False
     error_message: Optional[str] = None
     top_papers: List[Dict[str, Any]] = field(default_factory=list)
     token_usage: Dict[str, Any] = field(default_factory=dict)
@@ -145,6 +146,7 @@ class TrendRunResult:
     trend_skills_count: int = 0
     report_paths: Dict[str, str] = field(default_factory=dict)
     success: bool = True
+    interrupted: bool = False
     error_message: Optional[str] = None
     token_usage: Dict[str, Any] = field(default_factory=dict)
 

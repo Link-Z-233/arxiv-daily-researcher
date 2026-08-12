@@ -241,11 +241,14 @@ def run_lock(
     except Exception:
         pass
 
-    # 将 SIGTERM 转为 SystemExit，确保 docker stop 时 finally 块能正常执行
+    # Turn SIGTERM into KeyboardInterrupt so pipeline-level interruption
+    # handling can persist failed state before the context manager releases the
+    # flock.  ``main.py`` maps an uncaught interruption to exit code 130 rather
+    # than incorrectly reporting a successful scheduled run.
     _old_sigterm = signal.getsignal(signal.SIGTERM)
 
     def _sigterm_handler(signum, frame):
-        sys.exit(0)
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
 

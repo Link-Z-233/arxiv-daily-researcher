@@ -1140,6 +1140,12 @@ class DailyResearchPipeline:
             print("\n⚠️  程序已被用户中断")
             if store and run_id and not report_delivery_committed:
                 store.fail_run(run_id, "用户中断程序执行")
+            return RunResult(
+                run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                success=False,
+                interrupted=True,
+                error_message="用户中断程序执行",
+            )
         except Exception as e:
             logger.error(f"程序执行出错: {e}", exc_info=True)
             print(f"\n❌ 程序执行失败: {e}")
