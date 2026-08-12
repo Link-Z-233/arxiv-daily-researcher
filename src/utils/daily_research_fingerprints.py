@@ -15,6 +15,14 @@ from typing import Any, Dict, Mapping
 from config import settings
 
 
+# This identifier describes the production decision rule, rather than the
+# particular LLM response schema.  It is persisted with every newly scored
+# paper so offline evaluation can distinguish historical scoring policies
+# without ever storing credentials.
+SCORE_STRATEGY_ID = "legacy_weighted_keyword_v1"
+SCORE_PROMPT_REVISION = "daily-keyword-score-v2"
+
+
 def _canonical_json(value: Any) -> str:
     """Serialize JSON-compatible input in one stable representation."""
     return json.dumps(
@@ -36,6 +44,62 @@ def _model_settings(model: Any, temperature: Any) -> Dict[str, Any]:
     return {
         "model_name": str(getattr(model, "model_name", "")),
         "temperature": temperature,
+    }
+
+
+def build_score_audit_metadata(
+    paper: Any,
+    keywords: Mapping[str, Any],
+    score_input_fingerprint: str | None,
+) -> Dict[str, Any]:
+    """Return non-secret evidence needed to audit one persisted score.
+
+    A hash alone establishes that an input changed, but it does not let a
+    later human review identify which model, keyword weights, or threshold
+    produced a historical decision.  Keep a deliberately small, safe
+    snapshot alongside the score.  In particular, this function must never
+    include an API key, provider URL, or the potentially private free-text
+    research context itself.
+    """
+    policy_input = {
+        "schema": "daily-research-score-policy-v1",
+        "strategy_id": SCORE_STRATEGY_ID,
+        "keywords": [[str(keyword), weight] for keyword, weight in keywords.items()],
+        "score_settings": {
+            "max_score_per_keyword": settings.MAX_SCORE_PER_KEYWORD,
+            "passing_score_base": settings.PASSING_SCORE_BASE,
+            "passing_score_weight_coefficient": settings.PASSING_SCORE_WEIGHT_COEFFICIENT,
+            "enable_author_bonus": settings.ENABLE_AUTHOR_BONUS,
+            "author_bonus_points": settings.AUTHOR_BONUS_POINTS,
+            "expert_authors_fingerprint": stage_input_fingerprint(
+                [str(author) for author in settings.EXPERT_AUTHORS]
+            ),
+            "research_context_fingerprint": stage_input_fingerprint(
+                str(settings.RESEARCH_CONTEXT)
+            ),
+        },
+        "model": _model_settings(settings.CHEAP_LLM, settings.CHEAP_LLM.temperature),
+        "prompt_revision": SCORE_PROMPT_REVISION,
+    }
+    return {
+        "schema": "daily-research-score-audit-v1",
+        "strategy_id": SCORE_STRATEGY_ID,
+        "policy_fingerprint": stage_input_fingerprint(policy_input),
+        "score_input_fingerprint": score_input_fingerprint or "",
+        "paper_identity": {
+            "source": str(getattr(paper, "source", "")),
+            "paper_id": str(getattr(paper, "paper_id", "")),
+        },
+        "keywords": [
+            {"keyword": str(keyword), "weight": weight}
+            for keyword, weight in keywords.items()
+        ],
+        # The actual configured expert list and free-text research context
+        # intentionally stay out of the exportable audit evidence.  Their
+        # fingerprints still distinguish policy changes without disclosure.
+        "score_settings": policy_input["score_settings"],
+        "model": policy_input["model"],
+        "prompt_revision": SCORE_PROMPT_REVISION,
     }
 
 
@@ -72,7 +136,7 @@ def build_stage_input_fingerprints(
             "passing_score_weight_coefficient": settings.PASSING_SCORE_WEIGHT_COEFFICIENT,
         },
         "model": _model_settings(settings.CHEAP_LLM, settings.CHEAP_LLM.temperature),
-        "prompt_revision": "daily-keyword-score-v2",
+        "prompt_revision": SCORE_PROMPT_REVISION,
     }
 
     translation_payload = {

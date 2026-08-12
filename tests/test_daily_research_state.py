@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from config import settings  # noqa: E402
 from modes.daily_research import _score_or_hydrate_paper  # noqa: E402
 from sources.base_source import PaperMetadata  # noqa: E402
 from utils.daily_research_errors import PaperStageError  # noqa: E402
+from utils.daily_research_fingerprints import SCORE_STRATEGY_ID  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 
 
@@ -133,6 +135,23 @@ class DailyResearchStateTests(unittest.TestCase):
             self.assertEqual(retry_agent.score_calls, 0)
             self.assertEqual(retry_agent.translation_calls, 0)
             self.assertEqual(result["abstract_cn"], "中文摘要")
+
+    def test_new_scores_persist_non_secret_audit_evidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            paper = _paper()
+            run_id = store.start_run(1)
+
+            self._run_score_or_hydrate(store, run_id, paper, _Agent(), {"quantum": 1.0})
+            record = store.get_paper_record("arxiv", paper.paper_id)
+            audit = json.loads(record["score_audit_json"])
+
+        self.assertEqual(audit["strategy_id"], SCORE_STRATEGY_ID)
+        self.assertIn("policy_fingerprint", audit)
+        serialized = json.dumps(audit).lower()
+        self.assertNotIn("api_key", serialized)
+        self.assertNotIn("base_url", serialized)
+        self.assertNotIn("research_context\"", serialized)
 
 
 if __name__ == "__main__":

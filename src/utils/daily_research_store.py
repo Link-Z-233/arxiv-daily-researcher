@@ -83,6 +83,7 @@ class DailyResearchStore:
                     run_id TEXT,
                     paper_json TEXT NOT NULL,
                     score_json TEXT,
+                    score_audit_json TEXT,
                     abstract_cn TEXT,
                     analysis_json TEXT,
                     scored_at TEXT,
@@ -100,6 +101,7 @@ class DailyResearchStore:
             self._migrate_paper_identity(conn)
             self._migrate_stage_state(conn)
             self._migrate_stage_fingerprints(conn)
+            self._migrate_score_audit_state(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_papers_run ON daily_papers(run_id)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_papers_completed ON daily_papers(completed_at)"
@@ -287,6 +289,16 @@ class DailyResearchStore:
         for name, definition in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE daily_papers ADD COLUMN {name} {definition}")
+
+    @staticmethod
+    def _migrate_score_audit_state(conn):
+        """Add the non-secret score evidence column to existing databases."""
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        if "score_audit_json" not in columns:
+            conn.execute("ALTER TABLE daily_papers ADD COLUMN score_audit_json TEXT")
 
     @staticmethod
     def _migrate_delivery_identity(conn):
@@ -1175,7 +1187,8 @@ class DailyResearchStore:
                     conn.execute(
                         """
                         UPDATE daily_papers
-                        SET score_json = NULL, abstract_cn = NULL, analysis_json = NULL,
+                        SET score_json = NULL, score_audit_json = NULL,
+                            abstract_cn = NULL, analysis_json = NULL,
                             scored_at = NULL, translated_at = NULL, analyzed_at = NULL,
                             score_status = 'pending', translation_status = 'pending',
                             analysis_status = 'pending', last_error = NULL
@@ -1255,6 +1268,7 @@ class DailyResearchStore:
         source: str,
         scored: Dict[str, Any],
         stage_fingerprints: Optional[Dict[str, str]] = None,
+        score_audit_metadata: Optional[Dict[str, Any]] = None,
     ):
         """Persist a complete score result for backward-compatible callers."""
         now = datetime.now().isoformat()
@@ -1270,11 +1284,12 @@ class DailyResearchStore:
                     source, paper_id, canonical_id, version,
                     first_seen_at, last_seen_at, run_id, paper_json,
                     score_json, abstract_cn, scored_at, translated_at,
+                    score_audit_json,
                     score_status, translation_status,
                     score_input_fingerprint, translation_input_fingerprint,
                     analysis_input_fingerprint, last_error
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(source, paper_id) DO UPDATE SET
                     canonical_id = excluded.canonical_id,
                     version = excluded.version,
@@ -1282,6 +1297,9 @@ class DailyResearchStore:
                     run_id = excluded.run_id,
                     paper_json = excluded.paper_json,
                     score_json = excluded.score_json,
+                    score_audit_json = COALESCE(
+                        excluded.score_audit_json, daily_papers.score_audit_json
+                    ),
                     abstract_cn = excluded.abstract_cn,
                     scored_at = excluded.scored_at,
                     translated_at = excluded.translated_at,
@@ -1311,6 +1329,9 @@ class DailyResearchStore:
                     scored.get("abstract_cn", ""),
                     now,
                     now if scored.get("abstract_cn") else None,
+                    json.dumps(score_audit_metadata, ensure_ascii=False)
+                    if score_audit_metadata is not None
+                    else None,
                     "succeeded",
                     translation_status,
                     fingerprints.get("score"),
@@ -1325,6 +1346,7 @@ class DailyResearchStore:
         source: str,
         scored: Dict[str, Any],
         score_input_fingerprint: Optional[str] = None,
+        score_audit_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Persist score/TLDR before attempting translation."""
         now = datetime.now().isoformat()
@@ -1334,7 +1356,7 @@ class DailyResearchStore:
             conn.execute(
                 """
                 UPDATE daily_papers
-                SET run_id = ?, paper_json = ?, score_json = ?, scored_at = ?,
+                SET run_id = ?, paper_json = ?, score_json = ?, score_audit_json = ?, scored_at = ?,
                     score_status = 'succeeded',
                     score_input_fingerprint = COALESCE(?, score_input_fingerprint),
                     last_error = NULL
@@ -1344,6 +1366,9 @@ class DailyResearchStore:
                     run_id,
                     json.dumps(paper.to_dict(), ensure_ascii=False),
                     score_response.model_dump_json(),
+                    json.dumps(score_audit_metadata, ensure_ascii=False)
+                    if score_audit_metadata is not None
+                    else None,
                     now,
                     score_input_fingerprint,
                     source,

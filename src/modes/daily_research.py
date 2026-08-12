@@ -35,7 +35,10 @@ from report.daily import Reporter
 from notifications import NotifierAgent, RunResult
 from utils.daily_research_store import DailyResearchStore
 from utils.daily_research_errors import PaperStageError, paper_stage_error
-from utils.daily_research_fingerprints import build_stage_input_fingerprints
+from utils.daily_research_fingerprints import (
+    build_score_audit_metadata,
+    build_stage_input_fingerprints,
+)
 from utils.webdav_sync import (
     after_report_sync_maintenance_entry,
     deliver_pending_after_report_syncs,
@@ -309,6 +312,11 @@ def _score_or_hydrate_paper(
                 source,
                 scored,
                 score_input_fingerprint=fingerprints.get("score"),
+                score_audit_metadata=build_score_audit_metadata(
+                    paper,
+                    all_keywords,
+                    fingerprints.get("score"),
+                ),
             )
             score_is_new = True
 
