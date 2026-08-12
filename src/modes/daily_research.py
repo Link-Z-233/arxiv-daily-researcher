@@ -33,6 +33,7 @@ from agents import KeywordAgent, AnalysisAgent
 from sources import (
     ArxivFetchError,
     HuggingFacePapersFetchError,
+    OpenAlexFetchError,
     PaperMetadata,
     SearchAgent,
 )
@@ -812,6 +813,33 @@ class DailyResearchPipeline:
                             "Hugging Face Papers 抓取失败\n\n"
                             f"错误详情：{error_detail}\n\n"
                             "已终止本次日报，以避免产生不完整的数据源结果。",
+                        )
+                    except Exception as ne:
+                        logger.warning("发送错误通知失败: %s", ne)
+                if store and run_id:
+                    store.fail_run(run_id, error_detail)
+                return fetch_fail_result
+            except OpenAlexFetchError as oae:
+                # Enabled journals are part of the requested daily scope.  A
+                # malformed entry, failed page, or partial journal list must
+                # not fall through to the generic exception path: return a
+                # normal failed result so schedulers observe it, while leaving
+                # the source watermark unchanged for a full retry next run.
+                error_detail = str(oae)
+                logger.error("OpenAlex 期刊抓取失败，终止本次运行: %s", error_detail)
+                fetch_fail_result = RunResult(
+                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    success=False,
+                    error_message=f"OpenAlex 期刊抓取失败: {error_detail}",
+                )
+                if settings.ENABLE_NOTIFICATIONS:
+                    try:
+                        NotifierAgent().notify(fetch_fail_result)
+                        NotifierAgent().notify_error(
+                            "openalex_fetch",
+                            "OpenAlex 期刊论文抓取失败\n\n"
+                            f"错误详情：{error_detail}\n\n"
+                            "已终止本次日报，以避免产生不完整的期刊数据源结果。",
                         )
                     except Exception as ne:
                         logger.warning("发送错误通知失败: %s", ne)

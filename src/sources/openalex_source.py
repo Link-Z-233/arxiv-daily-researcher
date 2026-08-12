@@ -10,12 +10,17 @@ import re
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from .base_source import BasePaperSource, PaperMetadata
 
 logger = logging.getLogger(__name__)
+
+
+_OPENALEX_WORK_ID_RE = re.compile(
+    r"^(?:https?://openalex\.org/)?(?P<work_id>W[1-9]\d*)$", re.IGNORECASE
+)
 
 
 class OpenAlexFetchError(RuntimeError):
@@ -112,6 +117,11 @@ class OpenAlexSource(BasePaperSource):
     """
 
     API_BASE_URL = "https://api.openalex.org"
+    # An OpenAlex abstract is a compact inverted index.  A value above this
+    # bound is neither useful to the daily scorer nor safe to allocate from
+    # untrusted upstream JSON.  Unlike the old code, it is not truncated: a
+    # truncated abstract can silently change relevance scoring.
+    MAX_ABSTRACT_POSITION = 50_000
 
     def __init__(
         self,
@@ -340,6 +350,73 @@ class OpenAlexSource(BasePaperSource):
         with self._history_lock:
             return canonical in self.history
 
+    @staticmethod
+    def _work_identity(item: Dict[str, Any]) -> str:
+        """Return a stable DOI/OpenAlex fallback identity or reject the work.
+
+        A work without a usable identity cannot be compared with delivery
+        history.  Silently skipping it would let a completed scan watermark
+        hide that paper forever, so it is a source-level integrity failure.
+        """
+        raw_doi = item.get("doi")
+        if raw_doi is not None:
+            if not isinstance(raw_doi, str) or not raw_doi.strip():
+                raise OpenAlexFetchError("DOI 不是非空字符串")
+            return raw_doi.strip()
+
+        raw_openalex_id = item.get("id")
+        if not isinstance(raw_openalex_id, str):
+            raise OpenAlexFetchError("缺少 DOI 和有效 OpenAlex work ID")
+        match = _OPENALEX_WORK_ID_RE.fullmatch(raw_openalex_id.strip())
+        if match is None:
+            raise OpenAlexFetchError("缺少 DOI 且 OpenAlex work ID 无效")
+        # Preserve the stable ID in a source-distinct namespace.  The API
+        # normally sends the URL form, but accepting its documented bare form
+        # makes the parser deterministic for exported/replayed responses too.
+        return f"openalex:{match.group('work_id').upper()}"
+
+    @staticmethod
+    def _clean_title(value: Any) -> str:
+        """Normalize a required work title without inventing a placeholder."""
+        if not isinstance(value, str):
+            raise OpenAlexFetchError("标题不是字符串")
+        title = re.sub(r"<[^>]+>", "", value)
+        title = re.sub(r"\s+", " ", title).strip()
+        if not title:
+            raise OpenAlexFetchError("缺少标题")
+        return title
+
+    @staticmethod
+    def _authors_from_authorships(value: Any) -> List[str]:
+        """Validate the container while allowing a legitimately empty author list."""
+        if not isinstance(value, list):
+            raise OpenAlexFetchError("authorships 不是列表")
+        authors = []
+        for authorship in value[:20]:  # 最多20个作者
+            if not isinstance(authorship, dict):
+                raise OpenAlexFetchError("authorships 包含非对象条目")
+            author = authorship.get("author")
+            if author is None:
+                continue
+            if not isinstance(author, dict):
+                raise OpenAlexFetchError("authorships.author 不是对象")
+            display_name = author.get("display_name")
+            if display_name is None:
+                continue
+            if not isinstance(display_name, str):
+                raise OpenAlexFetchError("作者名称不是字符串")
+            name = display_name.strip()
+            if name:
+                authors.append(name)
+        return authors
+
+    @staticmethod
+    def _entry_error(journal_code: str, page: int, item_index: int, exc: BaseException):
+        """Attach enough non-secret context to a malformed upstream entry."""
+        return OpenAlexFetchError(
+            f"OpenAlex {journal_code} 第 {page} 页条目 {item_index} 元数据无效: {exc}"
+        )
+
     def _fetch_journal_papers(
         self, issn_list: List[str], journal_code: str, journal_name: str, from_date: str
     ) -> List[PaperMetadata]:
@@ -410,51 +487,37 @@ class OpenAlexSource(BasePaperSource):
                 break
             api_total += len(results)
 
-            for item in results:
-                doi = item.get("doi")
-                if not doi:
-                    # 使用 OpenAlex ID 作为后备
-                    openalex_id = item.get("id", "").replace("https://openalex.org/", "")
-                    if not openalex_id:
-                        continue
-                    doi = f"openalex:{openalex_id}"
+            for item_index, item in enumerate(results, start=1):
+                try:
+                    if not isinstance(item, dict):
+                        raise OpenAlexFetchError("条目不是 JSON 对象")
 
-                # 去重检查
+                    doi = self._work_identity(item)
+                    title = self._clean_title(item.get("title"))
+                    published_date = self._parse_date(item.get("publication_date"))
+                    authors = self._authors_from_authorships(item.get("authorships"))
+
+                    # Missing/empty abstracts are a normal consequence of
+                    # publisher licensing.  A present but malformed index is
+                    # different: treating it as no abstract changes scoring
+                    # while making an incomplete scan look successful.
+                    inverted_index = item.get("abstract_inverted_index")
+                    if inverted_index is None or inverted_index == {}:
+                        abstract = ""
+                        logger.warning(
+                            "    ⚠️  [%s...] OpenAlex 未提供摘要数据 (可能因期刊版权限制)",
+                            title[:30],
+                        )
+                    else:
+                        abstract = self._rebuild_abstract(inverted_index)
+                        logger.debug("    ✅ [%s...] 成功获取摘要", title[:30])
+                except OpenAlexFetchError as exc:
+                    raise self._entry_error(journal_code, page, item_index, exc) from exc
+
+                # 去重检查必须在身份字段验证之后进行。无身份条目既无法
+                # 去重，也不能安全地被当作“已处理”。
                 if self.is_processed(doi):
                     continue
-
-                # 提取标题
-                title = item.get("title", "Untitled")
-                if not title or title == "Untitled":
-                    continue
-
-                # 清理标题（移除可能的HTML标签）
-                title = re.sub(r"<[^>]+>", "", title)
-                title = re.sub(r"\s+", " ", title).strip()
-
-                # 提取作者
-                authors = []
-                authorships = item.get("authorships", [])
-                for authorship in authorships[:20]:  # 最多20个作者
-                    author = authorship.get("author", {})
-                    display_name = author.get("display_name")
-                    if display_name:
-                        authors.append(display_name)
-
-                # 提取并重建摘要
-                abstract = ""
-                inverted_index = item.get("abstract_inverted_index")
-                if inverted_index:
-                    abstract = self._rebuild_abstract(inverted_index)
-                    logger.debug(f"    ✅ [{title[:30]}...] 成功获取摘要")
-                else:
-                    logger.warning(
-                        f"    ⚠️  [{title[:30]}...] OpenAlex 未提供摘要数据 (可能因期刊版权限制)"
-                    )
-
-                # 提取发布日期
-                pub_date_str = item.get("publication_date")
-                published_date = self._parse_date(pub_date_str)
 
                 # 提取 URL
                 if doi.startswith("http"):
@@ -464,14 +527,45 @@ class OpenAlexSource(BasePaperSource):
                 else:
                     landing_page_url = f"https://doi.org/{doi}"
                 primary_location = item.get("primary_location", {})
+                if primary_location is not None and not isinstance(primary_location, dict):
+                    raise self._entry_error(
+                        journal_code,
+                        page,
+                        item_index,
+                        OpenAlexFetchError("primary_location 不是对象"),
+                    )
                 if primary_location and primary_location.get("landing_page_url"):
-                    landing_page_url = primary_location["landing_page_url"]
+                    candidate_url = primary_location["landing_page_url"]
+                    if not isinstance(candidate_url, str) or not candidate_url.strip():
+                        raise self._entry_error(
+                            journal_code,
+                            page,
+                            item_index,
+                            OpenAlexFetchError("primary_location.landing_page_url 不是非空字符串"),
+                        )
+                    landing_page_url = candidate_url.strip()
 
                 # 提取 PDF URL（如果开放获取）
                 pdf_url = None
                 open_access = item.get("open_access", {})
+                if open_access is not None and not isinstance(open_access, dict):
+                    raise self._entry_error(
+                        journal_code,
+                        page,
+                        item_index,
+                        OpenAlexFetchError("open_access 不是对象"),
+                    )
+                open_access = open_access or {}
                 if open_access.get("is_oa") and open_access.get("oa_url"):
-                    pdf_url = open_access["oa_url"]
+                    candidate_pdf_url = open_access["oa_url"]
+                    if not isinstance(candidate_pdf_url, str) or not candidate_pdf_url.strip():
+                        raise self._entry_error(
+                            journal_code,
+                            page,
+                            item_index,
+                            OpenAlexFetchError("open_access.oa_url 不是非空字符串"),
+                        )
+                    pdf_url = candidate_pdf_url.strip()
                     logger.debug(f"    ✅ [{title[:30]}...] 找到开放获取 PDF")
 
                 # 从 locations 提取 arXiv 信息（使用正则表达式提高健壮性）
@@ -479,13 +573,48 @@ class OpenAlexSource(BasePaperSource):
                 arxiv_history_id = None
                 arxiv_url = None
                 locations = item.get("locations", [])
+                if not isinstance(locations, list):
+                    raise self._entry_error(
+                        journal_code,
+                        page,
+                        item_index,
+                        OpenAlexFetchError("locations 不是列表"),
+                    )
                 for loc in locations:
+                    if not isinstance(loc, dict):
+                        raise self._entry_error(
+                            journal_code,
+                            page,
+                            item_index,
+                            OpenAlexFetchError("locations 包含非对象条目"),
+                        )
                     source_info = loc.get("source", {})
+                    if source_info is not None and not isinstance(source_info, dict):
+                        raise self._entry_error(
+                            journal_code,
+                            page,
+                            item_index,
+                            OpenAlexFetchError("locations.source 不是对象"),
+                        )
                     if source_info:
                         source_name = source_info.get("display_name", "")
+                        if not isinstance(source_name, str):
+                            raise self._entry_error(
+                                journal_code,
+                                page,
+                                item_index,
+                                OpenAlexFetchError("locations.source.display_name 不是字符串"),
+                            )
                         # 检查是否是 arXiv 来源
                         if "arxiv" in source_name.lower():
                             loc_url = loc.get("landing_page_url", "")
+                            if loc_url is not None and not isinstance(loc_url, str):
+                                raise self._entry_error(
+                                    journal_code,
+                                    page,
+                                    item_index,
+                                    OpenAlexFetchError("locations.landing_page_url 不是字符串"),
+                                )
                             if loc_url and "arxiv.org" in loc_url:
                                 arxiv_url = loc_url
                                 # 使用正则表达式提取 arXiv ID，更健壮
@@ -575,46 +704,35 @@ class OpenAlexSource(BasePaperSource):
         返回:
             str: 重建的摘要文本
         """
+        if not isinstance(inverted_index, dict):
+            raise OpenAlexFetchError("摘要倒排索引不是对象")
         if not inverted_index:
             return ""
 
-        try:
-            # 找到最大位置索引
-            max_position = 0
-            for positions in inverted_index.values():
-                if positions:
-                    max_position = max(max_position, max(positions))
+        words_by_position: Dict[int, str] = {}
+        for word, positions in inverted_index.items():
+            if not isinstance(word, str) or not word.strip():
+                raise OpenAlexFetchError("摘要倒排索引包含无效词元")
+            if not isinstance(positions, list) or not positions:
+                raise OpenAlexFetchError("摘要倒排索引词元位置不是非空列表")
+            for position in positions:
+                if (
+                    isinstance(position, bool)
+                    or not isinstance(position, int)
+                    or position < 0
+                    or position > self.MAX_ABSTRACT_POSITION
+                ):
+                    raise OpenAlexFetchError("摘要倒排索引包含超范围或非整数位置")
+                if position in words_by_position:
+                    raise OpenAlexFetchError("摘要倒排索引包含重复位置")
+                words_by_position[position] = word
 
-            # 防止内存溢出：限制最大position值
-            MAX_ALLOWED_POSITION = 50000  # 约50KB的文本
-            if max_position > MAX_ALLOWED_POSITION:
-                logger.warning(
-                    f"摘要position过大 ({max_position})，可能数据损坏，截断到 {MAX_ALLOWED_POSITION}"
-                )
-                max_position = MAX_ALLOWED_POSITION
+        abstract = " ".join(words_by_position[position] for position in sorted(words_by_position))
+        if not abstract.strip():  # Defensive: non-empty indices must reconstruct text.
+            raise OpenAlexFetchError("摘要倒排索引未能重建有效摘要")
+        return abstract.strip()
 
-            # 创建位置数组
-            words_array = [""] * (max_position + 1)
-
-            # 填充单词到对应位置
-            for word, positions in inverted_index.items():
-                for pos in positions:
-                    if 0 <= pos <= max_position:
-                        words_array[pos] = word
-
-            # 合并为文本
-            abstract = " ".join(word for word in words_array if word)
-
-            # 基本清理
-            abstract = abstract.strip()
-
-            return abstract
-
-        except Exception as e:
-            logger.warning(f"摘要重建失败: {e}")
-            return ""
-
-    def _parse_date(self, date_str: str) -> datetime:
+    def _parse_date(self, date_str: Any) -> datetime:
         """
         解析 OpenAlex 返回的日期。
 
@@ -626,10 +744,9 @@ class OpenAlexSource(BasePaperSource):
         返回:
             datetime: 解析后的日期对象
         """
+        if not isinstance(date_str, str) or not date_str.strip():
+            raise OpenAlexFetchError("缺少 publication_date")
         try:
-            if date_str:
-                return datetime.strptime(date_str, "%Y-%m-%d")
-        except (ValueError, TypeError):
-            pass
-
-        return datetime.now()
+            return datetime.strptime(date_str.strip(), "%Y-%m-%d")
+        except ValueError as exc:
+            raise OpenAlexFetchError(f"publication_date 格式无效: {date_str!r}") from exc

@@ -3,11 +3,17 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sources.openalex_source import OpenAlexFetchError, OpenAlexSource  # noqa: E402
 from sources.search_agent import SearchAgent  # noqa: E402
+from notifications.notifier import RunResult  # noqa: E402
+from modes.daily_research import DailyResearchPipeline  # noqa: E402
+from config import settings  # noqa: E402
+from utils.daily_research_store import DailyResearchStore  # noqa: E402
 
 
 def _work(index: int) -> dict:
@@ -100,6 +106,66 @@ class OpenAlexFetchTests(unittest.TestCase):
             with self.assertRaisesRegex(OpenAlexFetchError, "results"):
                 source.fetch_papers(days=1)
 
+    def test_missing_abstract_is_valid_but_malformed_required_metadata_fails_closed(self):
+        missing_abstract = _work(1)
+        missing_abstract["abstract_inverted_index"] = None
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = OpenAlexSource(Path(temp_dir), journals=["prl"])
+            source._api_request = lambda _url, _params: {"results": [missing_abstract]}
+            papers = source.fetch_papers(days=1)
+
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0].abstract, "")
+
+        malformed_cases = [
+            ("id", None, "缺少 DOI 和有效 OpenAlex work ID"),
+            ("id", "https://example.test/not-openalex", "OpenAlex work ID 无效"),
+            ("doi", "", "DOI 不是非空字符串"),
+            ("title", "<b> </b>", "缺少标题"),
+            ("publication_date", "not-a-date", "publication_date 格式无效"),
+            ("authorships", {"not": "a list"}, "authorships 不是列表"),
+            ("abstract_inverted_index", {"bad": [0, "1"]}, "摘要倒排索引"),
+        ]
+        for field, value, error in malformed_cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp_dir:
+                work = _work(2)
+                if field == "id":
+                    work["doi"] = None
+                work[field] = value
+                source = OpenAlexSource(Path(temp_dir), journals=["prl"])
+                source._api_request = lambda _url, _params, work=work: {"results": [work]}
+                with self.assertRaisesRegex(OpenAlexFetchError, error):
+                    source.fetch_papers(days=1)
+
+    def test_valid_openalex_id_is_a_stable_doi_fallback(self):
+        work = _work(1)
+        work["doi"] = None
+        work["id"] = "W12345"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = OpenAlexSource(Path(temp_dir), journals=["prl"])
+            source._api_request = lambda _url, _params: {"results": [work]}
+            papers = source.fetch_papers(days=1)
+
+        self.assertEqual(papers[0].paper_id, "openalex:W12345")
+        self.assertEqual(papers[0].url, "https://openalex.org/W12345")
+        self.assertIsNone(papers[0].doi)
+
+    def test_malformed_entry_fails_entire_journal_before_a_watermark_can_advance(self):
+        valid = _work(1)
+        invalid = _work(2)
+        invalid["publication_date"] = "2026-99-99"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = OpenAlexSource(Path(temp_dir), journals=["prl"])
+            source._api_request = lambda _url, _params: {"results": [valid, invalid]}
+            with self.assertRaisesRegex(OpenAlexFetchError, "第 1 页条目 2"):
+                source.fetch_papers(days=1)
+
+        # The exception is the important contract: no partial list escapes
+        # for a caller to mistake as a complete source scan.
+
     def test_arxiv_enriched_journal_paper_keeps_doi_as_its_history_identity(self):
         work = _work(1)
         work["locations"] = [
@@ -160,6 +226,64 @@ class OpenAlexFetchTests(unittest.TestCase):
                     journals=["typo-journal"],
                     enable_semantic_scholar=False,
                 )
+
+    def test_pipeline_returns_failed_result_and_keeps_openalex_watermark_on_fetch_error(self):
+        class _SearchAgent:
+            def __init__(self, **_kwargs):
+                pass
+
+            def get_enabled_sources(self):
+                return ["prl"]
+
+            def fetch_all_papers(self, **_kwargs):
+                raise OpenAlexFetchError("malformed upstream work")
+
+        class _KeywordAgent:
+            def get_all_keywords(self):
+                return {"quantum": 1.0}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "daily.db"
+            fake_settings = SimpleNamespace(
+                TOKEN_TRACKING_ENABLED=False,
+                DAILY_RESEARCH_PERSISTENCE_ENABLED=True,
+                DAILY_RESEARCH_DB_PATH=db_path,
+                ENABLE_NOTIFICATIONS=False,
+                ENABLED_SOURCES=["prl"],
+                TARGET_DOMAINS=[],
+                TARGET_JOURNALS=["prl"],
+                SEARCH_DAYS=1,
+                ENABLE_REFERENCE_EXTRACTION=False,
+                PRIMARY_KEYWORDS=["quantum"],
+                PRIMARY_KEYWORD_WEIGHT=1.0,
+                SCORE_STRATEGY="core_relevance_v2",
+                CORE_RELEVANCE_THRESHOLD=6.0,
+                CORE_KEYWORD_MIN_SCORE=8.0,
+                HISTORY_DIR=Path(temp_dir) / "history",
+                OPENALEX_EMAIL="",
+                OPENALEX_API_KEY="",
+                ENABLE_SEMANTIC_SCHOLAR_TLDR=False,
+                SEMANTIC_SCHOLAR_API_KEY="",
+                KEYWORD_TRACKER_ENABLED=False,
+                DAILY_ENABLE_DEEP_ANALYSIS=False,
+                normalized_score_strategy=lambda: "core_relevance_v2",
+            )
+            with (
+                patch("modes.daily_research.settings", fake_settings),
+                patch("modes.daily_research.SearchAgent", _SearchAgent),
+                patch("modes.daily_research.KeywordAgent", _KeywordAgent),
+                patch("modes.daily_research.deliver_pending_after_report_syncs", return_value={"claimed": 0}),
+            ):
+                result = DailyResearchPipeline().run()
+
+            self.assertIsInstance(result, RunResult)
+            self.assertFalse(result.success)
+            self.assertIn("OpenAlex 期刊抓取失败", result.error_message)
+            store = DailyResearchStore(db_path)
+            recent = store.get_recent_runs(1)[0]
+            self.assertEqual(recent["status"], "failed")
+            self.assertEqual(recent["scanned_sources"], ["prl"])
+            self.assertIsNone(store.get_scan_watermark("prl"))
 
 
 if __name__ == "__main__":
