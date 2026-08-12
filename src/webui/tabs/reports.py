@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import html
 import json
 import re
 from pathlib import Path
@@ -265,6 +266,42 @@ def _find_adjacent_report(
 # ─── preview ──────────────────────────────────────────────────────────────────
 
 
+def _build_sandboxed_preview_html(report_html: str) -> str:
+    """Wrap a saved report in an origin-isolated iframe for WebUI preview.
+
+    Reports are generated locally, but can also be restored from WebDAV or be
+    edited outside this application.  ``components.html`` runs its contents in
+    a Streamlit component iframe which may share an origin with the WebUI, so
+    rendering report HTML there directly would let a compromised historical
+    report execute in that context.
+
+    The report is therefore encoded into an inner ``srcdoc`` iframe.  It keeps
+    scripts enabled for existing KaTeX-based reports, while deliberately not
+    granting ``allow-same-origin`` (or forms, downloads, or sandbox-escaping
+    popups).  Escaping before insertion is important: otherwise a report could
+    close the inner iframe and inject markup into the outer component document.
+    """
+    escaped_report = html.escape(report_html, quote=True)
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+html, body {{ margin: 0; width: 100%; height: 100%; overflow: hidden; }}
+iframe {{ display: block; width: 100%; height: 100%; border: 0; }}
+</style>
+</head>
+<body>
+<iframe
+    title="Report preview"
+    sandbox="allow-scripts allow-popups"
+    referrerpolicy="no-referrer"
+    srcdoc="{escaped_report}">
+</iframe>
+</body>
+</html>"""
+
+
 def _render_preview(report: ReportFile, all_reports: dict[str, list[ReportFile]]) -> None:
     """渲染报告预览区：文件信息栏 + 前/后天导航 + 固定 800px HTML 预览。"""
 
@@ -342,7 +379,7 @@ def _render_preview(report: ReportFile, all_reports: dict[str, list[ReportFile]]
     # ── HTML 预览（固定 800px 高度）──
     try:
         html_content = report.path.read_text(encoding="utf-8")
-        components.html(html_content, height=800, scrolling=True)
+        components.html(_build_sandboxed_preview_html(html_content), height=800, scrolling=False)
     except Exception as e:
         st.error(f"{t('reports_load_error')}: {e}")
 
