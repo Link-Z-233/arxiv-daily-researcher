@@ -470,6 +470,7 @@ def build_config_dict(
     mineru_model_version: str = "pipeline",
     mineru_poll_interval: int = 3,
     mineru_poll_timeout: int = 300,
+    pdf_download_max_bytes: int = 50 * 1024 * 1024,
     enable_html_report: bool = True,
     enable_markdown_report: bool = True,
     auto_update_enabled: bool = True,
@@ -645,6 +646,7 @@ def build_config_dict(
             "mineru_model_version": mineru_model_version,
             "poll_interval": mineru_poll_interval,
             "poll_timeout": mineru_poll_timeout,
+            "download_max_bytes": pdf_download_max_bytes,
         },
         "report_settings": {
             "enable_html_report": enable_html_report,
@@ -871,6 +873,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["mineru_model_version"] = pp.get("mineru_model_version", "pipeline")
     flat["mineru_poll_interval"] = pp.get("poll_interval", 3)
     flat["mineru_poll_timeout"] = pp.get("poll_timeout", 300)
+    flat["pdf_download_max_bytes"] = pp.get("download_max_bytes", 50 * 1024 * 1024)
 
     # Report
     rs = config.get("report_settings", {})

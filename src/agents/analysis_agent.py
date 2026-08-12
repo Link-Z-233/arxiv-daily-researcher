@@ -16,6 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 from config import settings
 from parsers.mineru_parser import MineruParser
 from utils.llm_request_pool import call_chat_completion
+from utils.safe_download import download_external_bytes
 from scoring_policy import (
     CORE_RELEVANCE_V2,
     LEGACY_WEIGHTED_KEYWORD_V1,
@@ -264,7 +265,7 @@ class AnalysisAgent:
         return _do_call()
 
     def _download_pdf_bytes(self, pdf_url: str) -> bytes:
-        """下载PDF内容，带自动重试。"""
+        """Download a bounded, redirect-validated PDF with retries."""
 
         @retry(
             stop=stop_after_attempt(settings.RETRY_MAX_ATTEMPTS),
@@ -276,9 +277,15 @@ class AnalysisAgent:
             headers = {
                 "User-Agent": "ArxivDailyResearcher/2.0 (https://github.com/yzr278892/arxiv-daily-researcher; yzr278892@gmail.com)"
             }
-            resp = requests.get(pdf_url, headers=headers, timeout=30)
-            resp.raise_for_status()
-            return resp.content
+            return download_external_bytes(
+                pdf_url,
+                requests.get,
+                max_bytes=max(1, int(settings.PDF_DOWNLOAD_MAX_BYTES)),
+                request_kwargs={"headers": headers, "timeout": 30},
+                # A PDF header can be preceded by a small binary comment, so
+                # inspect its initial KiB rather than requiring offset zero.
+                required_magic=b"%PDF-",
+            )
 
         return _do_download()
 
@@ -956,6 +963,7 @@ class AnalysisAgent:
             pdf_bytes = self._download_pdf_bytes(pdf_url)
 
             # 保存到临时文件
+            settings.DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
             temp_pdf = (
                 settings.DOWNLOAD_DIR
                 / f"temp_{hashlib.md5(pdf_url.encode()).hexdigest()[:16]}_{threading.get_ident()}.pdf"

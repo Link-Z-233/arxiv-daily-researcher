@@ -188,6 +188,9 @@ class Settings(BaseSettings):
     MINERU_MODEL_VERSION: str = "pipeline"  # MinerU 模型版本: pipeline 或 vlm
     MINERU_POLL_INTERVAL: int = 3  # MinerU 任务状态轮询间隔（秒）
     MINERU_POLL_TIMEOUT: int = 300  # MinerU 任务超时时间（秒）
+    # PDF URL fields come from external metadata. Keep local downloads
+    # bounded even when an upstream server omits or lies about Content-Length.
+    PDF_DOWNLOAD_MAX_BYTES: int = 50 * 1024 * 1024
 
     # ==================== 自动更新配置 ====================
     AUTO_UPDATE_ENABLED: bool = True  # 是否启用自动更新检查
@@ -568,6 +571,15 @@ class Settings(BaseSettings):
                 self.MINERU_MODEL_VERSION = pdf_cfg.get("mineru_model_version", "pipeline")
                 self.MINERU_POLL_INTERVAL = pdf_cfg.get("poll_interval", 3)
                 self.MINERU_POLL_TIMEOUT = pdf_cfg.get("poll_timeout", 300)
+                self.PDF_DOWNLOAD_MAX_BYTES = pdf_cfg.get(
+                    "download_max_bytes", self.PDF_DOWNLOAD_MAX_BYTES
+                )
+                try:
+                    self.PDF_DOWNLOAD_MAX_BYTES = int(self.PDF_DOWNLOAD_MAX_BYTES)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("pdf_parser.download_max_bytes 必须是正整数") from exc
+                if self.PDF_DOWNLOAD_MAX_BYTES <= 0:
+                    raise ValueError("pdf_parser.download_max_bytes 必须是正整数")
 
             # 加载自动更新配置
             if "auto_update" in config:

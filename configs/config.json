@@ -226,7 +226,8 @@
     "mode": "mineru",
     "mineru_model_version": "vlm",
     "poll_interval": 3,
-    "poll_timeout": 300
+    "poll_timeout": 300,
+    "download_max_bytes": 52428800
   },
 
   // ==================================================

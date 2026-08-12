@@ -94,6 +94,12 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         flat = flatten_config_dict(config)
         self.assertEqual(flat["arxiv_announcement_lookback_grace_days"], 4)
 
+    def test_pdf_download_limit_round_trips_through_config_io(self):
+        config = build_config_dict(pdf_download_max_bytes=12 * 1024 * 1024)
+        self.assertEqual(config["pdf_parser"]["download_max_bytes"], 12 * 1024 * 1024)
+        flat = flatten_config_dict(config)
+        self.assertEqual(flat["pdf_download_max_bytes"], 12 * 1024 * 1024)
+
     def test_huggingface_papers_configuration_and_proxy_round_trip(self):
         config = build_config_dict(
             enabled_sources=["arxiv", "huggingface_papers"],

@@ -15,6 +15,8 @@ import requests
 from typing import Optional
 
 from config import settings
+from utils.safe_download import ExternalDownloadError, download_external_bytes
+from utils.safe_url import safe_external_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +134,14 @@ class MineruParser:
         返回:
             task_id 或 None（失败时）
         """
+        safe_pdf_url = safe_external_http_url(pdf_url)
+        if not safe_pdf_url:
+            logger.error("MinerU 拒绝非外部 HTTP(S) PDF URL")
+            return None
+
         url = f"{self.BASE_URL}/extract/task"
         data = {
-            "url": pdf_url,
+            "url": safe_pdf_url,
             "model_version": self.model_version,
             "enable_formula": False,  # 学术论文场景下关闭公式识别以节省额度
             "enable_table": True,
@@ -262,16 +269,36 @@ class MineruParser:
             提取的文本内容 或 None
         """
         try:
-            resp = requests.get(zip_url, timeout=60)
-            resp.raise_for_status()
+            zip_bytes = download_external_bytes(
+                zip_url,
+                requests.get,
+                max_bytes=max(1, int(settings.PDF_DOWNLOAD_MAX_BYTES)),
+                request_kwargs={"timeout": 60},
+                required_magic=b"PK\x03\x04",
+            )
 
-            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
                 # 查找 .md 文件（MinerU 默认输出 Markdown）
-                md_files = [f for f in zf.namelist() if f.endswith(".md")]
+                members = zf.infolist()
+                if len(members) > 1000:
+                    logger.error("MinerU ZIP 条目数超过安全上限")
+                    return None
+                # A compressed ZIP can expand far beyond its wire size.  Bound
+                # the archive as a whole and its selected text member before
+                # calling ``read`` so an upstream result cannot exhaust RAM.
+                max_uncompressed = max(1, int(settings.PDF_DOWNLOAD_MAX_BYTES))
+                if sum(member.file_size for member in members) > max_uncompressed:
+                    logger.error("MinerU ZIP 解压后大小超过安全上限")
+                    return None
+                md_files = [member.filename for member in members if member.filename.endswith(".md")]
 
                 if not md_files:
                     # 回退到任何文本文件
-                    txt_files = [f for f in zf.namelist() if f.endswith((".txt", ".json"))]
+                    txt_files = [
+                        member.filename
+                        for member in members
+                        if member.filename.endswith((".txt", ".json"))
+                    ]
                     if not txt_files:
                         logger.error(f"MinerU ZIP 中未找到文本文件，包含: {zf.namelist()}")
                         return None
@@ -279,10 +306,17 @@ class MineruParser:
                 else:
                     target_file = md_files[0]
 
+                target_info = zf.getinfo(target_file)
+                if target_info.file_size > max_uncompressed:
+                    logger.error("MinerU ZIP 目标文本超过安全上限")
+                    return None
                 text = zf.read(target_file).decode("utf-8", errors="replace")
                 logger.info(f"MinerU 文本提取成功: {len(text)} 字符 (from {target_file})")
                 return text
 
+        except ExternalDownloadError as exc:
+            logger.error(f"MinerU 结果下载被安全限制拒绝: {exc}")
+            return None
         except zipfile.BadZipFile:
             logger.error("MinerU 返回的不是有效的 ZIP 文件")
             return None
@@ -303,6 +337,10 @@ class MineruParser:
             解析出的文本内容，失败返回 None
         """
         if not self.is_available():
+            return None
+
+        if not safe_external_http_url(pdf_url):
+            logger.error("MinerU 拒绝非外部 HTTP(S) PDF URL")
             return None
 
         logger.info(f"使用 MinerU 云端解析 PDF: {pdf_url}")

@@ -538,6 +538,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "pipeline：速度快 | vlm：更精准（消耗更多配额）",
         "en": "pipeline: fast | vlm: more accurate (uses more quota)",
     },
+    "pdf_download_max_mb_label": {
+        "zh": "PDF 下载大小上限（MB）",
+        "en": "PDF Download Size Limit (MB)",
+    },
+    "pdf_download_max_mb_help": {
+        "zh": "深度分析下载的单个 PDF 上限；超限或非 PDF 响应会保留论文供后续重试。",
+        "en": "Per-PDF deep-analysis limit; oversized or non-PDF responses remain retryable.",
+    },
     "concurrency_title": {"zh": "并发设置", "en": "Concurrency"},
     "concurrency_hint": {
         "zh": "LLM 评分的并行处理，注意 API 速率限制。",

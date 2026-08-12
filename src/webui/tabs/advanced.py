@@ -45,6 +45,18 @@ def render(_env_values: dict, config_values: dict):
             help=t("mineru_version_help"),
         )
 
+    st.number_input(
+        t("pdf_download_max_mb_label"),
+        min_value=1,
+        max_value=1024,
+        value=max(
+            1,
+            int(flat.get("pdf_download_max_bytes", 50 * 1024 * 1024)) // (1024 * 1024),
+        ),
+        key="pdf_download_max_mb",
+        help=t("pdf_download_max_mb_help"),
+    )
+
     st.divider()
 
     # ---- Concurrency ----
@@ -284,6 +296,9 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
     return {
         "pdf_parser_mode": st.session_state.get("pdf_parser_mode", "mineru"),
         "mineru_model_version": st.session_state.get("mineru_model_version", "pipeline"),
+        "pdf_download_max_bytes": int(
+            st.session_state.get("pdf_download_max_mb", 50)
+        ) * 1024 * 1024,
         "concurrency_enabled": st.session_state.get("concurrency_enabled", False),
         "concurrency_workers": st.session_state.get("concurrency_workers", 3),
         "llm_request_pool_enabled": st.session_state.get("llm_request_pool_enabled", True),
