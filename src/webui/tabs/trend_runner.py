@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import re
-import signal
 import shlex
 import subprocess
 import sys
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import streamlit as st
 
+from utils.run_lock import is_lock_held
 from utils.webui_trigger import enqueue_trigger
 from webui.i18n import t, _TRANSLATIONS
 
@@ -40,12 +38,12 @@ def _get_trend_lock_files() -> list[Path]:
     return list(_LOCK_DIR.glob("trend_research_*.lock"))
 
 
-def _is_pid_running(pid: int) -> bool:
+def _is_lock_held(lock_path: Path) -> bool:
+    """Use the OS flock state; lock-file PIDs are diagnostic only."""
     try:
-        os.kill(pid, 0)
+        return is_lock_held(lock_path)
+    except OSError:
         return True
-    except (ProcessLookupError, PermissionError):
-        return False
 
 
 def _read_pid_from_lock(lock_path: Path):
@@ -92,7 +90,7 @@ def render(_env_values: dict, config_values: dict) -> None:
         st.info(t("tr_locks_found").format(n=len(trend_locks)))
         for lock in trend_locks:
             pid = _read_pid_from_lock(lock)
-            is_running = pid and _is_pid_running(pid)
+            is_running = _is_lock_held(lock)
             status = f"🟢 {t('rm_status_running')}" if is_running else f"🔴 {t('rm_status_stopped')}"
             st.caption(f"{status} — `{lock.name}` PID={pid or t('rm_no_pid')}")
 
@@ -105,21 +103,13 @@ def render(_env_values: dict, config_values: dict) -> None:
         help=t("trend_keywords_help"),
     )
 
-    col_run, col_stop, _ = st.columns([1, 1, 3])
+    col_run, _ = st.columns([1, 4])
 
     with col_run:
         run_clicked = st.button(
             t("trend_run_btn"),
             key="tr_run_btn",
             type="primary",
-            use_container_width=True,
-        )
-
-    with col_stop:
-        stop_clicked = st.button(
-            t("tr_stop_btn_label"),
-            key="tr_stop_btn",
-            type="secondary",
             use_container_width=True,
         )
 
@@ -244,25 +234,6 @@ def render(_env_values: dict, config_values: dict) -> None:
             )
 
     # ── 处理按钮逻辑 ────────────────────────────────────────────────────────
-
-    # 处理停止
-    if stop_clicked:
-        trend_locks = _get_trend_lock_files()
-        stopped = 0
-        for lock in trend_locks:
-            pid = _read_pid_from_lock(lock)
-            if pid and _is_pid_running(pid):
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    st.info(t("tr_stop_signal_sent").format(pid=pid, name=lock.name))
-                    stopped += 1
-                except Exception as e:
-                    st.error(t("tr_stop_failed").format(pid=pid, err=e))
-        if stopped == 0:
-            st.info(t("tr_no_running_trend"))
-        else:
-            time.sleep(0.5)
-            st.rerun()
 
     # 处理运行
     if run_clicked:

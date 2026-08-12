@@ -2,6 +2,8 @@
 任务并发锁 — 防止完全相同的任务同时执行。
 
 使用文件独占锁（fcntl.LOCK_EX | LOCK_NB），进程退出后锁自动释放。
+锁文件本身会保留为稳定的锁锚点；不能根据其中的 PID 删除它，也不能
+为“超龄”任务发送信号，因为 PID 可能已经被无关进程复用。
 
 锁文件目录：data/run/
   daily_research.lock                — 每日研究（同时只允许一个）
@@ -13,7 +15,6 @@ import hashlib
 import os
 import re
 import signal
-import time
 import sys
 from contextlib import contextmanager
 from datetime import datetime
@@ -49,28 +50,8 @@ def _params_hash(
     return hashlib.md5(key.encode()).hexdigest()[:8]
 
 
-def _remove_stale_lock(lock_path: Path) -> None:
-    """若锁文件里记录的 PID 已不存在，删除 stale lock file。
-
-    适用场景：容器被 SIGKILL 强制终止，finally 块未执行，锁文件残留。
-    """
-    if not lock_path.exists():
-        return
-    try:
-        content = lock_path.read_text().strip()
-        m = re.search(r"PID=(\d+)", content)
-        if not m:
-            return
-        pid = int(m.group(1))
-        os.kill(pid, 0)  # 若进程不存在则抛 ProcessLookupError
-    except ProcessLookupError:
-        lock_path.unlink(missing_ok=True)  # 进程已死，清理 stale lock
-    except Exception:
-        pass  # 无法判断，保守地保留锁文件
-
-
 def _parse_lock_info(content: str):
-    """解析锁文件中的 PID 与 started 时间。"""
+    """Parse diagnostic PID and start time; neither is an authority to kill."""
     pid = None
     started_at = None
 
@@ -89,63 +70,57 @@ def _parse_lock_info(content: str):
     return pid, started_at
 
 
-def _try_kill_stuck_process(pid: int) -> bool:
-    """尝试终止疑似卡死进程。成功终止返回 True。"""
-    try:
-        os.kill(pid, signal.SIGTERM)
-        # 最多等待 5 秒优雅退出
-        for _ in range(10):
-            time.sleep(0.5)
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return True
+def _expired_lock_message(lock_file, task_desc: str, max_age_hours: int) -> Optional[str]:
+    """Return a safe diagnostic message for an unusually long held lock.
 
-        # 仍存活则强制终止
-        os.kill(pid, signal.SIGKILL)
-        for _ in range(10):
-            time.sleep(0.2)
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return True
-    except ProcessLookupError:
-        return True
-    except Exception:
-        return False
-
-    return False
-
-
-def _recover_expired_lock(lock_file, task_desc: str, max_age_hours: int) -> bool:
-    """当锁超龄时尝试回收。回收成功返回 True。"""
+    ``flock`` is the sole source of truth for mutual exclusion.  A timestamp
+    and PID are only human-readable diagnostics: a PID can be reused and a
+    valid paper/LLM job can legitimately outlive its estimated duration.
+    """
     if max_age_hours <= 0:
-        return False
+        return None
 
     try:
         lock_file.seek(0)
         info = lock_file.read().strip()
     except Exception:
-        return False
+        return None
 
     pid, started_at = _parse_lock_info(info)
     if not started_at:
-        return False
+        return None
 
     age_seconds = (datetime.now() - started_at).total_seconds()
     if age_seconds <= max_age_hours * 3600:
-        return False
+        return None
 
-    print(f"⚠️  检测到超龄运行锁（>{max_age_hours}h），尝试回收: {task_desc}")
-    if pid:
-        killed = _try_kill_stuck_process(pid)
-        if not killed:
-            print(f"⚠️  无法终止超龄进程 PID={pid}，保留当前锁")
+    pid_detail = f" PID={pid}" if pid is not None else ""
+    return (
+        f"⚠️  检测到超龄运行锁（>{max_age_hours}h），任务仍持有内核锁，"
+        f"本次不启动: {task_desc}{pid_detail}。为避免 PID 复用误杀，不会自动终止进程。"
+    )
+
+
+def is_lock_held(lock_path: Path) -> bool:
+    """Safely check a lock's current kernel state without trusting its PID.
+
+    This is useful for diagnostics/UI.  Do not delete a lock file based on the
+    result: retaining one stable inode avoids a race where a new process locks
+    a replacement file while another process still owns the old inode.
+    """
+    path = Path(lock_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = path.open("a+")
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            return True
+        else:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             return False
-
-    # 等待内核释放 flock
-    time.sleep(0.2)
-    return True
+    finally:
+        lock_file.close()
 
 
 @contextmanager
@@ -188,47 +163,29 @@ def run_lock(
     except Exception:
         max_age_hours = 12
 
-    # 清理 stale lock（上次进程被 SIGKILL 时 finally 未执行的残留）
-    _remove_stale_lock(lock_path)
-
+    # Keep the path stable across runs.  The operating system releases flock
+    # automatically after a SIGKILL, so a leftover diagnostic file is harmless.
     lock_file = open(lock_path, "a+")
 
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (IOError, OSError):
-        # 若锁已超龄，尝试回收并重试一次获取锁
-        recovered = _recover_expired_lock(lock_file, task_desc, max_age_hours)
-        acquired_after_recovery = False
-        if recovered:
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (IOError, OSError):
-                pass
-            else:
-                acquired_after_recovery = True
-
-        if not acquired_after_recovery:
-            try:
-                lock_file.seek(0)
-                info = lock_file.read().strip()
-            except Exception:
-                info = ""
-            lock_file.close()
-
-            print("\n⚠️  相同任务正在运行中，跳过本次执行")
-            print(f"   任务: {task_desc}")
-            if info:
-                print(f"   运行信息: {info}")
-            print(f"   锁文件: {lock_path}\n")
-            sys.exit(0)
-
         try:
             lock_file.seek(0)
             info = lock_file.read().strip()
         except Exception:
             info = ""
+        expired_message = _expired_lock_message(lock_file, task_desc, max_age_hours)
+        lock_file.close()
+
+        print("\n⚠️  相同任务正在运行中，跳过本次执行")
+        print(f"   任务: {task_desc}")
         if info:
-            print(f"ℹ️  已回收超龄运行锁: {info}")
+            print(f"   运行信息: {info}")
+        if expired_message:
+            print(f"   {expired_message}")
+        print(f"   锁文件: {lock_path}\n")
+        sys.exit(0)
 
     # 写入诊断信息方便排查
     try:
@@ -259,6 +216,5 @@ def run_lock(
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             lock_file.close()
-            lock_path.unlink(missing_ok=True)
         except Exception:
             pass

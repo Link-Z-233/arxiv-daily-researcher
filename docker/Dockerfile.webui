@@ -13,6 +13,7 @@ COPY requirements-webui.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements-webui.txt
 
 COPY src/utils/config_io.py ./src/utils/
+COPY src/utils/run_lock.py ./src/utils/
 COPY src/utils/webdav_sync.py ./src/utils/
 COPY src/utils/webui_trigger.py ./src/utils/
 COPY src/webui/ ./src/webui/

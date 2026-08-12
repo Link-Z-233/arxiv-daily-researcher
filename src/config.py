@@ -205,7 +205,7 @@ class Settings(BaseSettings):
     WEBDAV_SYNC_REPORTS: bool = False  # 是否同步报告（体积较大）
 
     # ==================== 运行锁配置 ====================
-    RUN_LOCK_MAX_AGE_HOURS: int = 12  # 锁超龄阈值（小时），超时将尝试回收卡死任务
+    RUN_LOCK_MAX_AGE_HOURS: int = 12  # 锁超龄告警阈值（小时），不会按 PID 自动终止任务
 
     # ==================== 通知扩展 ====================
     NOTIFICATION_TOP_N: int = 5  # 通知中包含的Top-N高分论文数量

@@ -548,14 +548,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "min_wait_label": {"zh": "最短等待（秒）", "en": "Min wait (seconds)"},
     "max_wait_label": {"zh": "最长等待（秒）", "en": "Max wait (seconds)"},
     "run_lock_max_age_label": {
-        "zh": "运行锁超龄回收阈值（小时）",
-        "en": "Run-lock stale recovery threshold (hours)",
+        "zh": "运行锁超龄告警阈值（小时）",
+        "en": "Run-lock long-run warning threshold (hours)",
     },
     "run_lock_max_age_help": {
-        "zh": "同一任务持续运行超过该时长将尝试终止并回收锁",
+        "zh": "同一任务超过该时长时，后续同类任务会告警并跳过；不会按 PID 自动终止进程。",
         "en": (
-            "If a task runs longer than this, the lock recovery will try to "
-            "terminate and reclaim."
+            "If a task exceeds this duration, a later matching run warns and "
+            "skips it; no process is terminated by PID automatically."
         ),
     },
     "log_rotation_label": {"zh": "日志轮转方式", "en": "Log rotation"},

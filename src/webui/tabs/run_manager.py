@@ -12,7 +12,6 @@ from __future__ import annotations
 import datetime
 import os
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -21,6 +20,7 @@ from typing import Optional
 
 import streamlit as st
 
+from utils.run_lock import is_lock_held
 from utils.webui_trigger import enqueue_trigger, trigger_directory
 from webui.i18n import t
 
@@ -28,7 +28,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _LOGS_DIR     = _PROJECT_ROOT / "logs"
 _LOCK_DIR     = _PROJECT_ROOT / "data" / "run"
 _MAIN_PY      = _PROJECT_ROOT / "main.py"
-_WEBUI_PID_FILE  = _LOCK_DIR / "webui_triggered.pid"
 _TRIGGER_QUEUE_DIR = trigger_directory(_LOCK_DIR.parent)
 _TRIGGER_STATUS_DIR = _TRIGGER_QUEUE_DIR / "status"
 
@@ -54,12 +53,14 @@ def _read_pid_from_file(path: Path) -> Optional[int]:
         return None
 
 
-def _is_process_running(pid: int) -> bool:
+def _is_lock_held(lock_path: Path) -> bool:
+    """Ask the OS about the lock instead of trusting a stale/reused PID."""
     try:
-        os.kill(pid, 0)
+        return is_lock_held(lock_path)
+    except OSError:
+        # If the shared volume is temporarily unreadable, show a conservative
+        # state rather than offering a conflicting launch action.
         return True
-    except (ProcessLookupError, PermissionError):
-        return False
 
 
 def _get_lock_files() -> list[Path]:
@@ -122,33 +123,14 @@ def _read_log_tail(log_path: Path, max_lines: int = 300) -> str:
         return f"读取日志失败: {e}"
 
 
-def _get_all_running_procs() -> list[tuple[Path, int]]:
-    """返回所有拥有存活 PID 的锁文件。"""
+def _get_all_running_locks() -> list[tuple[Path, Optional[int]]]:
+    """Return locks currently held by the worker, with PID only as a hint."""
     running = []
     for f in _get_lock_files():
         pid = _read_pid_from_file(f)
-        if pid and _is_process_running(pid):
+        if _is_lock_held(f):
             running.append((f, pid))
     return running
-
-
-def _do_stop_all() -> None:
-    running = _get_all_running_procs()
-    if not running:
-        st.info(t("no_running_process"))
-    else:
-        killed = 0
-        for f, pid in running:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                st.info(t("pid_killed").format(pid=pid) + f" ({f.name})")
-                killed += 1
-            except Exception as e:
-                st.error(f"停止进程 PID={pid} 失败: {e}")
-        if killed > 0:
-            st.success(f"已向 {killed} 个进程发送停止信号。")
-            time.sleep(0.5)
-            st.rerun()
 
 
 # ─── 触发文件机制 ─────────────────────────────────────────────────────────────
@@ -194,15 +176,14 @@ def _render_run_control() -> None:
     trigger_stale   = trigger_age is not None and trigger_age > 30
     trigger_pending = trigger_age is not None and not trigger_stale
 
-    active_locks = _get_all_running_procs()
+    active_locks = _get_all_running_locks()
     is_running   = bool(active_locks)
-
-    webui_pid = _read_pid_from_file(_WEBUI_PID_FILE) if _WEBUI_PID_FILE.exists() else None
-    webui_proc_running = bool(webui_pid and _is_process_running(webui_pid))
 
     if trigger_stale:
         st.warning(f"⚠️ {t('rm_trigger_stale').format(n=int(trigger_age))}")
-        if st.button(t("rm_clear_trigger_btn"), key="rm_clear_trigger"):
+        if _IS_DOCKER_WEBUI:
+            st.caption("为避免丢失主容器尚未消费的请求，Docker 模式不从 WebUI 删除队列文件。")
+        elif st.button(t("rm_clear_trigger_btn"), key="rm_clear_trigger"):
             for request_path in _TRIGGER_QUEUE_DIR.glob("*.json"):
                 request_path.unlink(missing_ok=True)
             st.rerun()
@@ -212,24 +193,19 @@ def _render_run_control() -> None:
         st.info(f"⏳ {t('rm_trigger_pending')}")
 
     can_run = not trigger_pending and not is_running
-    col_run, col_stop, col_status = st.columns([1, 1, 3])
+    col_run, col_status = st.columns([1, 4])
     with col_run:
         run_clicked = st.button(
             "▶ " + t("run_now_btn"), key="rm_run_now",
             type="primary", use_container_width=True, disabled=not can_run,
         )
-    with col_stop:
-        stop_clicked = st.button(
-            "⏹ " + t("stop_all_btn"), key="rm_stop_all",
-            type="secondary", use_container_width=True,
-            help=t("stop_all_hint"), disabled=not is_running,
-        )
     with col_status:
         if is_running:
-            lock_info = ", ".join(f"`{f.name}` PID={pid}" for f, pid in active_locks)
+            lock_info = ", ".join(
+                f"`{f.name}`" + (f" PID={pid}" if pid is not None else "")
+                for f, pid in active_locks
+            )
             st.info(f"🟢 {t('rm_status_running')} — {lock_info}")
-        elif webui_proc_running:
-            st.info(f"🟢 {t('rm_process_running_label')} (PID={webui_pid})")
         elif trigger_pending:
             st.caption(t("rm_trigger_pending_short"))
         else:
@@ -258,16 +234,11 @@ def _render_run_control() -> None:
                         cwd=str(_PROJECT_ROOT),
                         stdout=lf, stderr=lf, start_new_session=True,
                     )
-                _WEBUI_PID_FILE.write_text(str(proc.pid), encoding="utf-8")
                 st.toast(f"✅ {t('process_started')} (PID={proc.pid})", icon="✅")
                 time.sleep(0.5)
                 st.rerun()
             except Exception as e:
                 st.error(f"启动失败: {e}")
-
-    if stop_clicked:
-        _do_stop_all()
-
 
 def _show_last_run_hint() -> None:
     log_groups  = _scan_all_logs()
@@ -295,7 +266,7 @@ def _render_status() -> None:
 
     for f in lock_files:
         pid        = _read_pid_from_file(f)
-        is_running = bool(pid and _is_process_running(pid))
+        is_running = _is_lock_held(f)
         icon       = "🟢" if is_running else "🔴"
         status     = t("rm_status_running") if is_running else t("rm_status_stopped")
         pid_str    = f"PID={pid}" if pid else t("rm_no_pid")
@@ -306,12 +277,7 @@ def _render_status() -> None:
             st.markdown(f"{icon} `{f.name}` — {status} | {pid_str} | {t('rm_started_at')}: {mtime}")
         with cols[1]:
             if not is_running:
-                if st.button(
-                    t("rm_clean_lock_btn"), key=f"clean_{f.name}",
-                    use_container_width=True, help=t("rm_clean_lock_help"),
-                ):
-                    f.unlink(missing_ok=True)
-                    st.rerun()
+                st.caption("锁文件保留为稳定锚点")
 
 
 # ─── 日志查看器 ──────────────────────────────────────────────────────────────

@@ -257,7 +257,13 @@ def _write_pid_file(pid_file: Path, pid: int) -> None:
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = pid_file.with_name(f".{pid_file.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary_path.write_text(f"{pid}\n", encoding="utf-8")
+        # Include a process-start token so another namespace cannot mistake a
+        # recycled numeric PID for this worker child.  Local UI code uses this
+        # only for status; the worker still owns all lifecycle decisions.
+        started_at = datetime.now(timezone.utc).isoformat()
+        temporary_path.write_text(
+            f"PID={pid}, started={started_at}\n", encoding="utf-8"
+        )
         os.replace(temporary_path, pid_file)
     finally:
         temporary_path.unlink(missing_ok=True)
@@ -267,7 +273,8 @@ def _remove_own_pid_file(pid_file: Optional[Path], pid: Optional[int]) -> None:
     if pid_file is None or pid is None:
         return
     try:
-        if pid_file.read_text(encoding="utf-8").strip() == str(pid):
+        content = pid_file.read_text(encoding="utf-8").strip()
+        if content == str(pid) or re.search(rf"(?:^|\b)PID={re.escape(str(pid))}(?:\b|,)", content):
             pid_file.unlink(missing_ok=True)
     except OSError:
         pass
