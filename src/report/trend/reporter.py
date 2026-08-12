@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from config import settings
+from utils.safe_url import safe_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +410,15 @@ class TrendReporter:
 
         card = f'<div class="card pass">'
         # 标题
-        card += f'<div class="card-title"><a href="{h(paper.url)}" target="_blank">{idx}. {h(paper.title)}</a></div>'
+        url = safe_http_url(paper.url)
+        title_html = f"{idx}. {h(paper.title)}"
+        if url:
+            card += (
+                f'<div class="card-title"><a href="{h(url)}" target="_blank" '
+                f'rel="noopener noreferrer">{title_html}</a></div>'
+            )
+        else:
+            card += f'<div class="card-title">{title_html}</div>'
         # 元数据
         card += f'<div class="field"><span class="field-label">作者:</span> {h(authors)}</div>'
         card += f'<div class="field"><span class="field-label">日期:</span> {h(pub_date)}</div>'

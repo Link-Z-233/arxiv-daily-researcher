@@ -124,6 +124,27 @@ class ReportReliabilityTests(unittest.TestCase):
             self.assertIn("Semantic Scholar TL;DR:", content)
             self.assertIn("External &lt;TLDR&gt;", content)
 
+    def test_html_report_escapes_math_like_text_and_rejects_unsafe_links(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reporter = Reporter()
+            reporter.report_base_dir = Path(temp_dir)
+            paper = _scored_paper("2501.12345v1", 9, True)
+            paper["url"] = "javascript:alert(1)"
+            paper["paper_metadata"].url = paper["url"]
+            paper["score_response"].tldr = "$<img src=x onerror=alert(1)>$"
+
+            with patch.object(settings, "ENABLE_MARKDOWN_REPORT", False), patch.object(
+                settings, "ENABLE_HTML_REPORT", True
+            ):
+                paths = reporter.generate_reports_by_source(
+                    {"arxiv": [paper]}, {"keyword": 1.0}
+                )
+
+            content = paths["arxiv_html"].read_text(encoding="utf-8")
+            self.assertNotIn('href="javascript:', content)
+            self.assertIn("$&lt;img src=x onerror=alert(1)&gt;$", content)
+            self.assertNotIn("<img src=x onerror=alert(1)>", content)
+
     def test_qualified_only_reports_hide_failed_papers_but_keep_full_counts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             reporter = Reporter()

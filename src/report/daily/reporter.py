@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from config import settings
+from utils.safe_url import safe_http_url
 from .modules.base_module import FormatHelper
 from .modules.renderers import ModuleRendererFactory
 
@@ -537,38 +538,15 @@ class Reporter:
     @staticmethod
     def _hm(text) -> str:
         """
-        HTML 转义（保护 LaTeX 公式不被转义）。
+        HTML 转义，同时保留 KaTeX 使用的 ``$`` 分隔符。
 
-        将 $$...$$ 和 $...$ 用占位符替换，对其他内容做 HTML 转义，
-        再将占位符恢复为原始 LaTeX 内容，让 KaTeX 正确渲染。
+        ``html.escape`` 不会改变 ``$``；浏览器在解析 ``&lt;`` 等实体后
+        会把它们作为文本节点交给 KaTeX。因此不需要把原始 LaTeX 片段
+        重新插入 HTML，避免摘要或 LLM 输出借公式边界注入标签/事件处理器。
         """
-        import re
         if text is None:
             return ""
-        text = str(text)
-        # 提取所有 $$...$$ 和 $...$ 公式片段，用占位符替换
-        placeholders = []
-
-        def replace_display(m):
-            placeholders.append(m.group(0))
-            return f"\x00MATH{len(placeholders) - 1}\x00"
-
-        def replace_inline(m):
-            placeholders.append(m.group(0))
-            return f"\x00MATH{len(placeholders) - 1}\x00"
-
-        # 先处理块级公式（$$...$$），再处理行内公式（$...$）
-        text = re.sub(r'\$\$.+?\$\$', replace_display, text, flags=re.DOTALL)
-        text = re.sub(r'\$(?!\$).+?(?<!\$)\$', replace_inline, text)
-
-        # 对非公式部分做 HTML 转义
-        escaped = html.escape(text)
-
-        # 恢复占位符（将占位符中的原始 LaTeX 直接嵌入，不转义）
-        for i, placeholder_content in enumerate(placeholders):
-            escaped = escaped.replace(f"\x00MATH{i}\x00", placeholder_content)
-
-        return escaped
+        return html.escape(str(text))
 
     def _generate_html_report(
         self,
@@ -673,7 +651,7 @@ class Reporter:
             is_qual = sr.is_qualified
             cls = "pass" if is_qual else "fail"
             badge_text = "PASS" if is_qual else "FAIL"
-            url = paper.get("url", "")
+            url = safe_http_url(paper.get("url", ""))
             title = paper.get("title", "Unknown")
             paper_meta = paper.get("paper_metadata")
 
@@ -684,7 +662,8 @@ class Reporter:
             status_html = f' <span class="revision-label">{h(status_label)}</span>' if status_label else ""
             if url:
                 parts.append(
-                    f'<div class="card-title"><a href="{h(url)}" target="_blank">{idx}. {h(title)}</a>{status_html}'
+                    f'<div class="card-title"><a href="{h(url)}" target="_blank" '
+                    f'rel="noopener noreferrer">{idx}. {h(title)}</a>{status_html}'
                 )
             else:
                 parts.append(f'<div class="card-title">{idx}. {h(title)}{status_html}')

@@ -35,6 +35,8 @@ from typing import List, Dict, Optional, Any
 
 import requests
 
+from utils.safe_url import safe_http_url
+
 logger = logging.getLogger(__name__)
 
 # 模板目录
@@ -715,7 +717,7 @@ class NotifierAgent:
                 score = p.get("score", 0)
                 src = p.get("source", "").upper()
                 tldr = p.get("tldr", "")[:80]
-                url = p.get("url", "")
+                url = safe_http_url(p.get("url", ""))
                 top_lines.append(f"> **{i}.** `{src}` {title}")
                 top_lines.append(f'> <font color="comment">Score: {score:.1f} | {tldr}</font>')
                 if url:
@@ -776,7 +778,7 @@ class NotifierAgent:
                 score = p.get("score", 0)
                 src = p.get("source", "").upper()
                 tldr = p.get("tldr", "")[:80]
-                url = p.get("url", "")
+                url = safe_http_url(p.get("url", ""))
                 top_lines.append(f"> **{i}.** `{src}` {title}")
                 top_lines.append(f'> <font color="comment">Score: {score:.1f} | {tldr}</font>')
                 if url:
@@ -820,14 +822,14 @@ class NotifierAgent:
                 score = paper.get("score", 0)
                 src = self._html_escape(paper.get("source", "").upper())
                 tldr = self._html_escape(paper.get("tldr", "")[:140])
-                url = self._html_escape(paper.get("url", ""))
+                url = safe_http_url(paper.get("url", ""))
                 card_lines = [
                     f"<b>{i}. <code>{src}</code> {title}</b>",
                     f"<blockquote>Score: <b>{score:.1f}</b>",
                     f"{tldr}</blockquote>",
                 ]
                 if url:
-                    card_lines.append(f'<a href="{url}">查看原文</a>')
+                    card_lines.append(f'<a href="{self._html_escape(url)}">查看原文</a>')
                 top_cards.append("\n".join(card_lines))
 
         report_lines = []
@@ -1007,7 +1009,7 @@ class NotifierAgent:
             score = p.get("score", 0)
             src = self._html_escape(p.get("source", "").upper())
             tldr = self._html_escape(p.get("tldr", "")[:200])
-            url = p.get("url", "")
+            url = safe_http_url(p.get("url", ""))
             link_html = (
                 (
                     f'<p style="margin:8px 0 0;">'
