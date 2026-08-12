@@ -157,6 +157,48 @@ class NotificationOutboxTests(unittest.TestCase):
             _Response(text="ok")
         )
 
+    def test_v2_notification_formats_show_core_qualification_and_ranking(self):
+        """A V2 Top-N must not present its ranking score as the pass evidence."""
+        notifier = self._notifier([])
+        notifier.settings.TOKEN_TRACKING_ENABLED = False
+        result = RunResult(
+            run_timestamp="2026-08-12 12:00:00",
+            top_papers=[
+                {
+                    "title": "Core qualified paper",
+                    "source": "arxiv",
+                    "tldr": "A test summary.",
+                    "score": 10.0,
+                    "relevance_score": 7.0,
+                    "qualification_threshold": 6.0,
+                    "has_separate_relevance_score": True,
+                    "url": "https://arxiv.org/abs/2608.00001",
+                },
+                {
+                    "title": "Legacy paper",
+                    "source": "arxiv",
+                    "tldr": "A legacy summary.",
+                    "score": 8.0,
+                    "url": "https://arxiv.org/abs/2608.00002",
+                },
+            ],
+        )
+
+        _, _, markdown_top = notifier._format_daily_markdown_fragments(result)
+        fallback = notifier._format_body_fallback(result)
+        telegram = notifier._format_telegram_body(result)
+        email_cards = notifier._build_top_papers_html(result)
+
+        self.assertIn("Core relevance: 7.0/6.0 | Ranking: 10.0", markdown_top)
+        self.assertIn("Core relevance: 7.0/6.0 | Ranking: 10.0", fallback)
+        self.assertIn(
+            "Core relevance: <b>7.0</b> / 6.0 | Ranking: <b>10.0</b>", telegram
+        )
+        self.assertIn("Core relevance:", email_cards)
+        self.assertIn("Ranking:", email_cards)
+        self.assertIn("Score: 8.0", markdown_top)
+        self.assertIn("Score: 8.0", fallback)
+
 
 if __name__ == "__main__":
     unittest.main()

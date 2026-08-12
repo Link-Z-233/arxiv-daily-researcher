@@ -112,6 +112,27 @@ def _strict_bool(value: Any, *, field: str) -> bool:
     return value
 
 
+def _optional_finite_float(value: Any, *, field: str) -> Optional[float]:
+    """Validate an optional persisted number without fabricating a value."""
+    if value is None:
+        return None
+    return _finite_float(value, field=field)
+
+
+def _optional_string_list(value: Any, *, field: str) -> list[str]:
+    if value is None:
+        return []
+    return _as_string_list(value, field=field)
+
+
+def _score_for_threshold(row: Mapping[str, Any]) -> float:
+    """Use V2's content-only score, otherwise preserve legacy total score."""
+    relevance = row.get("relevance_score")
+    if relevance is not None:
+        return _finite_float(relevance, field="relevance_score")
+    return _finite_float(row["total_score"], field="total_score")
+
+
 def _review_row(row: sqlite3.Row) -> dict[str, Any]:
     """Convert one database row to an explicitly safe annotation record."""
     paper = _paper_payload(row)
@@ -135,6 +156,17 @@ def _review_row(row: sqlite3.Row) -> dict[str, Any]:
     extracted_keywords = _as_string_list(
         score.get("extracted_keywords", []), field="extracted_keywords"
     )
+    raw_core_scores = score.get("core_keyword_scores")
+    if raw_core_scores is None:
+        raw_core_scores = {}
+    if not isinstance(raw_core_scores, dict):
+        raise ScoringEvaluationError(f"{source}:{paper_id} 的 core_keyword_scores 必须是对象")
+    normalized_core_scores = {
+        _nonempty_text(keyword, field="core_keyword_scores 的关键词"): _finite_float(
+            value, field=f"{source}:{paper_id} 的核心关键词相关度"
+        )
+        for keyword, value in raw_core_scores.items()
+    }
 
     return {
         "schema": EXPORT_SCHEMA,
@@ -169,6 +201,36 @@ def _review_row(row: sqlite3.Row) -> dict[str, Any]:
             "reasoning": str(score.get("reasoning") or ""),
             "tldr": str(score.get("tldr") or ""),
             "extracted_keywords": extracted_keywords,
+            "strategy_id": str(score.get("strategy_id") or "legacy_weighted_keyword_v1"),
+            "relevance_score": _optional_finite_float(
+                score.get("relevance_score"),
+                field=f"{source}:{paper_id} 的 relevance_score",
+            ),
+            "qualification_threshold": _optional_finite_float(
+                score.get("qualification_threshold"),
+                field=f"{source}:{paper_id} 的 qualification_threshold",
+            ),
+            "core_keyword_min_score": _optional_finite_float(
+                score.get("core_keyword_min_score"),
+                field=f"{source}:{paper_id} 的 core_keyword_min_score",
+            ),
+            "ranking_score": _optional_finite_float(
+                score.get("ranking_score"),
+                field=f"{source}:{paper_id} 的 ranking_score",
+            ),
+            "reference_score": _optional_finite_float(
+                score.get("reference_score"),
+                field=f"{source}:{paper_id} 的 reference_score",
+            ),
+            "author_preference_bonus": _optional_finite_float(
+                score.get("author_preference_bonus"),
+                field=f"{source}:{paper_id} 的 author_preference_bonus",
+            ),
+            "core_keyword_scores": normalized_core_scores,
+            "core_keywords_used": _optional_string_list(
+                score.get("core_keywords_used"), field="core_keywords_used"
+            ),
+            "qualification_reason": str(score.get("qualification_reason") or ""),
         },
         # Older database rows predate audit metadata.  Expose this fact
         # instead of retroactively claiming their original policy is known.
@@ -361,6 +423,19 @@ def _comparison_rows(
                 "note": label.note,
                 "total_score": _finite_float(score["total_score"], field="total_score"),
                 "passing_score": _finite_float(score["passing_score"], field="passing_score"),
+                "relevance_score": _optional_finite_float(
+                    score.get("relevance_score"), field="relevance_score"
+                ),
+                "qualification_threshold": _optional_finite_float(
+                    score.get("qualification_threshold"), field="qualification_threshold"
+                ),
+                "core_keyword_min_score": _optional_finite_float(
+                    score.get("core_keyword_min_score"), field="core_keyword_min_score"
+                ),
+                "ranking_score": _optional_finite_float(
+                    score.get("ranking_score"), field="ranking_score"
+                ),
+                "strategy_id": str(score.get("strategy_id") or "legacy_weighted_keyword_v1"),
                 "production_predicted": bool(score["is_qualified"]),
                 "keyword_scores": score["keyword_scores"],
                 "score_audit": paper["score_audit"],
@@ -386,7 +461,7 @@ def _threshold_values(rows: Iterable[Mapping[str, Any]], supplied: Optional[Sequ
     # Include every observed score and one value above the maximum so the
     # report contains both extremes.  This is an exact, reproducible scan,
     # not an arbitrary grid whose answer changes with step size.
-    scores = sorted({float(row["total_score"]) for row in rows})
+    scores = sorted({_score_for_threshold(row) for row in rows})
     if not scores:
         return []
     return [*scores, math.nextafter(scores[-1], math.inf)]
@@ -402,6 +477,11 @@ def _misclassification_record(row: Mapping[str, Any], predicted: bool) -> dict[s
         "predicted": predicted,
         "total_score": row["total_score"],
         "passing_score": row["passing_score"],
+        "relevance_score": row.get("relevance_score"),
+        "qualification_threshold": row.get("qualification_threshold"),
+        "core_keyword_min_score": row.get("core_keyword_min_score"),
+        "ranking_score": row.get("ranking_score"),
+        "strategy_id": row.get("strategy_id"),
         "keyword_scores": row["keyword_scores"],
         "score_audit": row["score_audit"],
     }
@@ -426,7 +506,10 @@ def evaluate_labels(
     production_metrics = _metrics(production_rows)
     scan = []
     for threshold in _threshold_values(rows, thresholds):
-        evaluated = [{**row, "predicted": row["total_score"] >= threshold} for row in rows]
+        evaluated = [
+            {**row, "predicted": _score_for_threshold(row) >= threshold}
+            for row in rows
+        ]
         scan.append({"threshold": threshold, **_metrics(evaluated)})
 
     false_positives = [
@@ -439,8 +522,12 @@ def evaluate_labels(
         for row in production_rows
         if not row["predicted"] and row["actual"]
     ]
-    false_positives.sort(key=lambda row: (-row["total_score"], row["source"], row["paper_id"]))
-    false_negatives.sort(key=lambda row: (row["total_score"], row["source"], row["paper_id"]))
+    false_positives.sort(
+        key=lambda row: (-_score_for_threshold(row), row["source"], row["paper_id"])
+    )
+    false_negatives.sort(
+        key=lambda row: (_score_for_threshold(row), row["source"], row["paper_id"])
+    )
 
     strategies = Counter(
         str((row["score_audit"] or {}).get("strategy_id", "legacy_unknown"))
@@ -496,7 +583,7 @@ def render_evaluation_markdown(result: Mapping[str, Any]) -> str:
             **production
         ),
         "",
-        "## Total-score threshold scan",
+        "## Qualification-score threshold scan",
         "",
         "| Threshold | Precision | Recall | F1 | FP | FN | Pass rate |",
         "|---:|---:|---:|---:|---:|---:|---:|",

@@ -13,14 +13,14 @@ import json
 from typing import Any, Dict, Mapping
 
 from config import settings
+# New score audit records derive the identifier from settings for each actual
+# decision; historical audit JSON continues to carry its own fixed value.
+SCORE_PROMPT_REVISION = "daily-keyword-score-v3"
 
 
-# This identifier describes the production decision rule, rather than the
-# particular LLM response schema.  It is persisted with every newly scored
-# paper so offline evaluation can distinguish historical scoring policies
-# without ever storing credentials.
-SCORE_STRATEGY_ID = "legacy_weighted_keyword_v1"
-SCORE_PROMPT_REVISION = "daily-keyword-score-v2"
+def configured_score_strategy_id() -> str:
+    """Return the validated strategy selected for the current run."""
+    return settings.normalized_score_strategy()
 
 
 def _canonical_json(value: Any) -> str:
@@ -63,12 +63,18 @@ def build_score_audit_metadata(
     """
     policy_input = {
         "schema": "daily-research-score-policy-v1",
-        "strategy_id": SCORE_STRATEGY_ID,
+        "strategy_id": configured_score_strategy_id(),
         "keywords": [[str(keyword), weight] for keyword, weight in keywords.items()],
+        # Primary-keyword membership changes the V2 qualification rule even
+        # when the merged keyword dictionary happens to stay identical.
+        "primary_keywords": [str(keyword) for keyword in settings.PRIMARY_KEYWORDS],
         "score_settings": {
             "max_score_per_keyword": settings.MAX_SCORE_PER_KEYWORD,
             "passing_score_base": settings.PASSING_SCORE_BASE,
             "passing_score_weight_coefficient": settings.PASSING_SCORE_WEIGHT_COEFFICIENT,
+            "core_relevance_threshold": settings.CORE_RELEVANCE_THRESHOLD,
+            "core_keyword_min_score": settings.CORE_KEYWORD_MIN_SCORE,
+            "reference_ranking_weight": settings.REFERENCE_RANKING_WEIGHT,
             "enable_author_bonus": settings.ENABLE_AUTHOR_BONUS,
             "author_bonus_points": settings.AUTHOR_BONUS_POINTS,
             "expert_authors_fingerprint": stage_input_fingerprint(
@@ -83,7 +89,7 @@ def build_score_audit_metadata(
     }
     return {
         "schema": "daily-research-score-audit-v1",
-        "strategy_id": SCORE_STRATEGY_ID,
+        "strategy_id": configured_score_strategy_id(),
         "policy_fingerprint": stage_input_fingerprint(policy_input),
         "score_input_fingerprint": score_input_fingerprint or "",
         "paper_identity": {
@@ -94,6 +100,7 @@ def build_score_audit_metadata(
             {"keyword": str(keyword), "weight": weight}
             for keyword, weight in keywords.items()
         ],
+        "primary_keywords": [str(keyword) for keyword in settings.PRIMARY_KEYWORDS],
         # The actual configured expert list and free-text research context
         # intentionally stay out of the exportable audit evidence.  Their
         # fingerprints still distinguish policy changes without disclosure.
@@ -126,6 +133,7 @@ def build_stage_input_fingerprints(
         "paper": paper_for_score,
         # Preserve configured order as it also defines the prompt's order.
         "keywords": [[str(key), value] for key, value in keywords.items()],
+        "primary_keywords": [str(keyword) for keyword in settings.PRIMARY_KEYWORDS],
         "research_context": str(settings.RESEARCH_CONTEXT),
         "score_settings": {
             "max_score_per_keyword": settings.MAX_SCORE_PER_KEYWORD,
@@ -134,6 +142,10 @@ def build_stage_input_fingerprints(
             "author_bonus_points": settings.AUTHOR_BONUS_POINTS,
             "passing_score_base": settings.PASSING_SCORE_BASE,
             "passing_score_weight_coefficient": settings.PASSING_SCORE_WEIGHT_COEFFICIENT,
+            "strategy_id": configured_score_strategy_id(),
+            "core_relevance_threshold": settings.CORE_RELEVANCE_THRESHOLD,
+            "core_keyword_min_score": settings.CORE_KEYWORD_MIN_SCORE,
+            "reference_ranking_weight": settings.REFERENCE_RANKING_WEIGHT,
         },
         "model": _model_settings(settings.CHEAP_LLM, settings.CHEAP_LLM.temperature),
         "prompt_revision": SCORE_PROMPT_REVISION,

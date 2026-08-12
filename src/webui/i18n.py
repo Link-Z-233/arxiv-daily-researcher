@@ -365,10 +365,38 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "e.g., I study quantum error correction and topological quantum computing...",
     },
     # ── scoring.py ───────────────────────────────────────────────────────
-    "scoring_title": {"zh": "通过分数公式", "en": "Passing Score Formula"},
+    "scoring_title": {"zh": "资格与排序策略", "en": "Qualification & Ranking"},
     "scoring_hint": {
-        "zh": "通过分数 = 基础分 + 权重系数 × 关键词权重总和",
-        "en": "Passing Score = Base Score + Weight Coefficient x Sum(Keyword Weights)",
+        "zh": "V2 仅用内容相关性决定资格；参考词与作者偏好只影响合格论文的排序。",
+        "en": "V2 uses content relevance for qualification; reference terms and author preference only rank qualified papers.",
+    },
+    "score_strategy_label": {"zh": "评分策略", "en": "Scoring Strategy"},
+    "score_strategy_help": {
+        "zh": "V2 推荐用于新配置；旧策略仅用于兼容历史阈值和可逆迁移。",
+        "en": "Use V2 for new configurations; legacy mode preserves historical thresholds for reversible migration.",
+    },
+    "core_relevance_info": {
+        "zh": "资格要求：主关键词的加权平均相关度达标，且至少一个主关键词强匹配。参考关键词和专家作者都不能让无关论文通过。",
+        "en": "Qualification requires a passing weighted average across primary keywords and one strong primary match. Reference terms and expert authors cannot pass an unrelated paper.",
+    },
+    "core_relevance_threshold_label": {"zh": "核心相关性门槛", "en": "Core Relevance Threshold"},
+    "core_keyword_min_score_label": {"zh": "核心词强匹配门槛", "en": "Strong Core Match Threshold"},
+    "reference_ranking_weight_label": {"zh": "参考词排序系数", "en": "Reference Ranking Weight"},
+    "reference_ranking_weight_help": {
+        "zh": "仅影响已合格论文的排序，不参与是否推荐。",
+        "en": "Only ranks already qualified papers; it never affects recommendation eligibility.",
+    },
+    "core_relevance_no_primary_warning": {
+        "zh": "尚未配置主要关键词。运行时会以全部关键词临时降级为核心集合；请在“关键词”页添加主要关键词，以获得稳定资格判定。",
+        "en": "No primary keywords are configured. Runtime will temporarily fall back to all keywords as the core set; add primary keywords on the Keywords tab for stable qualification.",
+    },
+    "legacy_strategy_warning": {
+        "zh": "兼容模式：作者加分和参考关键词仍会影响是否通过。只建议用于与既有历史结果对比或暂时回退。",
+        "en": "Compatibility mode: author bonuses and reference keywords still affect qualification. Use only for historical comparison or a temporary rollback.",
+    },
+    "core_relevance_preview": {
+        "zh": "V2：资格由主关键词内容相关度和强匹配共同决定；排序可额外使用参考词与作者偏好。",
+        "en": "V2: primary-keyword relevance and a strong match decide qualification; reference terms and author preference may further rank qualified papers.",
     },
     "base_score_label": {"zh": "基础分", "en": "Base Score"},
     "weight_coeff_label": {"zh": "权重系数", "en": "Weight Coefficient"},

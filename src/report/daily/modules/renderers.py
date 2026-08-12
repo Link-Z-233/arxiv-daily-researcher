@@ -6,6 +6,7 @@
 
 from typing import List, Dict, Any, Optional
 from config import settings
+from scoring_policy import qualification_threshold_for, ranking_score_for, uses_core_relevance_v2
 from utils.safe_markdown import markdown_link, markdown_text
 
 from .base_module import BaseModuleRenderer, FormatHelper
@@ -301,8 +302,31 @@ class ScoringRenderer(BaseModuleRenderer):
         max_score_label = f"{float(settings.MAX_SCORE_PER_KEYWORD):g}"
         status_icon = "✅" if score_resp.is_qualified else "❌"
 
-        # 总分行
-        lines.append(f"**评分**: {score_resp.total_score:.1f} / {score_resp.passing_score:.1f} {status_icon}")
+        # V2 makes the content qualification and post-qualification ranking
+        # independently visible.  Legacy history deliberately retains its
+        # original one-line total through the fallback branch.
+        if uses_core_relevance_v2(score_resp):
+            relevance = getattr(score_resp, "relevance_score", 0.0)
+            threshold = qualification_threshold_for(score_resp)
+            lines.append(
+                f"**核心相关度**: {float(relevance):.1f} / {threshold:.1f} {status_icon}"
+            )
+            lines.append(f"**排序分**: {ranking_score_for(score_resp):.1f}")
+            core_scores = getattr(score_resp, "core_keyword_scores", {})
+            core_minimum = getattr(score_resp, "core_keyword_min_score", None)
+            if core_scores:
+                strong_match = max(core_scores.values())
+                if isinstance(core_minimum, (int, float)):
+                    lines.append(
+                        f"**核心词强匹配**: {strong_match:.1f} / {float(core_minimum):.1f}"
+                    )
+            qualification_reason = getattr(score_resp, "qualification_reason", "")
+            if qualification_reason:
+                lines.append(f"**资格依据**: {markdown_text(qualification_reason)}")
+        else:
+            lines.append(
+                f"**评分**: {score_resp.total_score:.1f} / {score_resp.passing_score:.1f} {status_icon}"
+            )
         lines.append("")
 
         if show_details:
@@ -318,9 +342,11 @@ class ScoringRenderer(BaseModuleRenderer):
                         (kw, f"{weight:.1f}", f"{score:.1f}/{max_score_label}", f"{weighted:.1f}")
                     )
 
-                if score_resp.author_bonus > 0:
+                preference_bonus = getattr(score_resp, "author_preference_bonus", score_resp.author_bonus)
+                if preference_bonus > 0:
                     experts = ", ".join(score_resp.expert_authors_found)
-                    rows.append(("作者加分", "-", f"+{score_resp.author_bonus:.1f}", f"专家: {experts}"))
+                    author_label = "作者排序偏好" if uses_core_relevance_v2(score_resp) else "作者加分"
+                    rows.append((author_label, "-", f"+{preference_bonus:.1f}", f"专家: {experts}"))
 
                 if rows:
                     detail_lines.extend(self.format_helper.format_as_table(
@@ -337,13 +363,15 @@ class ScoringRenderer(BaseModuleRenderer):
                         f"(权重{weight:.1f}): {score:.1f}/{max_score_label} → {weighted:.1f}"
                     )
 
-                if score_resp.author_bonus > 0:
+                preference_bonus = getattr(score_resp, "author_preference_bonus", score_resp.author_bonus)
+                if preference_bonus > 0:
                     experts = ", ".join(
                         markdown_text(expert, multiline=False)
                         for expert in score_resp.expert_authors_found
                     )
+                    author_label = "作者排序偏好" if uses_core_relevance_v2(score_resp) else "作者加分"
                     detail_lines.append(
-                        f"- **作者加分**: +{score_resp.author_bonus:.1f}（专家: {experts}）"
+                        f"- **{author_label}**: +{preference_bonus:.1f}（专家: {experts}）"
                     )
 
                 detail_lines.append("")

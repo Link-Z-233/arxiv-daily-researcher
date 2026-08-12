@@ -719,12 +719,24 @@ class NotifierAgent:
             for i, paper in enumerate(result.top_papers, 1):
                 title = markdown_text(paper.get("title", "")[:60], multiline=False)
                 score = paper.get("score", 0)
+                relevance_score = paper.get("relevance_score")
+                qualification_threshold = paper.get("qualification_threshold")
+                has_separate_relevance = bool(paper.get("has_separate_relevance_score"))
                 source = markdown_text(paper.get("source", "").upper(), multiline=False)
                 tldr = markdown_text(paper.get("tldr", "")[:80], multiline=False)
                 link = markdown_link("查看原文", paper.get("url", ""))
                 top_lines.append(f"> **{i}.** `{source}` {title}")
+                if has_separate_relevance and isinstance(relevance_score, (int, float)) and isinstance(
+                    qualification_threshold, (int, float)
+                ):
+                    score_label = (
+                        f"Core relevance: {relevance_score:.1f}/{qualification_threshold:.1f} "
+                        f"| Ranking: {score:.1f}"
+                    )
+                else:
+                    score_label = f"Score: {score:.1f}"
                 top_lines.append(
-                    f'> <font color="comment">Score: {score:.1f} | {tldr}</font>'
+                    f'> <font color="comment">{score_label} | {tldr}</font>'
                 )
                 if link:
                     top_lines.append(f"> {link}")
@@ -801,12 +813,23 @@ class NotifierAgent:
             for i, paper in enumerate(result.top_papers, 1):
                 title = self._html_escape(paper.get("title", "")[:80])
                 score = paper.get("score", 0)
+                relevance_score = paper.get("relevance_score")
+                qualification_threshold = paper.get("qualification_threshold")
+                has_separate_relevance = bool(paper.get("has_separate_relevance_score"))
                 src = self._html_escape(paper.get("source", "").upper())
                 tldr = self._html_escape(paper.get("tldr", "")[:140])
                 url = safe_http_url(paper.get("url", ""))
+                score_label = f"Score: <b>{score:.1f}</b>"
+                if has_separate_relevance and isinstance(relevance_score, (int, float)) and isinstance(
+                    qualification_threshold, (int, float)
+                ):
+                    score_label = (
+                        f"Core relevance: <b>{relevance_score:.1f}</b> / {qualification_threshold:.1f} "
+                        f"| Ranking: <b>{score:.1f}</b>"
+                    )
                 card_lines = [
                     f"<b>{i}. <code>{src}</code> {title}</b>",
-                    f"<blockquote>Score: <b>{score:.1f}</b>",
+                    f"<blockquote>{score_label}",
                     f"{tldr}</blockquote>",
                 ]
                 if url:
@@ -895,11 +918,23 @@ class NotifierAgent:
             for i, p in enumerate(result.top_papers, 1):
                 title = markdown_text(p.get("title", "")[:80], multiline=False)
                 score = p.get("score", 0)
+                relevance_score = p.get("relevance_score")
+                qualification_threshold = p.get("qualification_threshold")
+                has_separate_relevance = bool(p.get("has_separate_relevance_score"))
                 src = markdown_text(p.get("source", "").upper(), multiline=False)
                 tldr = markdown_text(p.get("tldr", "")[:120], multiline=False)
                 url = safe_http_url(p.get("url", ""))
                 lines.append(f"  {i}. [{src}] {title}")
-                lines.append(f"     Score: {score:.1f} | {tldr}")
+                if has_separate_relevance and isinstance(relevance_score, (int, float)) and isinstance(
+                    qualification_threshold, (int, float)
+                ):
+                    score_label = (
+                        f"Core relevance: {relevance_score:.1f}/{qualification_threshold:.1f} "
+                        f"| Ranking: {score:.1f}"
+                    )
+                else:
+                    score_label = f"Score: {score:.1f}"
+                lines.append(f"     {score_label} | {tldr}")
                 if url:
                     lines.append(f"     {markdown_text(url, multiline=False)}")
 
@@ -992,6 +1027,9 @@ class NotifierAgent:
         for i, p in enumerate(result.top_papers, 1):
             title = self._html_escape(p.get("title", "")[:100])
             score = p.get("score", 0)
+            relevance_score = p.get("relevance_score")
+            qualification_threshold = p.get("qualification_threshold")
+            has_separate_relevance = bool(p.get("has_separate_relevance_score"))
             src = self._html_escape(p.get("source", "").upper())
             tldr = self._html_escape(p.get("tldr", "")[:200])
             url = safe_http_url(p.get("url", ""))
@@ -1005,6 +1043,14 @@ class NotifierAgent:
                 else ""
             )
 
+            score_label = f'Score: <strong style="color:#1a7a4a;">{score:.1f}</strong>'
+            if has_separate_relevance and isinstance(relevance_score, (int, float)) and isinstance(
+                qualification_threshold, (int, float)
+            ):
+                score_label = (
+                    f'Core relevance: <strong style="color:#1a7a4a;">{relevance_score:.1f}</strong>'
+                    f' / {qualification_threshold:.1f} | Ranking: <strong style="color:#1a7a4a;">{score:.1f}</strong>'
+                )
             cards.append(
                 f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
                 f'style="margin-bottom:10px;border:1px solid #e8ebf0;border-radius:8px;'
@@ -1013,7 +1059,7 @@ class NotifierAgent:
                 f'<p style="margin:0;font-size:12px;color:#6b7280;">'
                 f'<span style="background-color:#e0e7ff;color:#3730a3;font-size:11px;'
                 f'font-weight:600;padding:1px 6px;border-radius:3px;margin-right:6px;">{src}</span>'
-                f'Score: <strong style="color:#1a7a4a;">{score:.1f}</strong></p></td></tr>'
+                f'{score_label}</p></td></tr>'
                 f'<tr><td style="padding:14px 16px;">'
                 f'<p style="margin:0 0 6px;font-size:14px;font-weight:600;color:#1a1f36;'
                 f'line-height:1.4;">{i}. {title}</p>'

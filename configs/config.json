@@ -85,6 +85,15 @@
       "base_score": 1.5,
       "weight_coefficient": 2.5
     },
+    "strategy": {
+      // V2 decides recommendation eligibility from primary-keyword content
+      // relevance. Reference keywords and expert authors only affect the
+      // ordering of papers that are already qualified.
+      "id": "core_relevance_v2",
+      "core_relevance_threshold": 6.0,
+      "core_keyword_min_score": 7.0,
+      "reference_ranking_weight": 0.25
+    },
     "include_all_in_report": true
   },
 

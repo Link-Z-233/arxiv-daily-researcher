@@ -39,6 +39,13 @@ from utils.daily_research_fingerprints import (
     build_score_audit_metadata,
     build_stage_input_fingerprints,
 )
+from scoring_policy import (
+    optional_score_value,
+    qualification_threshold_for,
+    qualification_score_for,
+    ranking_score_for,
+    response_strategy_id,
+)
 from utils.webdav_sync import (
     after_report_sync_maintenance_entry,
     deliver_pending_after_report_syncs,
@@ -93,7 +100,15 @@ def _select_top_papers(
             qualified.append(
                 {
                     "title": paper["title"],
-                    "score": score_response.total_score,
+                    "score": ranking_score_for(score_response),
+                    # Keep notification payloads display-only, but make V2's
+                    # distinction explicit and safe for older hydrated rows.
+                    "relevance_score": qualification_score_for(score_response),
+                    "qualification_threshold": qualification_threshold_for(score_response),
+                    "has_separate_relevance_score": optional_score_value(
+                        score_response, "relevance_score"
+                    ) is not None,
+                    "strategy_id": response_strategy_id(score_response),
                     "source": source,
                     "tldr": score_response.tldr,
                     "url": paper["url"],
@@ -614,11 +629,18 @@ class DailyResearchPipeline:
             logger.info(f"  - 总权重: {sum(all_keywords.values()):.2f}")
 
             total_weight = sum(all_keywords.values())
-            passing_score = settings.calculate_passing_score(total_weight)
-            logger.info(f"  - 动态及格分: {passing_score:.1f}")
-            logger.info(
-                f"  - 及格分公式: {settings.PASSING_SCORE_BASE} + {settings.PASSING_SCORE_WEIGHT_COEFFICIENT} × {total_weight:.1f}"
-            )
+            if settings.normalized_score_strategy() == "core_relevance_v2":
+                logger.info(
+                    "  - V2 核心相关性门槛: %.1f；核心关键词强匹配门槛: %.1f",
+                    settings.CORE_RELEVANCE_THRESHOLD,
+                    settings.CORE_KEYWORD_MIN_SCORE,
+                )
+            else:
+                passing_score = settings.calculate_passing_score(total_weight)
+                logger.info(f"  - 动态及格分: {passing_score:.1f}")
+                logger.info(
+                    f"  - 及格分公式: {settings.PASSING_SCORE_BASE} + {settings.PASSING_SCORE_WEIGHT_COEFFICIENT} × {total_weight:.1f}"
+                )
 
             # ==================== 阶段3: 抓取所有最新论文 ====================
             logger.info(">>> 阶段3: 从多个数据源抓取论文...")

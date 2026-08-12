@@ -13,7 +13,7 @@ from config import settings  # noqa: E402
 from modes.daily_research import _score_or_hydrate_paper  # noqa: E402
 from sources.base_source import PaperMetadata  # noqa: E402
 from utils.daily_research_errors import PaperStageError  # noqa: E402
-from utils.daily_research_fingerprints import SCORE_STRATEGY_ID  # noqa: E402
+from utils.daily_research_fingerprints import build_stage_input_fingerprints  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 
 
@@ -146,12 +146,44 @@ class DailyResearchStateTests(unittest.TestCase):
             record = store.get_paper_record("arxiv", paper.paper_id)
             audit = json.loads(record["score_audit_json"])
 
-        self.assertEqual(audit["strategy_id"], SCORE_STRATEGY_ID)
+        self.assertEqual(audit["strategy_id"], settings.normalized_score_strategy())
         self.assertIn("policy_fingerprint", audit)
         serialized = json.dumps(audit).lower()
         self.assertNotIn("api_key", serialized)
         self.assertNotIn("base_url", serialized)
         self.assertNotIn("research_context\"", serialized)
+
+    def test_primary_keyword_membership_invalidates_unfinished_score_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            settings, "SCORE_STRATEGY", "core_relevance_v2"
+        ), patch.object(settings, "PRIMARY_KEYWORDS", ["quantum"]):
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            paper = _paper()
+            first_agent = _Agent()
+            first_run = store.start_run(1)
+            self._run_score_or_hydrate(store, first_run, paper, first_agent, {"quantum": 1.0})
+            store.update_error(first_run, "arxiv", paper.paper_id, "analysis later", "analysis")
+
+            with patch.object(settings, "PRIMARY_KEYWORDS", ["sensing"]):
+                retry_agent = _Agent()
+                retry_run = store.start_run(1)
+                self._run_score_or_hydrate(
+                    store, retry_run, paper, retry_agent, {"quantum": 1.0}
+                )
+
+        self.assertEqual(retry_agent.score_calls, 1)
+
+    def test_v2_fingerprint_changes_when_primary_membership_changes(self):
+        paper = _paper()
+        with patch.object(settings, "SCORE_STRATEGY", "core_relevance_v2"), patch.object(
+            settings, "PRIMARY_KEYWORDS", ["quantum"]
+        ):
+            first = build_stage_input_fingerprints(paper, {"quantum": 1.0}, {})["score"]
+        with patch.object(settings, "SCORE_STRATEGY", "core_relevance_v2"), patch.object(
+            settings, "PRIMARY_KEYWORDS", ["other"]
+        ):
+            second = build_stage_input_fingerprints(paper, {"quantum": 1.0}, {})["score"]
+        self.assertNotEqual(first, second)
 
 
 if __name__ == "__main__":

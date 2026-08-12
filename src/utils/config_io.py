@@ -421,6 +421,11 @@ def build_config_dict(
     author_bonus_points: float = 5.0,
     passing_score_base: float = 5.0,
     passing_score_weight_coefficient: float = 3.0,
+    score_strategy: str = "core_relevance_v2",
+    core_relevance_threshold: float = 6.0,
+    core_keyword_min_score: float = 7.0,
+    reference_ranking_weight: float = 0.25,
+    score_strategy_explicit: bool = True,
     include_all_in_report: bool = True,
     keyword_tracker_enabled: bool = True,
     keyword_db_path: str = "data/keywords/keywords.db",
@@ -672,6 +677,17 @@ def build_config_dict(
         },
     }
 
+    # Preserve a pre-V2 configuration's missing strategy on a UI/wizard
+    # round-trip.  The absence intentionally means legacy compatibility; do
+    # not silently flip an established installation to V2 merely by saving.
+    if score_strategy_explicit:
+        config["scoring_settings"]["strategy"] = {
+            "id": score_strategy,
+            "core_relevance_threshold": core_relevance_threshold,
+            "core_keyword_min_score": core_keyword_min_score,
+            "reference_ranking_weight": reference_ranking_weight,
+        }
+
     return config
 
 
@@ -739,6 +755,21 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     ps = sc.get("passing_score_formula", {})
     flat["passing_score_base"] = ps.get("base_score", 5.0)
     flat["passing_score_weight_coefficient"] = ps.get("weight_coefficient", 3.0)
+    strategy = sc.get("strategy")
+    if isinstance(strategy, dict):
+        flat["score_strategy_explicit"] = True
+        flat["score_strategy"] = strategy.get("id", "core_relevance_v2")
+        flat["core_relevance_threshold"] = strategy.get("core_relevance_threshold", 6.0)
+        flat["core_keyword_min_score"] = strategy.get("core_keyword_min_score", 7.0)
+        flat["reference_ranking_weight"] = strategy.get("reference_ranking_weight", 0.25)
+    else:
+        # Absence is a meaningful legacy policy rather than an invitation to
+        # silently reinterpret an existing user's historical threshold.
+        flat["score_strategy_explicit"] = False
+        flat["score_strategy"] = "legacy_weighted_keyword_v1"
+        flat["core_relevance_threshold"] = 6.0
+        flat["core_keyword_min_score"] = 7.0
+        flat["reference_ranking_weight"] = 0.25
     flat["include_all_in_report"] = sc.get("include_all_in_report", True)
 
     # Keyword tracker

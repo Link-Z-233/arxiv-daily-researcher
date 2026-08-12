@@ -20,6 +20,12 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from config import settings
+from scoring_policy import (
+    CORE_RELEVANCE_V2,
+    qualification_threshold_for,
+    ranking_score_for,
+    uses_core_relevance_v2,
+)
 from utils.safe_markdown import markdown_table_cell, markdown_text
 from utils.safe_url import safe_http_url
 from .modules.base_module import FormatHelper
@@ -264,8 +270,11 @@ class Reporter:
         total_weight = sum(keywords_dict.values())
         passing_score = settings.calculate_passing_score(total_weight)
 
-        # 按总分排序
-        sorted_papers = sorted(papers, key=lambda x: x["score_response"].total_score, reverse=True)
+        # V2 has an explicit ranking score.  Old persisted responses retain
+        # their total-score order through a compatibility fallback.
+        sorted_papers = sorted(
+            papers, key=lambda x: ranking_score_for(x["score_response"]), reverse=True
+        )
 
         # 获取布局配置
         layout = self.basic_template.get("layout", {})
@@ -416,12 +425,30 @@ class Reporter:
         lines.append("### 评分设置")
         lines.append("")
         lines.append(f"- **每个关键词最大分**: {settings.MAX_SCORE_PER_KEYWORD}")
-        lines.append(
-            f"- **及格分公式**: {settings.PASSING_SCORE_BASE} + {settings.PASSING_SCORE_WEIGHT_COEFFICIENT} × 总权重"
-        )
-        lines.append(f"- **当前及格分**: {passing_score:.1f}")
+        if settings.normalized_score_strategy() == CORE_RELEVANCE_V2:
+            lines.append("- **资格策略**: `core_relevance_v2`（内容资格与排序偏好分离）")
+            lines.append(
+                f"- **核心相关性门槛**: {settings.CORE_RELEVANCE_THRESHOLD:.1f} / {settings.MAX_SCORE_PER_KEYWORD}"
+            )
+            lines.append(
+                f"- **核心关键词强匹配**: 至少一个达到 {settings.CORE_KEYWORD_MIN_SCORE:.1f} / {settings.MAX_SCORE_PER_KEYWORD}"
+            )
+            lines.append(
+                f"- **参考关键词排序系数**: {settings.REFERENCE_RANKING_WEIGHT:.2f}（不参与资格）"
+            )
+        else:
+            lines.append("- **资格策略**: `legacy_weighted_keyword_v1`")
+            lines.append(
+                f"- **及格分公式**: {settings.PASSING_SCORE_BASE} + {settings.PASSING_SCORE_WEIGHT_COEFFICIENT} × 总权重"
+            )
+            lines.append(f"- **当前及格分**: {passing_score:.1f}")
         if settings.ENABLE_AUTHOR_BONUS:
-            lines.append(f"- **作者加分**: 启用（{settings.AUTHOR_BONUS_POINTS}分/专家）")
+            if settings.normalized_score_strategy() == CORE_RELEVANCE_V2:
+                lines.append(
+                    f"- **作者偏好**: 启用（合格后排序 +{settings.AUTHOR_BONUS_POINTS} / 专家，不影响资格）"
+                )
+            else:
+                lines.append(f"- **作者加分**: 启用（{settings.AUTHOR_BONUS_POINTS}分/专家）")
             if settings.EXPERT_AUTHORS:
                 experts = ", ".join(
                     markdown_text(author, multiline=False) for author in settings.EXPERT_AUTHORS
@@ -591,7 +618,9 @@ class Reporter:
         total_weight = sum(keywords_dict.values())
         passing_score = settings.calculate_passing_score(total_weight)
 
-        sorted_papers = sorted(papers, key=lambda x: x["score_response"].total_score, reverse=True)
+        sorted_papers = sorted(
+            papers, key=lambda x: ranking_score_for(x["score_response"]), reverse=True
+        )
 
         # 构建分析索引 {paper_id: analysis}
         analysis_map = {}
@@ -626,9 +655,14 @@ class Reporter:
 
         # 标题
         parts.append(f"<h1>{h(display_name)} Research Report</h1>")
-        parts.append(
-            f'<p class="meta">Generated: {h(timestamp)} | Passing score: {passing_score:.1f}</p>'
-        )
+        if settings.normalized_score_strategy() == CORE_RELEVANCE_V2:
+            policy_label = (
+                f"Core relevance threshold: {settings.CORE_RELEVANCE_THRESHOLD:.1f} / "
+                f"{float(settings.MAX_SCORE_PER_KEYWORD):g}"
+            )
+        else:
+            policy_label = f"Passing score: {passing_score:.1f}"
+        parts.append(f'<p class="meta">Generated: {h(timestamp)} | {h(policy_label)}</p>')
         if qualified_only:
             parts.append(
                 '<p class="meta">Showing qualified papers only: '
@@ -684,10 +718,28 @@ class Reporter:
             parts.append(f'<span class="badge {cls}">{badge_text}</span></div>')
 
             # 分数和元数据
-            parts.append(
-                f'<div class="field"><span class="field-label">Score:</span> '
-                f'<span class="score">{sr.total_score:.1f}</span> / {passing_score:.1f}</div>'
-            )
+            if uses_core_relevance_v2(sr):
+                relevance = getattr(sr, "relevance_score", 0.0)
+                ranking = ranking_score_for(sr)
+                threshold = qualification_threshold_for(sr)
+                core_scores = getattr(sr, "core_keyword_scores", {})
+                core_minimum = getattr(sr, "core_keyword_min_score", None)
+                strong_match_text = ""
+                if core_scores and isinstance(core_minimum, (int, float)):
+                    strong_match_text = (
+                        f" | Strong core match: {max(core_scores.values()):.1f} / "
+                        f"{float(core_minimum):.1f}"
+                    )
+                parts.append(
+                    f'<div class="field"><span class="field-label">Core relevance:</span> '
+                    f'<span class="score">{float(relevance):.1f}</span> / {threshold:.1f} '
+                    f'| Ranking: {ranking:.1f}{strong_match_text}</div>'
+                )
+            else:
+                parts.append(
+                    f'<div class="field"><span class="field-label">Score:</span> '
+                    f'<span class="score">{sr.total_score:.1f}</span> / {passing_score:.1f}</div>'
+                )
             authors = paper_meta.get_authors_string() if paper_meta else paper.get("authors", "")
             parts.append(
                 f'<div class="field"><span class="field-label">Authors:</span> {h(authors)}</div>'
@@ -756,13 +808,15 @@ class Reporter:
                         f'<td style="text-align:center;padding:4px 8px;">{score:.1f}/{max_score_label}</td>'
                         f'<td style="text-align:center;padding:4px 8px;">{weighted:.1f}</td></tr>'
                     )
-                if sr.author_bonus > 0:
+                preference_bonus = getattr(sr, "author_preference_bonus", sr.author_bonus)
+                if preference_bonus > 0:
                     experts = ", ".join(sr.expert_authors_found)
+                    author_label = "作者排序偏好" if uses_core_relevance_v2(sr) else "作者加分"
                     parts.append(
                         f'<tr style="border-bottom:1px solid var(--color-border);">'
-                        f'<td style="padding:4px 8px;">作者加分</td>'
+                        f'<td style="padding:4px 8px;">{author_label}</td>'
                         f'<td style="text-align:center;padding:4px 8px;">-</td>'
-                        f'<td style="text-align:center;padding:4px 8px;">+{sr.author_bonus:.1f}</td>'
+                        f'<td style="text-align:center;padding:4px 8px;">+{preference_bonus:.1f}</td>'
                         f'<td style="text-align:center;padding:4px 8px;">专家: {h(experts)}</td></tr>'
                     )
                 parts.append("</table>")

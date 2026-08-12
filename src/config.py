@@ -231,6 +231,20 @@ class Settings(BaseSettings):
     PASSING_SCORE_BASE: float = 3.0
     PASSING_SCORE_WEIGHT_COEFFICIENT: float = 2.5
 
+    # 评分策略。legacy_weighted_keyword_v1 保留旧的加权总分判定，
+    # core_relevance_v2 将内容资格与排序偏好分离。新安装默认 V2；
+    # 旧 config.json 未声明策略时仍按 legacy 读取，确保可逆升级。
+    # Keep an existing config file that predates ``strategy`` on its original
+    # semantics.  Newly generated configs explicitly select V2 in config_io.
+    SCORE_STRATEGY: str = "legacy_weighted_keyword_v1"
+    # V2: 相关性是主关键词（缺失时安全降级到全部关键词）的 0..max 分
+    # 加权平均。该门槛从不因参考关键词数量改变。
+    CORE_RELEVANCE_THRESHOLD: float = 6.0
+    # V2: 至少一个核心关键词达到此分数，防止多个弱关联累积成推荐。
+    CORE_KEYWORD_MIN_SCORE: float = 7.0
+    # V2: 参考关键词只给已合格论文的排序带来有限辅助，不参与资格。
+    REFERENCE_RANKING_WEIGHT: float = 0.25
+
     # 报告配置
     INCLUDE_ALL_IN_REPORT: bool = True
 
@@ -379,6 +393,21 @@ class Settings(BaseSettings):
                     psf = score_cfg["passing_score_formula"]
                     self.PASSING_SCORE_BASE = psf.get("base_score", 3.0)
                     self.PASSING_SCORE_WEIGHT_COEFFICIENT = psf.get("weight_coefficient", 2.5)
+
+                strategy_cfg = score_cfg.get("strategy")
+                if isinstance(strategy_cfg, dict):
+                    self.SCORE_STRATEGY = strategy_cfg.get(
+                        "id", self.SCORE_STRATEGY
+                    )
+                    self.CORE_RELEVANCE_THRESHOLD = strategy_cfg.get(
+                        "core_relevance_threshold", self.CORE_RELEVANCE_THRESHOLD
+                    )
+                    self.CORE_KEYWORD_MIN_SCORE = strategy_cfg.get(
+                        "core_keyword_min_score", self.CORE_KEYWORD_MIN_SCORE
+                    )
+                    self.REFERENCE_RANKING_WEIGHT = strategy_cfg.get(
+                        "reference_ranking_weight", self.REFERENCE_RANKING_WEIGHT
+                    )
 
                 # 报告配置
                 self.INCLUDE_ALL_IN_REPORT = score_cfg.get("include_all_in_report", True)
@@ -654,6 +683,22 @@ class Settings(BaseSettings):
         return (
             self.PASSING_SCORE_BASE + self.PASSING_SCORE_WEIGHT_COEFFICIENT * total_keyword_weight
         )
+
+    def normalized_score_strategy(self) -> str:
+        """Return a supported strategy or fail before an LLM request.
+
+        Keeping this validation near settings avoids a typo silently changing
+        daily recommendation decisions.  The error is intentionally explicit:
+        a malformed policy must fail the run and preserve retryability.
+        """
+        from scoring_policy import SUPPORTED_SCORE_STRATEGIES
+
+        value = str(self.SCORE_STRATEGY or "").strip()
+        if value not in SUPPORTED_SCORE_STRATEGIES:
+            raise ValueError(
+                "SCORE_STRATEGY 必须是 " + ", ".join(sorted(SUPPORTED_SCORE_STRATEGIES))
+            )
+        return value
 
     def ensure_directories(self):
         """

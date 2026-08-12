@@ -85,6 +85,26 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         flat = flatten_config_dict(config)
         self.assertEqual(flat["arxiv_announcement_lookback_grace_days"], 4)
 
+    def test_v2_scoring_strategy_round_trips_and_missing_strategy_is_legacy(self):
+        config = build_config_dict(
+            score_strategy="core_relevance_v2",
+            core_relevance_threshold=6.5,
+            core_keyword_min_score=8.0,
+            reference_ranking_weight=0.4,
+        )
+        self.assertEqual(config["scoring_settings"]["strategy"]["id"], "core_relevance_v2")
+        flat = flatten_config_dict(config)
+        self.assertEqual(flat["score_strategy"], "core_relevance_v2")
+        self.assertEqual(flat["core_relevance_threshold"], 6.5)
+        self.assertEqual(flat["core_keyword_min_score"], 8.0)
+        self.assertEqual(flat["reference_ranking_weight"], 0.4)
+
+        legacy = flatten_config_dict({"scoring_settings": {}})
+        self.assertEqual(legacy["score_strategy"], "legacy_weighted_keyword_v1")
+        self.assertFalse(legacy["score_strategy_explicit"])
+        legacy_round_trip = build_config_dict(**legacy)
+        self.assertNotIn("strategy", legacy_round_trip["scoring_settings"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agents.analysis_agent import WeightedScoreResponse  # noqa: E402
+from config import settings  # noqa: E402
 from sources.base_source import PaperMetadata  # noqa: E402
 from utils.daily_research_fingerprints import build_score_audit_metadata  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
@@ -94,7 +95,7 @@ class ScoringEvaluationTests(unittest.TestCase):
         self.assertEqual(len(rows), 4)
         row = next(item for item in rows if item["paper_id"] == "2501.00001v1")
         self.assertEqual(row["production_score"]["total_score"], 9.0)
-        self.assertEqual(row["score_audit"]["strategy_id"], "legacy_weighted_keyword_v1")
+        self.assertEqual(row["score_audit"]["strategy_id"], settings.normalized_score_strategy())
         self.assertIn("policy_fingerprint", row["score_audit"])
         serialized = json.dumps(rows, ensure_ascii=False)
         self.assertNotIn("api_key", serialized.lower())
@@ -114,6 +115,51 @@ class ScoringEvaluationTests(unittest.TestCase):
 
         legacy = next(row for row in rows if row["paper_id"] == "2501.00004v1")
         self.assertEqual(legacy["score_audit"], {"legacy": True})
+
+    def test_v2_export_and_threshold_scan_use_content_relevance_not_ranking(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = DailyResearchStore(root / "daily.db")
+            paper = _paper("2501.10000v1", "V2 score")
+            run_id = store.start_run(1)
+            store.upsert_paper_seen(run_id, "arxiv", paper)
+            v2_score = WeightedScoreResponse(
+                total_score=10.0,
+                keyword_scores={"core": 5.0, "reference": 10.0},
+                author_bonus=3.0,
+                expert_authors_found=["Alice"],
+                passing_score=6.0,
+                is_qualified=False,
+                reasoning="Core topic is not strong enough.",
+                tldr="A weak core paper.",
+                extracted_keywords=["core"],
+                strategy_id="core_relevance_v2",
+                relevance_score=5.0,
+                qualification_threshold=6.0,
+                core_keyword_scores={"core": 5.0},
+                core_keywords_used=["core"],
+                reference_score=10.0,
+                author_preference_bonus=3.0,
+                ranking_score=10.0,
+                qualification_reason="core relevance below threshold",
+            )
+            store.update_score(
+                run_id,
+                "arxiv",
+                {"paper_metadata": paper, "paper_id": paper.paper_id, "score_response": v2_score},
+                score_audit_metadata={"strategy_id": "core_relevance_v2"},
+            )
+            review = list(iter_scored_papers(root / "daily.db"))[0]
+            self.assertEqual(review["production_score"]["relevance_score"], 5.0)
+            self.assertEqual(review["production_score"]["ranking_score"], 10.0)
+            labels_path = root / "labels.jsonl"
+            self._write_labels(
+                labels_path,
+                [{"source": "arxiv", "paper_id": paper.paper_id, "label": "not_relevant"}],
+            )
+            result = evaluate_labels(root / "daily.db", labels_path, thresholds=[6.0])
+
+        self.assertEqual(result["threshold_scan"][0]["pass_rate"], 0.0)
 
     def test_evaluation_reports_production_metrics_thresholds_and_errors(self):
         with tempfile.TemporaryDirectory() as temp_dir:

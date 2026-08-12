@@ -419,26 +419,82 @@ def section_scoring(existing_config: dict) -> dict:
 
     flat = flatten_config_dict(existing_config) if existing_config else {}
 
-    console.print("[dim]Passing score = base_score + weight_coefficient * sum(keyword_weights)[/]")
+    console.print(
+        "[dim]V2 qualifies by primary-keyword content relevance; reference keywords and expert authors only rank already-qualified papers.[/]"
+    )
     console.print()
 
-    base = questionary.text(
-        "Passing score base:",
-        default=str(flat.get("passing_score_base", 5.0)),
-        validate=lambda x: True if _is_float(x) else "Please enter a valid number",
+    strategy = questionary.select(
+        "Scoring strategy:",
+        choices=[
+            questionary.Choice(
+                "Core relevance V2 (recommended for new configurations)",
+                value="core_relevance_v2",
+            ),
+            questionary.Choice(
+                "Legacy weighted keyword V1 (compatibility / rollback)",
+                value="legacy_weighted_keyword_v1",
+            ),
+        ],
+        default=flat.get("score_strategy", "legacy_weighted_keyword_v1"),
         style=WIZARD_STYLE,
     ).ask()
-    if base is None:
+    if strategy is None:
         raise KeyboardInterrupt
 
-    coeff = questionary.text(
-        "Passing score weight coefficient:",
-        default=str(flat.get("passing_score_weight_coefficient", 3.0)),
-        validate=lambda x: True if _is_float(x) else "Please enter a valid number",
-        style=WIZARD_STYLE,
-    ).ask()
-    if coeff is None:
-        raise KeyboardInterrupt
+    result = {"score_strategy": strategy, "score_strategy_explicit": True}
+    if strategy == "core_relevance_v2":
+        core_threshold = questionary.text(
+            "Core relevance threshold (0-10):",
+            default=str(flat.get("core_relevance_threshold", 6.0)),
+            validate=lambda x: True if _is_float(x) else "Please enter a valid number",
+            style=WIZARD_STYLE,
+        ).ask()
+        if core_threshold is None:
+            raise KeyboardInterrupt
+        core_min = questionary.text(
+            "Strong primary-keyword match threshold (0-10):",
+            default=str(flat.get("core_keyword_min_score", 7.0)),
+            validate=lambda x: True if _is_float(x) else "Please enter a valid number",
+            style=WIZARD_STYLE,
+        ).ask()
+        if core_min is None:
+            raise KeyboardInterrupt
+        reference_weight = questionary.text(
+            "Reference keyword ranking weight (does not affect qualification):",
+            default=str(flat.get("reference_ranking_weight", 0.25)),
+            validate=lambda x: True if _is_float(x) else "Please enter a valid number",
+            style=WIZARD_STYLE,
+        ).ask()
+        if reference_weight is None:
+            raise KeyboardInterrupt
+        result.update(
+            {
+                "core_relevance_threshold": float(core_threshold),
+                "core_keyword_min_score": float(core_min),
+                "reference_ranking_weight": float(reference_weight),
+            }
+        )
+
+    if strategy == "legacy_weighted_keyword_v1":
+        console.print("[dim]Legacy passing score = base_score + weight_coefficient * sum(keyword_weights)[/]")
+        base = questionary.text(
+            "Passing score base:",
+            default=str(flat.get("passing_score_base", 5.0)),
+            validate=lambda x: True if _is_float(x) else "Please enter a valid number",
+            style=WIZARD_STYLE,
+        ).ask()
+        if base is None:
+            raise KeyboardInterrupt
+
+        coeff = questionary.text(
+            "Passing score weight coefficient:",
+            default=str(flat.get("passing_score_weight_coefficient", 3.0)),
+            validate=lambda x: True if _is_float(x) else "Please enter a valid number",
+            style=WIZARD_STYLE,
+        ).ask()
+        if coeff is None:
+            raise KeyboardInterrupt
 
     enable_bonus = questionary.confirm(
         "Enable author bonus scoring?",
@@ -448,11 +504,14 @@ def section_scoring(existing_config: dict) -> dict:
     if enable_bonus is None:
         raise KeyboardInterrupt
 
-    result = {
-        "passing_score_base": float(base),
-        "passing_score_weight_coefficient": float(coeff),
-        "enable_author_bonus": enable_bonus,
-    }
+    result["enable_author_bonus"] = enable_bonus
+    if strategy == "legacy_weighted_keyword_v1":
+        result.update(
+            {
+                "passing_score_base": float(base),
+                "passing_score_weight_coefficient": float(coeff),
+            }
+        )
 
     if enable_bonus:
         authors_str = questionary.text(

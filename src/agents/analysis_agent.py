@@ -10,12 +10,16 @@ import fitz  # pymupdf
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from openai import OpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from config import settings
 from parsers.mineru_parser import MineruParser
 from utils.llm_request_pool import call_chat_completion
+from scoring_policy import (
+    CORE_RELEVANCE_V2,
+    LEGACY_WEIGHTED_KEYWORD_V1,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +67,11 @@ class WeightedScoreResponse(BaseModel):
     加权评分响应模型（新策略）。
 
     属性:
-        total_score (float): 总分（关键词加权分 + 作者附加分）
+        total_score (float): 展示用总分；V2 中等于排序分，旧策略中为原始总分
         keyword_scores (Dict[str, float]): 每个关键词的相关度评分（0-10）
         author_bonus (float): 作者附加分
         expert_authors_found (List[str]): 发现的专家作者列表
-        passing_score (float): 动态及格分
+        passing_score (float): 兼容旧报告的及格阈值别名
         is_qualified (bool): 是否及格
         reasoning (str): 评分理由和分析
         tldr (str): 一句话总结论文的研究问题和结果
@@ -83,6 +87,19 @@ class WeightedScoreResponse(BaseModel):
     reasoning: str
     tldr: str
     extracted_keywords: List[str]
+    # Fields below were introduced by ``core_relevance_v2``.  Defaults make
+    # Pydantic hydration of pre-V2 SQLite score_json fully backwards
+    # compatible; callers use explicit legacy fallbacks when they are absent.
+    strategy_id: str = LEGACY_WEIGHTED_KEYWORD_V1
+    relevance_score: Optional[float] = None
+    qualification_threshold: Optional[float] = None
+    core_keyword_min_score: Optional[float] = None
+    core_keyword_scores: Dict[str, float] = Field(default_factory=dict)
+    core_keywords_used: List[str] = Field(default_factory=list)
+    reference_score: Optional[float] = None
+    author_preference_bonus: float = 0.0
+    ranking_score: Optional[float] = None
+    qualification_reason: str = ""
 
 
 class Stage2Response(BaseModel):
@@ -316,17 +333,18 @@ class AnalysisAgent:
         return json_str
 
     # ======================================================================
-    # 新策略：加权评分系统
+    # 评分策略：旧加权兼容模式与核心相关性 V2
     # ======================================================================
 
     def score_paper_with_keywords(
         self, title: str, authors: str | List[str], abstract: str, keywords_dict: Dict[str, float]
     ) -> WeightedScoreResponse:
         """
-        使用加权关键词系统对论文进行评分。
+        使用已配置的关键词策略对论文进行评分。
 
-        评分公式:
-        总分 = Σ(关键词相关度 × 关键词权重) + 作者附加分
+        ``legacy_weighted_keyword_v1`` 保留原公式以支持可逆迁移。
+        ``core_relevance_v2`` 以核心主关键词的归一化内容相关度决定
+        资格；参考关键词和作者偏好只影响已合格论文的排序。
 
         参数:
             title (str): 论文标题
@@ -340,6 +358,10 @@ class AnalysisAgent:
         """
         # 评分输入也是配置的一部分。先校验它，避免异常配置把 NaN 或
         # 负权重一路传到报告和排序逻辑中。
+        try:
+            strategy_id = settings.normalized_score_strategy()
+        except ValueError as exc:
+            raise ScoreValidationError(str(exc)) from exc
         max_score = _finite_number(
             settings.MAX_SCORE_PER_KEYWORD, "MAX_SCORE_PER_KEYWORD"
         )
@@ -365,13 +387,63 @@ class AnalysisAgent:
             raise ScoreValidationError("论文作者必须是字符串或字符串列表")
         authors_text = ", ".join(author_names)
 
-        # 计算总权重和及格分
+        # V2 can determine a stable core set only from explicitly configured
+        # primary keywords.  Reference extraction is intentionally auxiliary:
+        # adding low-weight reference terms must never make a paper easier to
+        # qualify.  Some existing installations use reference extraction
+        # without primaries, so retain a visible, conservative all-keyword
+        # fallback rather than making their daily pipeline unusable.
+        configured_primary = {
+            keyword.strip()
+            for keyword in settings.PRIMARY_KEYWORDS
+            if isinstance(keyword, str) and keyword.strip()
+        }
+        primary_keywords = [
+            keyword for keyword in normalized_keywords if keyword in configured_primary
+        ]
+        used_primary_fallback = False
+        if strategy_id == CORE_RELEVANCE_V2 and not primary_keywords:
+            primary_keywords = list(normalized_keywords)
+            used_primary_fallback = True
+            logger.warning(
+                "core_relevance_v2 未配置可用 PRIMARY_KEYWORDS；"
+                "本次以全部关键词作为核心集合降级。请配置主要关键词以获得稳定资格门槛。"
+            )
+
+        # 旧策略的阈值只属于旧判定模式。V2 不应因为遗留公式的错误
+        # 配置而无法执行；它使用自己的归一化资格门槛。
         total_weight = math.fsum(normalized_keywords.values())
-        passing_score = _finite_number(
-            settings.calculate_passing_score(total_weight), "动态及格分"
-        )
-        if passing_score < 0:
-            raise ScoreValidationError("动态及格分不能为负数")
+        legacy_passing_score = None
+        if strategy_id == LEGACY_WEIGHTED_KEYWORD_V1:
+            legacy_passing_score = _finite_number(
+                settings.calculate_passing_score(total_weight), "动态及格分"
+            )
+            if legacy_passing_score < 0:
+                raise ScoreValidationError("动态及格分不能为负数")
+
+        relevance_threshold = None
+        core_keyword_min_score = None
+        reference_ranking_weight = None
+        if strategy_id == CORE_RELEVANCE_V2:
+            relevance_threshold = _finite_number(
+                settings.CORE_RELEVANCE_THRESHOLD, "核心相关性门槛"
+            )
+            core_keyword_min_score = _finite_number(
+                settings.CORE_KEYWORD_MIN_SCORE, "核心关键词强匹配门槛"
+            )
+            reference_ranking_weight = _finite_number(
+                settings.REFERENCE_RANKING_WEIGHT, "参考关键词排序权重"
+            )
+            if relevance_threshold < 0 or relevance_threshold > max_score:
+                raise ScoreValidationError(
+                    f"CORE_RELEVANCE_THRESHOLD 必须在 0-{max_score:g} 之间"
+                )
+            if core_keyword_min_score < 0 or core_keyword_min_score > max_score:
+                raise ScoreValidationError(
+                    f"CORE_KEYWORD_MIN_SCORE 必须在 0-{max_score:g} 之间"
+                )
+            if reference_ranking_weight < 0:
+                raise ScoreValidationError("REFERENCE_RANKING_WEIGHT 不能为负数")
 
         author_bonus_points = 0.0
         if settings.ENABLE_AUTHOR_BONUS:
@@ -385,6 +457,22 @@ class AnalysisAgent:
         keywords_list = "\n".join(
             [f"  - {kw} (权重: {weight:.1f})" for kw, weight in normalized_keywords.items()]
         )
+
+        primary_keywords_text = "、".join(primary_keywords) or "（无）"
+        if strategy_id == CORE_RELEVANCE_V2:
+            scoring_policy_text = f"""
+评分决策规则（由系统计算，不要自行判定是否及格）：
+- 核心关键词: {primary_keywords_text}
+- 核心相关度阈值: {relevance_threshold:.1f}/{max_score:g}
+- 至少一个核心关键词强匹配: {core_keyword_min_score:.1f}/{max_score:g}
+- Reference 关键词仅作排序辅助，不能替代核心相关性。
+"""
+        else:
+            scoring_policy_text = f"""
+旧版加权判定（由系统计算，不要自行判定是否及格）：
+- 关键词总权重: {total_weight:.1f}
+- 动态及格分: {legacy_passing_score:.1f}
+"""
 
         prompt = f"""你是一名学术论文评审专家。请基于以下关键词对论文进行相关性评分，并提取论文信息。
 
@@ -405,17 +493,14 @@ class AnalysisAgent:
    - 0分: 完全无关
    - {max_score / 2:g}分: 有一定关联
    - {max_score:g}分: 高度相关，核心内容
-3. 计算加权总分: Σ(关键词相关度 × 关键词权重)
-4. 用一句话总结论文研究的问题和结果（TLDR）
-5. 从标题和摘要中提取5-8个核心关键词（英文）
+3. 用一句话总结论文研究的问题和结果（TLDR）
+4. 从标题和摘要中提取5-8个核心关键词（英文）
 
 作者加分由系统根据原始作者列表做确定性精确校验；不要猜测专家作者，
 也不要输出作者加分或 expert_authors_found 字段。
 
-评分标准:
-- 关键词总权重: {total_weight:.1f}
-- 动态及格分: {passing_score:.1f}
-- 每个关键词最高相关度: {max_score:g} 分
+{scoring_policy_text}
+每个关键词最高相关度: {max_score:g} 分
 
 输出格式: JSON对象，包含以下字段:
 {{
@@ -539,25 +624,91 @@ class AnalysisAgent:
                             "评分模型的专家作者声明与确定性校验不一致，已忽略模型声明"
                         )
 
-            # 计算加权总分
+            # 计算加权总分，既用于 legacy 决策，也保留为审核证据。
             weighted_score = math.fsum(
                 keyword_scores[kw] * weight for kw, weight in normalized_keywords.items()
             )
 
-            # 计算作者附加分
-            author_bonus = 0.0
+            # Calculate the configured preference once.  In V2 it is applied
+            # only after content qualification; legacy retains its original
+            # behavior where the same value participates in the pass score.
+            matched_author_bonus = 0.0
             if settings.ENABLE_AUTHOR_BONUS and verified_experts:
-                author_bonus = len(verified_experts) * author_bonus_points
+                matched_author_bonus = len(verified_experts) * author_bonus_points
 
-            # 计算总分
-            total_score = weighted_score + author_bonus
+            if strategy_id == CORE_RELEVANCE_V2:
+                core_weight = math.fsum(normalized_keywords[kw] for kw in primary_keywords)
+                if core_weight <= 0:
+                    raise ScoreValidationError("核心关键词总权重必须大于 0")
+                relevance_score = math.fsum(
+                    keyword_scores[kw] * normalized_keywords[kw] for kw in primary_keywords
+                ) / core_weight
+                strongest_core_score = max(keyword_scores[kw] for kw in primary_keywords)
+                core_match = strongest_core_score >= core_keyword_min_score
+                relevance_match = relevance_score >= relevance_threshold
+                is_qualified = relevance_match and core_match
 
-            # 判断是否及格
-            is_qualified = total_score >= passing_score
+                reference_keywords = [
+                    keyword for keyword in normalized_keywords if keyword not in primary_keywords
+                ]
+                reference_weight = math.fsum(
+                    normalized_keywords[keyword] for keyword in reference_keywords
+                )
+                reference_score = (
+                    math.fsum(
+                        keyword_scores[keyword] * normalized_keywords[keyword]
+                        for keyword in reference_keywords
+                    )
+                    / reference_weight
+                    if reference_weight > 0
+                    else 0.0
+                )
+                # Ranking exists for every paper for a useful full-report
+                # order, but qualification was frozen above before either
+                # reference evidence or author preference is added.
+                ranking_score = relevance_score + reference_ranking_weight * reference_score
+                author_preference_bonus = matched_author_bonus if is_qualified else 0.0
+                ranking_score += author_preference_bonus
 
-            logger.info(
-                f"论文评分完成 [{title[:50]}]: 总分={total_score:.1f}, 及格分={passing_score:.1f}, {'✅及格' if is_qualified else '❌未及格'}"
-            )
+                total_score = ranking_score
+                # Both fields describe the amount actually applied to the
+                # ranking.  A verified expert on an unqualified paper remains
+                # visible in ``expert_authors_found``, but receives zero.
+                author_bonus = author_preference_bonus
+                passing_score = relevance_threshold
+                qualification_reason = (
+                    f"核心相关度 {relevance_score:.1f}/{max_score:g} "
+                    f"（门槛 {relevance_threshold:.1f}）；"
+                    f"最高核心词分 {strongest_core_score:.1f}/{max_score:g} "
+                    f"（强匹配门槛 {core_keyword_min_score:.1f}）"
+                )
+                if used_primary_fallback:
+                    qualification_reason += "；未配置主要关键词，本次使用全部关键词作为核心集合"
+                if not relevance_match:
+                    qualification_reason += "；核心平均相关度不足"
+                if not core_match:
+                    qualification_reason += "；没有核心关键词达到强匹配门槛"
+                logger.info(
+                    "论文评分完成 [%s]: 核心相关度=%.1f/%.1f，排序分=%.1f，%s",
+                    title[:50],
+                    relevance_score,
+                    relevance_threshold,
+                    ranking_score,
+                    "✅及格" if is_qualified else "❌未及格",
+                )
+            else:
+                author_bonus = matched_author_bonus
+                total_score = weighted_score + author_bonus
+                passing_score = legacy_passing_score
+                is_qualified = total_score >= passing_score
+                relevance_score = None
+                reference_score = None
+                ranking_score = total_score
+                author_preference_bonus = author_bonus
+                qualification_reason = "旧版加权总分判定"
+                logger.info(
+                    f"论文评分完成 [{title[:50]}]: 总分={total_score:.1f}, 及格分={passing_score:.1f}, {'✅及格' if is_qualified else '❌未及格'}"
+                )
 
             return WeightedScoreResponse(
                 total_score=total_score,
@@ -569,6 +720,18 @@ class AnalysisAgent:
                 reasoning=reasoning,
                 tldr=tldr,
                 extracted_keywords=extracted_keywords,
+                strategy_id=strategy_id,
+                relevance_score=relevance_score,
+                qualification_threshold=passing_score,
+                core_keyword_min_score=core_keyword_min_score,
+                core_keyword_scores={kw: keyword_scores[kw] for kw in primary_keywords}
+                if strategy_id == CORE_RELEVANCE_V2
+                else {},
+                core_keywords_used=primary_keywords if strategy_id == CORE_RELEVANCE_V2 else [],
+                reference_score=reference_score,
+                author_preference_bonus=author_preference_bonus,
+                ranking_score=ranking_score,
+                qualification_reason=qualification_reason,
             )
 
         except Exception as e:

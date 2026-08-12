@@ -12,6 +12,7 @@ from agents.analysis_agent import WeightedScoreResponse  # noqa: E402
 from config import settings  # noqa: E402
 from modes.daily_research import _select_top_papers, _validate_report_paths  # noqa: E402
 from report.daily.reporter import ReportGenerationError, Reporter  # noqa: E402
+from scoring_policy import CORE_RELEVANCE_V2  # noqa: E402
 from sources.base_source import PaperMetadata  # noqa: E402
 
 
@@ -213,6 +214,65 @@ class ReportReliabilityTests(unittest.TestCase):
             5,
         )
         self.assertEqual([item["title"] for item in selected], ["Title qualified-high", "Title qualified-low"])
+
+    def test_v2_reports_and_notifications_sort_by_ranking_not_qualification_score(self):
+        high_relevance = _scored_paper("core-high", 8, True)
+        author_preferred = _scored_paper("author-preferred", 7, True)
+        for paper, relevance, ranking in (
+            (high_relevance, 8.0, 8.0),
+            (author_preferred, 7.0, 10.0),
+        ):
+            score = paper["score_response"]
+            score.strategy_id = CORE_RELEVANCE_V2
+            score.relevance_score = relevance
+            score.qualification_threshold = 6.0
+            score.ranking_score = ranking
+            score.total_score = ranking
+            score.author_preference_bonus = ranking - relevance
+
+        selected = _select_top_papers(
+            {"arxiv": [high_relevance, author_preferred]}, limit=2
+        )
+        self.assertEqual(
+            [item["title"] for item in selected],
+            ["Title author-preferred", "Title core-high"],
+        )
+        self.assertEqual(selected[0]["relevance_score"], 7.0)
+        self.assertEqual(selected[0]["score"], 10.0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reporter = Reporter()
+            reporter.report_base_dir = Path(temp_dir)
+            with patch.object(settings, "SCORE_STRATEGY", CORE_RELEVANCE_V2), patch.object(
+                settings, "ENABLE_MARKDOWN_REPORT", True
+            ), patch.object(settings, "ENABLE_HTML_REPORT", False):
+                paths = reporter.generate_reports_by_source(
+                    {"arxiv": [high_relevance, author_preferred]}, {"keyword": 1.0}
+                )
+            content = paths["arxiv"].read_text(encoding="utf-8")
+
+        self.assertLess(
+            content.index("Title author-preferred"), content.index("Title core-high")
+        )
+        self.assertIn("核心相关度", content)
+
+    def test_old_score_json_hydration_defaults_to_legacy_fields(self):
+        old = WeightedScoreResponse.model_validate(
+            {
+                "total_score": 8,
+                "keyword_scores": {"keyword": 8},
+                "author_bonus": 0,
+                "expert_authors_found": [],
+                "passing_score": 5,
+                "is_qualified": True,
+                "reasoning": "legacy",
+                "tldr": "legacy tldr",
+                "extracted_keywords": ["keyword"],
+            }
+        )
+        self.assertEqual(old.strategy_id, "legacy_weighted_keyword_v1")
+        self.assertIsNone(old.relevance_score)
+        self.assertEqual(old.ranking_score, None)
 
 
 if __name__ == "__main__":
