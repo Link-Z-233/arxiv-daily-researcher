@@ -7,6 +7,8 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Tuple
 
+from utils.safe_markdown import markdown_table_cell, markdown_text
+
 
 class FormatHelper:
     """
@@ -39,7 +41,7 @@ class FormatHelper:
         if not content:
             return []
         lines = []
-        for line in content.split('\n'):
+        for line in markdown_text(content).split('\n'):
             lines.append(f"> {line}")
         lines.append("")
         return lines
@@ -70,7 +72,7 @@ class FormatHelper:
             # GitHub风格: > [!TIP] 或 > [!标题]
             # 如果有标题，使用标题作为类型
             if title:
-                lines.append(f"> [!{title}]")
+                lines.append(f"> [!{markdown_text(title, multiline=False)}]")
             else:
                 type_map = {
                     "note": "NOTE",
@@ -84,18 +86,18 @@ class FormatHelper:
                 gh_type = type_map.get(admonition_type, "NOTE")
                 lines.append(f"> [!{gh_type}]")
             lines.append(">")
-            for line in content.split('\n'):
+            for line in markdown_text(content).split('\n'):
                 lines.append(f"> {line}")
             lines.append("")
         else:
             # MkDocs风格: !!! tip 标题（不使用引号）
             if title:
                 # 使用标题作为admonition的声明
-                lines.append(f'!!! {admonition_type} {title}')
+                lines.append(f'!!! {admonition_type} {markdown_text(title, multiline=False)}')
             else:
                 lines.append(f'!!! {admonition_type}')
             lines.append("")
-            for line in content.split('\n'):
+            for line in markdown_text(content).split('\n'):
                 lines.append(f"    {line}")
             lines.append("")
 
@@ -121,12 +123,12 @@ class FormatHelper:
 
         lines = []
         # 表头
-        lines.append("| " + " | ".join(headers) + " |")
+        lines.append("| " + " | ".join(markdown_table_cell(header) for header in headers) + " |")
         # 分隔线
         lines.append("|" + "|".join(["------" for _ in headers]) + "|")
         # 数据行
         for row in rows:
-            cells = [str(cell) for cell in row]
+            cells = [markdown_table_cell(cell) for cell in row]
             lines.append("| " + " | ".join(cells) + " |")
         lines.append("")
 
@@ -153,9 +155,9 @@ class FormatHelper:
         lines = []
         for idx, item in enumerate(items, 1):
             if list_style == "numbered":
-                lines.append(f"{idx}. {item}")
+                lines.append(f"{idx}. {markdown_text(item)}")
             else:
-                lines.append(f"- {item}")
+                lines.append(f"- {markdown_text(item)}")
         lines.append("")
 
         return lines
@@ -173,7 +175,7 @@ class FormatHelper:
         """
         if not items:
             return []
-        return [separator.join(items), ""]
+        return [separator.join(markdown_text(item, multiline=False) for item in items), ""]
 
     def format_as_heading(
         self,
@@ -193,7 +195,7 @@ class FormatHelper:
         if not content:
             return []
         level = max(1, min(6, level))
-        return [f"{'#' * level} {content}", ""]
+        return [f"{'#' * level} {markdown_text(content, multiline=False)}", ""]
 
     def format_as_bold(self, content: str) -> List[str]:
         """
@@ -207,7 +209,7 @@ class FormatHelper:
         """
         if not content:
             return []
-        return [f"**{content}**", ""]
+        return [f"**{markdown_text(content)}**", ""]
 
     def format_as_plain(self, content: str) -> List[str]:
         """
@@ -221,7 +223,7 @@ class FormatHelper:
         """
         if not content:
             return []
-        return [content, ""]
+        return [markdown_text(content), ""]
 
     def wrap_collapsible(
         self,
@@ -248,7 +250,7 @@ class FormatHelper:
             result.append("<details open>")
         else:
             result.append("<details>")
-        result.append(f"<summary>{title}</summary>")
+        result.append(f"<summary>{markdown_text(title, multiline=False)}</summary>")
         result.append("")
         result.extend(lines)
         # 确保内容末尾有空行
@@ -273,7 +275,10 @@ class FormatHelper:
         """
         if not content:
             return []
-        return [f"**{label}**: {content}", ""]
+        return [
+            f"**{markdown_text(label, multiline=False)}**: {markdown_text(content)}",
+            "",
+        ]
 
 
 class BaseModuleRenderer(ABC):
@@ -389,7 +394,7 @@ class BaseModuleRenderer(ABC):
             if isinstance(content, str):
                 lines = self.format_helper.format_as_quote(content)
             else:
-                lines = self.format_helper.format_as_quote("\n".join(content))
+                lines = self.format_helper.format_as_quote("\n".join(str(item) for item in content))
         elif fmt == "admonition":
             admonition_type = config.get("admonition_type", "note")
             # 如果是collapsible，不传label给admonition，避免重复
@@ -397,7 +402,11 @@ class BaseModuleRenderer(ABC):
             if isinstance(content, str):
                 lines = self.format_helper.format_as_admonition(content, admonition_label, admonition_type)
             else:
-                lines = self.format_helper.format_as_admonition("\n".join(content), admonition_label, admonition_type)
+                lines = self.format_helper.format_as_admonition(
+                    "\n".join(str(item) for item in content),
+                    admonition_label,
+                    admonition_type,
+                )
         elif fmt == "list":
             if isinstance(content, list):
                 list_style = config.get("list_style", "bullet")

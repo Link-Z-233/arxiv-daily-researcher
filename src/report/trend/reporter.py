@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from config import settings
+from utils.safe_markdown import markdown_link, markdown_table_cell, markdown_text
 from utils.safe_url import safe_http_url
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,7 @@ class TrendReporter:
         """生成 Markdown 格式报告"""
         lines = []
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        keywords_str = ", ".join(keywords)
+        keywords_str = ", ".join(markdown_text(keyword, multiline=False) for keyword in keywords)
         date_range = f"{date_from} ~ {date_to}"
 
         # 标题
@@ -194,7 +195,8 @@ class TrendReporter:
                 lines.append("|------|------|------|------|")
                 for model, usage in by_model.items():
                     lines.append(
-                        f"| {model} | {usage['prompt']:,} | {usage['completion']:,} | {usage['total']:,} |"
+                        f"| {markdown_table_cell(model)} | {usage['prompt']:,} | "
+                        f"{usage['completion']:,} | {usage['total']:,} |"
                     )
             lines.append("")
 
@@ -216,23 +218,27 @@ class TrendReporter:
         categories = ", ".join(paper.categories) if paper.categories else ""
 
         # 标题
-        lines.append(f"### {idx}. {paper.title}")
+        lines.append(f"### {idx}. {markdown_text(paper.title, multiline=False)}")
         lines.append("")
 
         # 元数据
-        lines.append(f"**作者**: {authors}")
+        lines.append(f"**作者**: {markdown_text(authors, multiline=False)}")
         lines.append(f"**发布日期**: {pub_date}")
         if categories:
-            lines.append(f"**分类**: {categories}")
-        lines.append(f"**链接**: [{paper.url}]({paper.url})")
+            lines.append(f"**分类**: {markdown_text(categories, multiline=False)}")
+        link = markdown_link(paper.url, paper.url)
+        if link:
+            lines.append(f"**链接**: {link}")
         lines.append("")
 
         # TLDR
         tldr = tldrs.get(paper.paper_id, "")
         if tldr:
-            lines.append(f"> **AI 摘要** *(by {settings.CHEAP_LLM.model_name})*")
+            lines.append(
+                f"> **AI 摘要** *(by {markdown_text(settings.CHEAP_LLM.model_name, multiline=False)})*"
+            )
             lines.append(">")
-            for tl in tldr.split("\n"):
+            for tl in markdown_text(tldr).split("\n"):
                 if tl.strip():
                     lines.append(f"> {tl}")
             lines.append("")
@@ -242,7 +248,7 @@ class TrendReporter:
             lines.append("<details>")
             lines.append("<summary>Abstract</summary>")
             lines.append("")
-            for al in paper.abstract.split("\n"):
+            for al in markdown_text(paper.abstract).split("\n"):
                 lines.append(f"> {al}")
             lines.append("")
             lines.append("</details>")
@@ -264,8 +270,10 @@ class TrendReporter:
         lines.append("## 研究趋势分析")
         lines.append("")
         lines.append(
-            f"基于 {total_papers} 篇论文对 \"{', '.join(keywords)}\" 领域的研究趋势进行分析。  \n"
-            f"分析模型: `{settings.SMART_LLM.model_name}`"
+            f"基于 {total_papers} 篇论文对 \""
+            f"{', '.join(markdown_text(keyword, multiline=False) for keyword in keywords)}\" "
+            "领域的研究趋势进行分析。  \n"
+            f"分析模型: `{markdown_text(settings.SMART_LLM.model_name, multiline=False)}`"
         )
         lines.append("")
 
@@ -280,10 +288,10 @@ class TrendReporter:
         }
 
         for skill_name, content in trend_analysis.items():
-            title = skill_titles.get(skill_name, skill_name)
-            lines.append(f"### {title}")
+            title = skill_titles.get(skill_name, markdown_text(skill_name, multiline=False))
+            lines.append(f"### {markdown_text(title, multiline=False)}")
             lines.append("")
-            lines.append(content)
+            lines.append(markdown_text(content))
             lines.append("")
 
         lines.append("---")

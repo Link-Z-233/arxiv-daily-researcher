@@ -5,6 +5,8 @@
 """
 
 from typing import List, Dict, Any, Optional
+from utils.safe_markdown import markdown_link, markdown_text
+
 from .base_module import BaseModuleRenderer, FormatHelper
 from .trend_renderer import TrendRenderer
 
@@ -77,16 +79,16 @@ class MetadataRenderer(BaseModuleRenderer):
             if is_arxiv_source:
                 # ArXiv 来源：直接显示 arXiv 链接
                 if paper_meta and paper_meta.url:
-                    url = paper_meta.url
-                    field_values['arxiv_url'] = f"[{url}]({url})"
+                    field_values['arxiv_url'] = markdown_link(paper_meta.url, paper_meta.url)
                 else:
                     url = data.get('url', '#')
-                    field_values['arxiv_url'] = f"[{url}]({url})"
+                    field_values['arxiv_url'] = markdown_link(url, url)
             else:
                 # 期刊来源：如果有arXiv链接，显示在DOI上方
                 if paper_meta and paper_meta.arxiv_url:
-                    url = paper_meta.arxiv_url
-                    field_values['arxiv_url'] = f"[{url}]({url})"
+                    field_values['arxiv_url'] = markdown_link(
+                        paper_meta.arxiv_url, paper_meta.arxiv_url
+                    )
 
                 # 期刊来源：必须显示DOI
                 doi = paper_meta.doi if paper_meta and hasattr(paper_meta, 'doi') else data.get('doi', '')
@@ -94,7 +96,9 @@ class MetadataRenderer(BaseModuleRenderer):
                     # 清理 DOI 格式
                     clean_doi = doi.replace('https://doi.org/', '').replace('DOI:', '').strip()
                     doi_url = f"https://doi.org/{clean_doi}"
-                    field_values['doi_link'] = f"[{clean_doi}]({doi_url})"
+                    field_values['doi_link'] = markdown_link(clean_doi, doi_url)
+
+        field_values = {key: value for key, value in field_values.items() if value}
 
         # 根据格式输出
         if fmt == "table":
@@ -124,7 +128,10 @@ class MetadataRenderer(BaseModuleRenderer):
                     label = "DOI"
                 else:
                     label = fields_config.get(field_id, {}).get('label', field_id)
-                lines.append(f"**{label}**: {value}")
+                lines.append(
+                    f"**{markdown_text(label, multiline=False)}**: "
+                    f"{markdown_text(value, multiline=False)}"
+                )
             lines.append("")
         else:  # inline
             parts = []
@@ -137,7 +144,10 @@ class MetadataRenderer(BaseModuleRenderer):
                     label = "DOI"
                 else:
                     label = fields_config.get(field_id, {}).get('label', field_id)
-                parts.append(f"{label}: {value}")
+                parts.append(
+                    f"{markdown_text(label, multiline=False)}: "
+                    f"{markdown_text(value, multiline=False)}"
+                )
             lines.append(" | ".join(parts))
             lines.append("")
 
@@ -162,7 +172,7 @@ class AbstractOriginalRenderer(BaseModuleRenderer):
 
         # 添加标签（如果不是admonition格式且不是collapsible）
         if label and self.get_format(config) not in ["admonition"] and not self.should_collapsible(config):
-            lines.append(f"**{label}**:")
+            lines.append(f"**{markdown_text(label, multiline=False)}**:")
             lines.append("")
 
         # 应用格式
@@ -189,7 +199,7 @@ class AbstractCnRenderer(BaseModuleRenderer):
 
         # 添加标签（如果不是admonition格式且不是collapsible）
         if label and self.get_format(config) not in ["admonition"] and not self.should_collapsible(config):
-            lines.append(f"**{label}**:")
+            lines.append(f"**{markdown_text(label, multiline=False)}**:")
             lines.append("")
 
         content_lines = self.apply_format(abstract_cn, config)
@@ -221,7 +231,7 @@ class TldrSemanticScholarRenderer(BaseModuleRenderer):
         lines = []
 
         if self.get_format(config) == "inline":
-            lines.append(f"**{label}**: {tldr}")
+            lines.append(f"**{markdown_text(label, multiline=False)}**: {markdown_text(tldr)}")
             lines.append("")
         else:
             content_lines = self.apply_format(tldr, config)
@@ -257,7 +267,7 @@ class TldrAiRenderer(BaseModuleRenderer):
         lines = []
 
         if self.get_format(config) == "inline":
-            lines.append(f"**{label}**: {tldr}")
+            lines.append(f"**{markdown_text(label, multiline=False)}**: {markdown_text(tldr)}")
             lines.append("")
         else:
             # 使用动态标签替换config中的label
@@ -318,16 +328,24 @@ class ScoringRenderer(BaseModuleRenderer):
                 for kw, score in score_resp.keyword_scores.items():
                     weight = keywords_dict.get(kw, 0)
                     weighted = score * weight
-                    detail_lines.append(f"- **{kw}** (权重{weight:.1f}): {score:.1f}/10 → {weighted:.1f}")
+                    detail_lines.append(
+                        f"- **{markdown_text(kw, multiline=False)}** "
+                        f"(权重{weight:.1f}): {score:.1f}/10 → {weighted:.1f}"
+                    )
 
                 if score_resp.author_bonus > 0:
-                    experts = ", ".join(score_resp.expert_authors_found)
-                    detail_lines.append(f"- **作者加分**: +{score_resp.author_bonus:.1f}（专家: {experts}）")
+                    experts = ", ".join(
+                        markdown_text(expert, multiline=False)
+                        for expert in score_resp.expert_authors_found
+                    )
+                    detail_lines.append(
+                        f"- **作者加分**: +{score_resp.author_bonus:.1f}（专家: {experts}）"
+                    )
 
                 detail_lines.append("")
 
             if show_reasoning and score_resp.reasoning:
-                detail_lines.append(f"**评分理由**: {score_resp.reasoning}")
+                detail_lines.append(f"**评分理由**: {markdown_text(score_resp.reasoning)}")
                 detail_lines.append("")
 
             # 应用折叠
@@ -363,10 +381,13 @@ class ExtractedKeywordsRenderer(BaseModuleRenderer):
         lines = []
 
         if fmt == "inline":
-            lines.append(f"**{label}**: {', '.join(keywords)}")
+            lines.append(
+                f"**{markdown_text(label, multiline=False)}**: "
+                f"{', '.join(markdown_text(keyword, multiline=False) for keyword in keywords)}"
+            )
             lines.append("")
         else:
-            lines.append(f"**{label}**:")
+            lines.append(f"**{markdown_text(label, multiline=False)}**:")
             content_lines = self.apply_format(keywords, config)
             lines.extend(content_lines)
 
@@ -408,7 +429,7 @@ class DeepAnalysisRenderer(BaseModuleRenderer):
 
         lines = []
         section_title = self.deep_template.get('layout', {}).get('section_title', '深度分析')
-        lines.append(f"**{section_title}**:")
+        lines.append(f"**{markdown_text(section_title, multiline=False)}**:")
         lines.append("")
 
         # 获取模块配置并按order排序
@@ -458,14 +479,16 @@ class DeepAnalysisRenderer(BaseModuleRenderer):
         elif fmt == "quote":
             if isinstance(content, str):
                 if not is_collapsible:
-                    lines.append(f"**{label}**:")
+                    lines.append(f"**{markdown_text(label, multiline=False)}**:")
                     lines.append("")
                 lines.extend(self.format_helper.format_as_quote(content))
             else:
                 if is_collapsible:
-                    lines.append(str(content))
+                    lines.append(markdown_text(content))
                 else:
-                    lines.append(f"**{label}**: {content}")
+                    lines.append(
+                        f"**{markdown_text(label, multiline=False)}**: {markdown_text(content)}"
+                    )
                 lines.append("")
         elif fmt == "admonition":
             # 如果是collapsible，不传label给admonition
@@ -474,41 +497,58 @@ class DeepAnalysisRenderer(BaseModuleRenderer):
             if isinstance(content, str):
                 lines.extend(self.format_helper.format_as_admonition(content, admonition_label, admonition_type))
             elif isinstance(content, list):
-                lines.extend(self.format_helper.format_as_admonition("\n".join(f"- {item}" for item in content), admonition_label, admonition_type))
+                lines.extend(
+                    self.format_helper.format_as_admonition(
+                        "\n".join(str(item) for item in content),
+                        admonition_label,
+                        admonition_type,
+                    )
+                )
         elif fmt == "list":
             if isinstance(content, list):
                 if not is_collapsible:
-                    lines.append(f"**{label}**:")
+                    lines.append(f"**{markdown_text(label, multiline=False)}**:")
                 list_style = config.get('list_style', 'bullet')
                 lines.extend(self.format_helper.format_as_list(content, list_style))
             else:
                 if is_collapsible:
-                    lines.append(str(content))
+                    lines.append(markdown_text(content))
                 else:
-                    lines.append(f"**{label}**: {content}")
+                    lines.append(
+                        f"**{markdown_text(label, multiline=False)}**: {markdown_text(content)}"
+                    )
                 lines.append("")
         elif fmt == "inline":
             if isinstance(content, list):
                 if is_collapsible:
-                    lines.append(', '.join(str(c) for c in content))
+                    lines.append(', '.join(markdown_text(c, multiline=False) for c in content))
                 else:
-                    lines.append(f"**{label}**: {', '.join(str(c) for c in content)}")
+                    lines.append(
+                        f"**{markdown_text(label, multiline=False)}**: "
+                        f"{', '.join(markdown_text(c, multiline=False) for c in content)}"
+                    )
             else:
                 if is_collapsible:
-                    lines.append(str(content))
+                    lines.append(markdown_text(content))
                 else:
-                    lines.append(f"**{label}**: {content}")
+                    lines.append(
+                        f"**{markdown_text(label, multiline=False)}**: {markdown_text(content)}"
+                    )
             lines.append("")
         elif fmt == "qa":
             # 问答格式（用于custom_questions）
             if isinstance(content, dict):
                 if not is_collapsible:
-                    lines.append(f"**{label}**:")
+                    lines.append(f"**{markdown_text(label, multiline=False)}**:")
                 for q, a in content.items():
-                    lines.append(f"- **{q}**: {a}")
+                    lines.append(
+                        f"- **{markdown_text(q, multiline=False)}**: {markdown_text(a)}"
+                    )
                 lines.append("")
         else:  # plain
-            lines.append(f"**{label}**: {content}")
+            lines.append(
+                f"**{markdown_text(label, multiline=False)}**: {markdown_text(content)}"
+            )
             lines.append("")
 
         # 应用折叠

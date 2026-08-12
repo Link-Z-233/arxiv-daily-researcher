@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from config import settings
+from utils.safe_markdown import markdown_table_cell, markdown_text
 from utils.safe_url import safe_http_url
 from .modules.base_module import FormatHelper
 from .modules.renderers import ModuleRendererFactory
@@ -274,11 +275,13 @@ class Reporter:
 
         # 报告标题
         title_template = layout.get("report_title_template", "📊 {source_name} 研究报告 ({date})")
-        report_title = title_template.format(source_name=display_name, date=today)
-        lines.append(f"# {report_title}")
+        report_title = title_template.format(
+            source_name=markdown_text(display_name, multiline=False), date=today
+        )
+        lines.append(f"# {markdown_text(report_title, multiline=False)}")
         lines.append("")
         lines.append(f"> 生成时间: {timestamp}")
-        lines.append(f"> 数据源: {display_name}")
+        lines.append(f"> 数据源: {markdown_text(display_name, multiline=False)}")
         if qualified_only:
             lines.append(
                 f"> 显示范围: 仅及格论文（{displayed_count}/{total_papers} 篇）；"
@@ -312,7 +315,7 @@ class Reporter:
         show_qualified = layout.get("show_qualified_section", True) and qualified_count > 0
         if show_qualified:
             section_title = layout.get("qualified_section_title", "⭐ 及格论文详细分析")
-            lines.append(f"## {section_title}")
+            lines.append(f"## {markdown_text(section_title, multiline=False)}")
             lines.append("")
 
             qualified_papers = [p for p in sorted_papers if p["score_response"].is_qualified]
@@ -340,7 +343,7 @@ class Reporter:
                 section_title = layout.get("remaining_papers_section_title", "📋 其他论文列表")
             else:
                 section_title = layout.get("all_papers_section_title", "📋 所有论文列表")
-            lines.append(f"## {section_title}")
+            lines.append(f"## {markdown_text(section_title, multiline=False)}")
             lines.append("")
 
             qualified_icon = layout.get("qualified_icon", "✅")
@@ -373,7 +376,8 @@ class Reporter:
                 lines.append("|------|------|------|------|")
                 for model, usage in by_model.items():
                     lines.append(
-                        f"| {model} | {usage['prompt']:,} | {usage['completion']:,} | {usage['total']:,} |"
+                        f"| {markdown_table_cell(model)} | {usage['prompt']:,} | "
+                        f"{usage['completion']:,} | {usage['total']:,} |"
                     )
             lines.append("")
 
@@ -405,7 +409,7 @@ class Reporter:
         lines.append("|--------|------|------|")
         for kw, weight in sorted(keywords_dict.items(), key=lambda x: x[1], reverse=True):
             kw_type = "主要" if weight >= 1.0 else "次要"
-            lines.append(f"| {kw} | {weight:.1f} | {kw_type} |")
+            lines.append(f"| {markdown_table_cell(kw)} | {weight:.1f} | {kw_type} |")
         lines.append("")
 
         # 评分设置
@@ -419,7 +423,10 @@ class Reporter:
         if settings.ENABLE_AUTHOR_BONUS:
             lines.append(f"- **作者加分**: 启用（{settings.AUTHOR_BONUS_POINTS}分/专家）")
             if settings.EXPERT_AUTHORS:
-                lines.append(f"- **专家作者**: {', '.join(settings.EXPERT_AUTHORS)}")
+                experts = ", ".join(
+                    markdown_text(author, multiline=False) for author in settings.EXPERT_AUTHORS
+                )
+                lines.append(f"- **专家作者**: {experts}")
         lines.append("")
 
         return lines
@@ -490,12 +497,18 @@ class Reporter:
 
         # 生成标题行
         status_label = self._paper_status_label(paper)
-        title_with_status = f"{title[:100]}  `{status_label}`" if status_label else title[:100]
+        safe_title = markdown_text(title, multiline=False)
+        safe_status_label = markdown_text(status_label, multiline=False)
+        title_with_status = (
+            f"{safe_title[:100]}  `{safe_status_label}`" if status_label else safe_title[:100]
+        )
         if is_qualified_section:
             lines.append(f"### {idx}. {title_with_status}")
         else:
             status_icon = qualified_icon if score_resp.is_qualified else unqualified_icon
-            title_with_status = f"{title}  `{status_label}`" if status_label else title
+            title_with_status = (
+                f"{safe_title}  `{safe_status_label}`" if status_label else safe_title
+            )
             lines.append(f"### {idx}. {status_icon} {title_with_status}")
         lines.append("")
 

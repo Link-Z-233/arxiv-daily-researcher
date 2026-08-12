@@ -5,6 +5,8 @@
 """
 
 from typing import List, Dict, Any
+from utils.safe_markdown import markdown_table_cell, markdown_text
+
 from .base_module import BaseModuleRenderer, FormatHelper
 
 
@@ -66,7 +68,7 @@ class TrendRenderer(BaseModuleRenderer):
 
         # 标题
         label = self.get_label(config)
-        lines.append(f"## {label}")
+        lines.append(f"## {markdown_text(label, multiline=False)}")
         lines.append("")
 
         # 柱状图
@@ -115,7 +117,10 @@ class TrendRenderer(BaseModuleRenderer):
                 keyword = kw_data.get("keyword", "")
                 count = kw_data.get("count", 0)
                 category = kw_data.get("category") or "-"
-                lines.append(f"| {i} | {keyword} | {count} | {category} |")
+                lines.append(
+                    f"| {i} | {markdown_table_cell(keyword)} | {count} | "
+                    f"{markdown_table_cell(category)} |"
+                )
 
             lines.append("")
 

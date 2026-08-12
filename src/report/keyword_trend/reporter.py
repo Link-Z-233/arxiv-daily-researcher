@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from config import settings
+from utils.safe_markdown import markdown_table_cell
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,10 @@ class KeywordTrendReporter:
             lines.append("|---|--------|--------|------|")
             for i, kw in enumerate(top_keywords, 1):
                 category = kw.get("category") or "-"
-                lines.append(f"| {i} | {kw['keyword']} | {kw['count']} | {category} |")
+                lines.append(
+                    f"| {i} | {markdown_table_cell(kw['keyword'])} | {kw['count']} | "
+                    f"{markdown_table_cell(category)} |"
+                )
             lines.append("")
 
         # 趋势线图

@@ -36,6 +36,7 @@ from typing import List, Dict, Optional, Any
 import requests
 
 from utils.safe_url import safe_http_url
+from utils.safe_markdown import markdown_link, markdown_text
 
 logger = logging.getLogger(__name__)
 
@@ -635,7 +636,10 @@ class NotifierAgent:
         if "timestamp" not in kwargs:
             kwargs["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        subject = f"ArXiv Daily Researcher - ERROR ({kwargs.get('timestamp', '')})"
+        subject = (
+            "ArXiv Daily Researcher - ERROR "
+            f"({markdown_text(kwargs.get('timestamp', ''), multiline=False)})"
+        )
 
         for notifier in self.notifiers:
             try:
@@ -682,60 +686,70 @@ class NotifierAgent:
 
     def _format_subject(self, result: RunResult) -> str:
         status = "SUCCESS" if result.success else "FAILED"
-        return f"ArXiv Daily Researcher - {status} ({result.run_timestamp})"
+        return (
+            f"ArXiv Daily Researcher - {status} "
+            f"({markdown_text(result.run_timestamp, multiline=False)})"
+        )
 
-    def _format_body(self, result: RunResult) -> str:
-        """向后兼容：默认使用通用模板（非 Telegram 专用）"""
-        template_name = "success" if result.success else "failure"
-        template = _load_template(template_name)
-
-        # 构建各数据源统计文本
+    @staticmethod
+    def _format_daily_markdown_fragments(result: RunResult) -> tuple[str, str, str]:
+        """Render external daily-result fields into safe Markdown fragments."""
         source_lines = []
         for source in sorted(result.papers_by_source.keys()):
             fetched = result.papers_by_source.get(source, 0)
             qualified = result.qualified_by_source.get(source, 0)
             analyzed = result.analyzed_by_source.get(source, 0)
             source_lines.append(
-                f"> `{source.upper()}` 抓取 **{fetched}** | 及格 **{qualified}** | 分析 **{analyzed}**"
+                f"> `{markdown_text(source.upper(), multiline=False)}` 抓取 **{fetched}** | "
+                f"及格 **{qualified}** | 分析 **{analyzed}**"
             )
-        source_summary = "\n".join(source_lines)
 
-        # 构建报告路径文本
         report_lines = []
         if result.report_paths:
             report_lines.append("**报告路径**")
             for source, path in result.report_paths.items():
-                report_lines.append(f"> `{source}` {path}")
-        report_list = "\n".join(report_lines)
+                report_lines.append(
+                    f"> `{markdown_text(source, multiline=False)}` "
+                    f"{markdown_text(path, multiline=False)}"
+                )
 
-        # 构建 Top-N 论文文本
         top_lines = []
         if result.top_papers:
             top_lines.append(f"**Top {len(result.top_papers)} 论文**")
-            for i, p in enumerate(result.top_papers, 1):
-                title = p.get("title", "")[:60]
-                score = p.get("score", 0)
-                src = p.get("source", "").upper()
-                tldr = p.get("tldr", "")[:80]
-                url = safe_http_url(p.get("url", ""))
-                top_lines.append(f"> **{i}.** `{src}` {title}")
-                top_lines.append(f'> <font color="comment">Score: {score:.1f} | {tldr}</font>')
-                if url:
-                    top_lines.append(f"> [查看原文]({url})")
-        top_papers = "\n".join(top_lines)
+            for i, paper in enumerate(result.top_papers, 1):
+                title = markdown_text(paper.get("title", "")[:60], multiline=False)
+                score = paper.get("score", 0)
+                source = markdown_text(paper.get("source", "").upper(), multiline=False)
+                tldr = markdown_text(paper.get("tldr", "")[:80], multiline=False)
+                link = markdown_link("查看原文", paper.get("url", ""))
+                top_lines.append(f"> **{i}.** `{source}` {title}")
+                top_lines.append(
+                    f'> <font color="comment">Score: {score:.1f} | {tldr}</font>'
+                )
+                if link:
+                    top_lines.append(f"> {link}")
+
+        return "\n".join(source_lines), "\n".join(report_lines), "\n".join(top_lines)
+
+    def _format_body(self, result: RunResult) -> str:
+        """向后兼容：默认使用通用模板（非 Telegram 专用）"""
+        template_name = "success" if result.success else "failure"
+        template = _load_template(template_name)
+
+        source_summary, report_list, top_papers = self._format_daily_markdown_fragments(result)
 
         if template:
             return _render_template(
                 template,
                 status="SUCCESS" if result.success else "FAILED",
-                timestamp=result.run_timestamp,
+                timestamp=markdown_text(result.run_timestamp, multiline=False),
                 total_fetched=result.total_papers_fetched,
                 total_qualified=result.total_qualified,
                 total_analyzed=result.total_analyzed,
                 source_summary=source_summary,
                 report_list=report_list,
                 top_papers=top_papers,
-                error_message=result.error_message or "无",
+                error_message=markdown_text(result.error_message or "无"),
                 token_usage_section=self._format_token_section_md(result.token_usage),
             )
 
@@ -750,53 +764,20 @@ class NotifierAgent:
         template_name = "success" if result.success else "failure"
         template = _load_template(template_name)
 
-        # 构建各数据源统计文本
-        source_lines = []
-        for source in sorted(result.papers_by_source.keys()):
-            fetched = result.papers_by_source.get(source, 0)
-            qualified = result.qualified_by_source.get(source, 0)
-            analyzed = result.analyzed_by_source.get(source, 0)
-            source_lines.append(
-                f"> `{source.upper()}` 抓取 **{fetched}** | 及格 **{qualified}** | 分析 **{analyzed}**"
-            )
-        source_summary = "\n".join(source_lines)
-
-        # 构建报告路径文本
-        report_lines = []
-        if result.report_paths:
-            report_lines.append("**报告路径**")
-            for source, path in result.report_paths.items():
-                report_lines.append(f"> `{source}` {path}")
-        report_list = "\n".join(report_lines)
-
-        # 构建 Top-N 论文文本
-        top_lines = []
-        if result.top_papers:
-            top_lines.append(f"**Top {len(result.top_papers)} 论文**")
-            for i, p in enumerate(result.top_papers, 1):
-                title = p.get("title", "")[:60]
-                score = p.get("score", 0)
-                src = p.get("source", "").upper()
-                tldr = p.get("tldr", "")[:80]
-                url = safe_http_url(p.get("url", ""))
-                top_lines.append(f"> **{i}.** `{src}` {title}")
-                top_lines.append(f'> <font color="comment">Score: {score:.1f} | {tldr}</font>')
-                if url:
-                    top_lines.append(f"> [查看原文]({url})")
-        top_papers = "\n".join(top_lines)
+        source_summary, report_list, top_papers = self._format_daily_markdown_fragments(result)
 
         if template:
             return _render_template(
                 template,
                 status="SUCCESS" if result.success else "FAILED",
-                timestamp=result.run_timestamp,
+                timestamp=markdown_text(result.run_timestamp, multiline=False),
                 total_fetched=result.total_papers_fetched,
                 total_qualified=result.total_qualified,
                 total_analyzed=result.total_analyzed,
                 source_summary=source_summary,
                 report_list=report_list,
                 top_papers=top_papers,
-                error_message=result.error_message or "无",
+                error_message=markdown_text(result.error_message or "无"),
                 token_usage_section=self._format_token_section_md(result.token_usage),
             )
 
@@ -874,12 +855,12 @@ class NotifierAgent:
         status_icon = "OK" if result.success else "ERROR"
         lines = [
             f"Status: {status_icon}",
-            f"Time: {result.run_timestamp}",
+            f"Time: {markdown_text(result.run_timestamp, multiline=False)}",
             "",
         ]
 
         if result.error_message:
-            lines.append(f"Error: {result.error_message}")
+            lines.append(f"Error: {markdown_text(result.error_message)}")
             lines.append("")
 
         lines.append("Papers Summary:")
@@ -888,7 +869,8 @@ class NotifierAgent:
             qualified = result.qualified_by_source.get(source, 0)
             analyzed = result.analyzed_by_source.get(source, 0)
             lines.append(
-                f"  [{source.upper()}] Fetched: {fetched} | Qualified: {qualified} | Analyzed: {analyzed}"
+                f"  [{markdown_text(source.upper(), multiline=False)}] Fetched: {fetched} | "
+                f"Qualified: {qualified} | Analyzed: {analyzed}"
             )
 
         lines.append("")
@@ -902,21 +884,24 @@ class NotifierAgent:
             lines.append("")
             lines.append("Reports:")
             for source, path in result.report_paths.items():
-                lines.append(f"  [{source}] {path}")
+                lines.append(
+                    f"  [{markdown_text(source, multiline=False)}] "
+                    f"{markdown_text(path, multiline=False)}"
+                )
 
         if result.top_papers:
             lines.append("")
             lines.append(f"Top {len(result.top_papers)} Papers:")
             for i, p in enumerate(result.top_papers, 1):
-                title = p.get("title", "")[:80]
+                title = markdown_text(p.get("title", "")[:80], multiline=False)
                 score = p.get("score", 0)
-                src = p.get("source", "").upper()
-                tldr = p.get("tldr", "")[:120]
-                url = p.get("url", "")
+                src = markdown_text(p.get("source", "").upper(), multiline=False)
+                tldr = markdown_text(p.get("tldr", "")[:120], multiline=False)
+                url = safe_http_url(p.get("url", ""))
                 lines.append(f"  {i}. [{src}] {title}")
                 lines.append(f"     Score: {score:.1f} | {tldr}")
                 if url:
-                    lines.append(f"     {url}")
+                    lines.append(f"     {markdown_text(url, multiline=False)}")
 
         return "\n".join(lines)
 
@@ -937,7 +922,7 @@ class NotifierAgent:
 
         return _render_template(
             template,
-            timestamp=result.run_timestamp,
+            timestamp=self._html_escape(str(result.run_timestamp)),
             total_fetched=result.total_papers_fetched,
             total_qualified=result.total_qualified,
             total_analyzed=result.total_analyzed,
@@ -1095,8 +1080,13 @@ class NotifierAgent:
 
     def _format_trend_subject(self, result: TrendRunResult) -> str:
         status = "SUCCESS" if result.success else "FAILED"
-        keywords_str = ", ".join(result.keywords)
-        return f"ArXiv Trend Research - {status} ({keywords_str}) ({result.run_timestamp})"
+        keywords_str = ", ".join(
+            markdown_text(keyword, multiline=False) for keyword in result.keywords
+        )
+        return (
+            f"ArXiv Trend Research - {status} ({keywords_str}) "
+            f"({markdown_text(result.run_timestamp, multiline=False)})"
+        )
 
     def _format_trend_body(self, result: TrendRunResult) -> str:
         """向后兼容：默认使用通用模板（非 Telegram 专用）"""
@@ -1112,29 +1102,37 @@ class NotifierAgent:
         template_name = "research_success" if result.success else "research_failure"
         template = _load_template(template_name, platform=platform)
 
-        keywords_str = ", ".join(result.keywords)
-        date_range = f"{result.date_from} ~ {result.date_to}"
+        keywords_str = ", ".join(
+            markdown_text(keyword, multiline=False) for keyword in result.keywords
+        )
+        date_range = (
+            f"{markdown_text(result.date_from, multiline=False)} ~ "
+            f"{markdown_text(result.date_to, multiline=False)}"
+        )
 
         # 报告路径
         report_lines = []
         if result.report_paths:
             report_lines.append("**报告路径**")
             for fmt, path in result.report_paths.items():
-                report_lines.append(f"> `{fmt}` {path}")
+                report_lines.append(
+                    f"> `{markdown_text(fmt, multiline=False)}` "
+                    f"{markdown_text(path, multiline=False)}"
+                )
         report_list = "\n".join(report_lines)
 
         if template:
             return _render_template(
                 template,
                 status="SUCCESS" if result.success else "FAILED",
-                timestamp=result.run_timestamp,
+                timestamp=markdown_text(result.run_timestamp, multiline=False),
                 keywords=keywords_str,
                 date_range=date_range,
                 total_papers=result.total_papers,
                 tldr_count=result.tldr_count,
                 trend_skills_count=result.trend_skills_count,
                 report_list=report_list,
-                error_message=result.error_message or "无",
+                error_message=markdown_text(result.error_message or "无"),
                 token_usage_section=self._format_token_section_md(result.token_usage),
             )
 
@@ -1144,7 +1142,7 @@ class NotifierAgent:
     def _format_telegram_trend_body(self, result: TrendRunResult) -> str:
         """Telegram 专用趋势分析 HTML 正文。"""
         status_label = "运行成功" if result.success else "运行失败"
-        keywords_str = self._html_escape(", ".join(result.keywords))
+        keywords_str = self._html_escape(", ".join(str(keyword) for keyword in result.keywords))
         date_range = self._html_escape(f"{result.date_from} ~ {result.date_to}")
 
         report_lines = []
@@ -1193,17 +1191,20 @@ class NotifierAgent:
 
         template = _load_template(template_name, platform=platform)
         if template:
-            return _render_template(template, **kwargs)
+            safe_kwargs = {key: markdown_text(value) for key, value in kwargs.items()}
+            return _render_template(template, **safe_kwargs)
 
         lines = [
             "## ArXiv Daily Researcher",
             "",
-            f"**错误告警** | {kwargs.get('timestamp', '')}",
+            f"**错误告警** | {markdown_text(kwargs.get('timestamp', ''), multiline=False)}",
             "",
         ]
         for key, value in kwargs.items():
             if key != "timestamp":
-                lines.append(f"> {key}: {value}")
+                lines.append(
+                    f"> {markdown_text(key, multiline=False)}: {markdown_text(value)}"
+                )
         return "\n".join(lines)
 
     def _format_telegram_error_body(self, template_name: str, **kwargs) -> str:
@@ -1239,9 +1240,10 @@ class NotifierAgent:
         status_icon = "OK" if result.success else "ERROR"
         lines = [
             f"Status: {status_icon}",
-            f"Time: {result.run_timestamp}",
-            f"Keywords: {', '.join(result.keywords)}",
-            f"Date Range: {result.date_from} ~ {result.date_to}",
+            f"Time: {markdown_text(result.run_timestamp, multiline=False)}",
+            f"Keywords: {', '.join(markdown_text(keyword, multiline=False) for keyword in result.keywords)}",
+            f"Date Range: {markdown_text(result.date_from, multiline=False)} ~ "
+            f"{markdown_text(result.date_to, multiline=False)}",
             "",
             f"Papers Found: {result.total_papers}",
             f"TLDRs Generated: {result.tldr_count}",
@@ -1250,13 +1252,16 @@ class NotifierAgent:
 
         if result.error_message:
             lines.append("")
-            lines.append(f"Error: {result.error_message}")
+            lines.append(f"Error: {markdown_text(result.error_message)}")
 
         if result.report_paths:
             lines.append("")
             lines.append("Reports:")
             for fmt, path in result.report_paths.items():
-                lines.append(f"  [{fmt}] {path}")
+                lines.append(
+                    f"  [{markdown_text(fmt, multiline=False)}] "
+                    f"{markdown_text(path, multiline=False)}"
+                )
 
         return "\n".join(lines)
 
