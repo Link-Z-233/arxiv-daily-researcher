@@ -7,7 +7,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from utils.config_io import _atomic_write_text, write_config_json, write_env  # noqa: E402
+from utils.config_io import (  # noqa: E402
+    _atomic_write_text,
+    build_config_dict,
+    flatten_config_dict,
+    write_config_json,
+    write_env,
+)
 
 
 class ConfigIOReliabilityTests(unittest.TestCase):
@@ -47,6 +53,28 @@ class ConfigIOReliabilityTests(unittest.TestCase):
             write_config_json({"search_settings": {"days": 2}}, config_path)
 
             self.assertEqual(oct(config_path.stat().st_mode & 0o777), "0o640")
+
+    def test_legacy_daily_result_caps_are_not_written_or_exposed(self):
+        """Daily scans must never regain an item budget through config saves."""
+        config = build_config_dict(
+            search_days=3,
+            max_results=1,
+            max_results_per_source={"arxiv": 1},
+        )
+        self.assertEqual(config["search_settings"], {"search_days": 3})
+
+        legacy_flat = flatten_config_dict(
+            {
+                "search_settings": {
+                    "search_days": 3,
+                    "max_results": 1,
+                    "max_results_per_source": {"arxiv": 1},
+                }
+            }
+        )
+        self.assertEqual(legacy_flat["search_days"], 3)
+        self.assertNotIn("max_results", legacy_flat)
+        self.assertNotIn("max_results_per_source", legacy_flat)
 
 
 if __name__ == "__main__":

@@ -54,7 +54,9 @@ class Settings(BaseSettings):
     HISTORY_FILE: Path = DATA_DIR / "history.json"  # 已处理论文的历史记录文件
 
     # ==================== 搜索配置 ====================
-    MAX_RESULTS: int = 100  # 单次搜索的最大返回结果数
+    # Legacy compatibility only.  Daily scans always exhaust their configured
+    # time window, so these values are never a fetch/LLM budget.
+    MAX_RESULTS: Optional[int] = None
     SEARCH_DAYS: int = 7  # 搜索最近N天的论文
     TARGET_DOMAINS: List[str] = ["quant-ph"]  # 目标领域列表
 
@@ -211,7 +213,7 @@ class Settings(BaseSettings):
     NOTIFICATION_TOP_N: int = 5  # 通知中包含的Top-N高分论文数量
 
     # ==================== 搜索扩展 ====================
-    MAX_RESULTS_PER_SOURCE: Dict[str, int] = {}  # 按数据源单独配置max_results
+    MAX_RESULTS_PER_SOURCE: Dict[str, int] = {}  # 旧配置兼容字段；日报不使用
 
     # ==================== 评分配置 ====================
     # 关键词相关度评分
@@ -284,8 +286,10 @@ class Settings(BaseSettings):
             if "search_settings" in config:
                 settings = config["search_settings"]
                 self.SEARCH_DAYS = settings.get("search_days", self.SEARCH_DAYS)
-                self.MAX_RESULTS = settings.get("max_results", self.MAX_RESULTS)
-                self.MAX_RESULTS_PER_SOURCE = settings.get("max_results_per_source", {})
+                # ``max_results`` and ``max_results_per_source`` are accepted
+                # in legacy files but deliberately ignored.  A daily report
+                # must process every paper within its time window rather than
+                # silently defer an arbitrary tail to a later day.
 
             # 加载目标领域
             if "target_domains" in config:

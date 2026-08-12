@@ -395,7 +395,7 @@ def write_config_json(config: Dict[str, Any], path: Optional[Path] = None) -> No
 
 def build_config_dict(
     search_days: int = 7,
-    max_results: int = 100,
+    max_results: Optional[int] = None,
     max_results_per_source: Optional[Dict[str, int]] = None,
     enabled_sources: Optional[List[str]] = None,
     journals: Optional[List[str]] = None,
@@ -494,8 +494,6 @@ def build_config_dict(
     config = {
         "search_settings": {
             "search_days": search_days,
-            "max_results": max_results,
-            "max_results_per_source": max_results_per_source or {},
         },
         "data_sources": {
             "enabled": enabled_sources or ["arxiv"],
@@ -686,8 +684,6 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     # Search settings
     ss = config.get("search_settings", {})
     flat["search_days"] = ss.get("search_days", 7)
-    flat["max_results"] = ss.get("max_results", 100)
-    flat["max_results_per_source"] = ss.get("max_results_per_source", {})
 
     # Data sources
     ds = config.get("data_sources", {})

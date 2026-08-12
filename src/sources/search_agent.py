@@ -33,7 +33,7 @@ class SearchAgent:
         enabled_sources: List[str] = None,
         arxiv_domains: List[str] = None,
         journals: List[str] = None,
-        max_results: int = 100,
+        max_results: Optional[int] = None,
         max_results_per_source: Dict[str, int] = None,
         openalex_email: str = None,
         openalex_api_key: str = None,
@@ -63,6 +63,9 @@ class SearchAgent:
         self.enabled_sources = enabled_sources or ["arxiv"]
         self.arxiv_domains = arxiv_domains or []
         self.journals = journals or []
+        # Kept in the public constructor so old integrations do not break.
+        # Daily source scans intentionally ignore both values and exhaust the
+        # configured time window instead of treating them as an item budget.
         self.max_results = max_results
         self.max_results_per_source = max_results_per_source or {}
         self.openalex_email = openalex_email
@@ -85,10 +88,6 @@ class SearchAgent:
         # 初始化数据源
         self.sources: Dict[str, BasePaperSource] = {}
         self._init_sources()
-
-    def _get_max_results(self, source: str) -> int:
-        """获取指定数据源的最大结果数，优先使用单独配置，否则回退到全局默认值。"""
-        return self.max_results_per_source.get(source, self.max_results)
 
     def _init_sources(self):
         """根据配置初始化数据源"""
@@ -140,7 +139,6 @@ class SearchAgent:
             arxiv_proxy = _settings.get_proxy_dict("arxiv")
             self.sources["arxiv"] = ArxivSource(
                 history_dir=self.history_dir,
-                max_results=self._get_max_results("arxiv"),
                 proxy_dict=arxiv_proxy,
             )
             logger.info("[SearchAgent] 已启用 ArXiv 数据源")
@@ -158,18 +156,9 @@ class SearchAgent:
                 journal_codes.append(journal)
 
         if journal_codes:
-            # ``max_results`` only exists for backward configuration
-            # compatibility.  OpenAlexSource deliberately does not use it as
-            # a daily-scan cap; retaining this value avoids breaking callers
-            # that instantiate it directly.
-            openalex_max = max(
-                (self._get_max_results(jc) for jc in journal_codes),
-                default=self.max_results,
-            )
             self.sources["openalex"] = OpenAlexSource(
                 history_dir=self.history_dir,
                 journals=journal_codes,
-                max_results=openalex_max,
                 email=self.openalex_email,
                 api_key=self.openalex_api_key,
             )

@@ -62,25 +62,15 @@ def render(_env_values: dict, config_values: dict):
     )
     st.markdown(f'<p class="hint-text">{t("search_settings_hint")}</p>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.number_input(
-            t("search_days_label"),
-            min_value=1,
-            max_value=365,
-            value=flat.get("search_days", 7),
-            key="search_days",
-            help=t("search_days_help"),
-        )
-    with col2:
-        st.number_input(
-            t("max_results_label"),
-            min_value=1,
-            max_value=1000,
-            value=flat.get("max_results", 100),
-            key="max_results",
-            help=t("max_results_help"),
-        )
+    st.number_input(
+        t("search_days_label"),
+        min_value=1,
+        max_value=365,
+        value=flat.get("search_days", 7),
+        key="search_days",
+        help=t("search_days_help"),
+    )
+    st.info(t("daily_scan_all_results"))
 
     st.divider()
 
@@ -159,7 +149,6 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
 
     return {
         "search_days": st.session_state.get("search_days", 7),
-        "max_results": st.session_state.get("max_results", 100),
         "enabled_sources": enabled,
         "reports_by_source": st.session_state.get("reports_by_source", True),
         "arxiv_fetch_timeout_seconds": st.session_state.get("arxiv_fetch_timeout_seconds", 180),

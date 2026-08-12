@@ -19,7 +19,9 @@ on:
 jobs:
   research:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A complete time-window scan can legitimately take longer when upstream
+    # services rate-limit requests.  Do not turn this into a paper-count cap.
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
@@ -70,6 +72,7 @@ jobs:
           path: |
             data/history/
             data/keywords/
+            data/daily_research/
           key: research-data-${{ github.run_number }}
           restore-keys: |
             research-data-
@@ -82,7 +85,7 @@ jobs:
                    data/reports/trend_research/html \
                    data/reports/keyword_trend/markdown \
                    data/reports/keyword_trend/html \
-                   data/history data/keywords data/run \
+                   data/history data/keywords data/daily_research data/run \
                    data/reference_pdfs data/downloaded_pdfs logs
 
       - name: Run research pipeline
@@ -107,4 +110,5 @@ jobs:
           path: |
             data/history/
             data/keywords/
+            data/daily_research/
           key: research-data-${{ github.run_number }}

@@ -284,7 +284,7 @@ def section_llm(existing_env: dict) -> dict:
 
 def section_search(existing_config: dict) -> dict:
     """Section 2: Search Settings. Returns flat config values."""
-    section_header(2, "Search Settings", "Control search scope and limits")
+    section_header(2, "Search Settings", "Control the daily search time window")
 
     flat = flatten_config_dict(existing_config) if existing_config else {}
 
@@ -297,18 +297,8 @@ def section_search(existing_config: dict) -> dict:
     if search_days is None:
         raise KeyboardInterrupt
 
-    max_results = questionary.text(
-        "Max results per source:",
-        default=str(flat.get("max_results", 100)),
-        validate=lambda x: True if _is_positive_int(x) else "Please enter a positive integer",
-        style=WIZARD_STYLE,
-    ).ask()
-    if max_results is None:
-        raise KeyboardInterrupt
-
     return {
         "search_days": int(search_days),
-        "max_results": int(max_results),
     }
 
 

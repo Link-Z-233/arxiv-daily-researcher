@@ -241,16 +241,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── search.py ────────────────────────────────────────────────────────
     "search_settings_title": {"zh": "搜索设置", "en": "Search Settings"},
     "search_settings_hint": {
-        "zh": "控制每次抓取的论文数量和时间范围。",
-        "en": "Control how many papers to fetch and the time range.",
+        "zh": "控制每日扫描的时间范围。",
+        "en": "Control the time window scanned each day.",
     },
     "search_days_label": {"zh": "搜索最近 N 天", "en": "Search recent N days"},
     "search_days_help": {
         "zh": "推荐：1（每日）、7（每周）、30（每月）",
         "en": "Recommended: 1 (daily), 7 (weekly), 30 (monthly)",
     },
-    "max_results_label": {"zh": "每个数据源最大结果数", "en": "Max results per source"},
-    "max_results_help": {"zh": "推荐：50-200", "en": "Recommended: 50-200"},
+    "daily_scan_all_results": {
+        "zh": "日报会处理时间范围内的全部新论文；系统通过请求限速与重试保护上游服务，不使用篇数预算。",
+        "en": "Daily research processes every new paper in the time window. Request pacing and retries protect upstream services; there is no item budget.",
+    },
     "data_sources_title": {"zh": "数据源", "en": "Data Sources"},
     "data_sources_hint": {
         "zh": "选择要监控的论文来源。",

@@ -526,7 +526,7 @@ class DailyResearchPipeline:
             if settings.TARGET_JOURNALS:
                 logger.info(f"目标期刊: {settings.TARGET_JOURNALS}")
             logger.info(f"搜索天数: {settings.SEARCH_DAYS}")
-            logger.info(f"最大结果数: {settings.MAX_RESULTS}")
+            logger.info("日报抓取: 完整扫描时间窗口内的全部论文（由请求限速和重试保护服务）")
             logger.info(f"启用Reference提取: {settings.ENABLE_REFERENCE_EXTRACTION}")
 
             # ==================== 阶段2: 关键词准备 ====================
@@ -576,8 +576,6 @@ class DailyResearchPipeline:
                 enabled_sources=settings.ENABLED_SOURCES,
                 arxiv_domains=settings.TARGET_DOMAINS,
                 journals=settings.TARGET_JOURNALS,
-                max_results=settings.MAX_RESULTS,
-                max_results_per_source=settings.MAX_RESULTS_PER_SOURCE,
                 openalex_email=settings.OPENALEX_EMAIL,
                 openalex_api_key=settings.OPENALEX_API_KEY,
                 enable_semantic_scholar=settings.ENABLE_SEMANTIC_SCHOLAR_TLDR,

@@ -3,9 +3,9 @@
   // Search Configuration
   // ==================================================
   "search_settings": {
-    "search_days": 14,
-    "max_results": 100,
-    "max_results_per_source": {}
+    // Daily research exhausts the whole time window. Request pacing and
+    // retries protect upstream services; there is intentionally no result cap.
+    "search_days": 14
   },
 
   // ==================================================
