@@ -2,7 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,6 +31,82 @@ def _paper(paper_id: str) -> PaperMetadata:
 
 
 class IdentityStoreTests(unittest.TestCase):
+    def test_successful_scan_advances_watermarks_and_failed_gap_expands_recovery_window(self):
+        """A failed daily run must not let undelivered papers age out of the scan window."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            checkpoint_time = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+
+            successful_run = store.start_run(0)
+            self.assertEqual(
+                store.prepare_scan(
+                    successful_run,
+                    configured_days=2,
+                    sources=["arxiv", "prl"],
+                    now=checkpoint_time,
+                ),
+                2,
+            )
+            # A no-new-paper run is still a complete scan and must establish
+            # the checkpoint for every enabled source.
+            store.complete_run(successful_run, {})
+
+            for source in ("arxiv", "prl"):
+                watermark = store.get_scan_watermark(source)
+                self.assertEqual(watermark["run_id"], successful_run)
+                self.assertEqual(watermark["successful_scan_started_at"], checkpoint_time.isoformat())
+
+            failed_run = store.start_run(0)
+            failed_at = checkpoint_time + timedelta(days=5, hours=4)
+            self.assertEqual(
+                store.prepare_scan(
+                    failed_run,
+                    configured_days=2,
+                    sources=["arxiv", "prl"],
+                    now=failed_at,
+                ),
+                6,
+            )
+            store.fail_run(failed_run, "translation unavailable")
+
+            recovery_run = store.start_run(0)
+            recovery_at = failed_at + timedelta(days=2)
+            self.assertEqual(
+                store.prepare_scan(
+                    recovery_run,
+                    configured_days=2,
+                    sources=["arxiv", "prl"],
+                    now=recovery_at,
+                ),
+                8,
+            )
+            # A failure must not advance the durable checkpoint.
+            self.assertEqual(
+                store.get_scan_watermark("arxiv")["successful_scan_started_at"],
+                checkpoint_time.isoformat(),
+            )
+
+    def test_new_source_uses_normal_window_while_existing_source_recovers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            checkpoint_time = datetime(2026, 8, 1, tzinfo=timezone.utc)
+            first_run = store.start_run(0)
+            store.prepare_scan(first_run, 3, ["arxiv"], now=checkpoint_time)
+            store.complete_run(first_run, {})
+
+            next_run = store.start_run(0)
+            # Adding a source must not trigger an accidental unbounded import;
+            # the existing source still determines a safe recovery lookback.
+            self.assertEqual(
+                store.prepare_scan(
+                    next_run,
+                    3,
+                    ["arxiv", "prl"],
+                    now=checkpoint_time + timedelta(days=9),
+                ),
+                10,
+            )
+
     def test_arxiv_identity_and_legacy_history_are_version_aware(self):
         self.assertEqual(split_arxiv_version("2501.12345v2"), ("2501.12345", 2))
         self.assertEqual(split_arxiv_version("hep-th/9901001"), ("hep-th/9901001", None))

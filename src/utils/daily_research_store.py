@@ -9,7 +9,7 @@ work without prematurely hiding papers from future runs.
 import json
 import sqlite3
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
@@ -20,6 +20,13 @@ if TYPE_CHECKING:
 
 class DailyResearchStore:
     """Small SQLite store for daily research runs and paper state."""
+
+    # Source APIs only expose a day-granularity query.  Always rescan one
+    # extra day around a completed scan boundary: this protects papers near a
+    # boundary as well as a short upstream indexing delay.  Exact-version
+    # delivery de-duplication makes the overlap safe and cheap in terms of
+    # downstream LLM work.
+    SCAN_RECOVERY_OVERLAP_DAYS = 1
 
     # These values come from optional, best-effort enrichment services.  They
     # must not disappear merely because a later retry happens while the
@@ -52,6 +59,9 @@ class DailyResearchStore:
                 CREATE TABLE IF NOT EXISTS daily_runs (
                     run_id TEXT PRIMARY KEY,
                     started_at TEXT NOT NULL,
+                    scan_started_at TEXT,
+                    scan_days INTEGER,
+                    scanned_sources_json TEXT,
                     completed_at TEXT,
                     status TEXT NOT NULL,
                     total_papers INTEGER DEFAULT 0,
@@ -60,6 +70,7 @@ class DailyResearchStore:
                 )
                 """
             )
+            self._migrate_run_scan_state(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS daily_papers (
@@ -161,6 +172,38 @@ class DailyResearchStore:
                 "ON maintenance_outbox(status, next_attempt_at)"
             )
 
+            # A per-source checkpoint is advanced only in the same
+            # transaction that completes a successful daily scan/report.  If
+            # any fetch, scoring, translation, analysis, report generation,
+            # or final delivery commit fails, its old checkpoint remains in
+            # place and the next run expands its lookback window instead of
+            # letting those papers age out of SEARCH_DAYS.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_scan_watermarks (
+                    source TEXT PRIMARY KEY,
+                    successful_scan_started_at TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+    @staticmethod
+    def _migrate_run_scan_state(conn):
+        """Add scan audit columns to databases created before recovery watermarks."""
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(daily_runs)").fetchall()
+        }
+        additions = {
+            "scan_started_at": "TEXT",
+            "scan_days": "INTEGER",
+            "scanned_sources_json": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE daily_runs ADD COLUMN {name} {definition}")
+
     @staticmethod
     def _migrate_paper_identity(conn):
         """Add identity columns to databases created by the first persistence patch."""
@@ -236,6 +279,159 @@ class DailyResearchStore:
             )
         return run_id
 
+    @staticmethod
+    def _parse_checkpoint_timestamp(value: Optional[str]) -> Optional[datetime]:
+        """Parse a stored local/UTC ISO timestamp into a UTC-aware value.
+
+        Existing databases use ``datetime.now().isoformat()`` (without an
+        offset), while future callers may persist offset-aware timestamps.
+        Treat legacy naive values as local time, matching their original
+        meaning, then compare everything in UTC.
+        """
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            return parsed.astimezone()
+        return parsed.astimezone(timezone.utc)
+
+    def prepare_scan(
+        self,
+        run_id: str,
+        configured_days: int,
+        sources: list[str],
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Record a scan plan and return a recovery-safe lookback length.
+
+        ``SEARCH_DAYS`` remains the normal overlap window.  When an enabled
+        source has not completed a successful scan recently (because a run
+        failed or the scheduler was offline), extend the window back to that
+        source's last successful scan start plus a one-day overlap.  The
+        SQLite delivery ledger filters already delivered exact versions, so
+        this never turns an expanded recovery scan into duplicate reports.
+
+        A new source has no checkpoint by definition; its configured window is
+        used rather than silently attempting an unbounded historical import.
+        Call this immediately before fetching, rather than at process start,
+        so the checkpoint represents the actual source-query boundary.
+        """
+        base_days = max(1, int(configured_days))
+        normalized_sources = sorted(
+            {str(source).strip().lower() for source in sources if str(source).strip()}
+        )
+        now_dt = now or datetime.now().astimezone()
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.astimezone()
+        now_utc = now_dt.astimezone(timezone.utc)
+        scan_started_at = now_dt.isoformat()
+
+        with self._lock, self._connect() as conn:
+            run = conn.execute(
+                "SELECT run_id FROM daily_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise KeyError(f"daily run does not exist: {run_id}")
+
+            recovery_days = base_days
+            if normalized_sources:
+                placeholders = ", ".join("?" for _ in normalized_sources)
+                rows = conn.execute(
+                    "SELECT source, successful_scan_started_at "
+                    "FROM daily_scan_watermarks WHERE source IN ("
+                    + placeholders
+                    + ")",
+                    normalized_sources,
+                ).fetchall()
+                checkpoints = {
+                    row["source"]: self._parse_checkpoint_timestamp(
+                        row["successful_scan_started_at"]
+                    )
+                    for row in rows
+                }
+                for source in normalized_sources:
+                    checkpoint = checkpoints.get(source)
+                    if checkpoint is None:
+                        continue
+                    elapsed_seconds = (now_utc - checkpoint).total_seconds()
+                    elapsed_days = max(0, int(elapsed_seconds / 86400))
+                    recovery_days = max(
+                        recovery_days,
+                        elapsed_days + self.SCAN_RECOVERY_OVERLAP_DAYS,
+                    )
+
+            conn.execute(
+                """
+                UPDATE daily_runs
+                SET scan_started_at = ?, scan_days = ?, scanned_sources_json = ?
+                WHERE run_id = ?
+                """,
+                (
+                    scan_started_at,
+                    recovery_days,
+                    json.dumps(normalized_sources, ensure_ascii=False),
+                    run_id,
+                ),
+            )
+        return recovery_days
+
+    @staticmethod
+    def _scan_sources_from_run(conn, run_id: str) -> list[str]:
+        row = conn.execute(
+            "SELECT scanned_sources_json FROM daily_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None or not row["scanned_sources_json"]:
+            return []
+        try:
+            sources = json.loads(row["scanned_sources_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        if not isinstance(sources, list):
+            return []
+        return sorted(
+            {str(source).strip().lower() for source in sources if str(source).strip()}
+        )
+
+    @staticmethod
+    def _scan_started_at_from_run(conn, run_id: str, fallback: str) -> str:
+        row = conn.execute(
+            "SELECT scan_started_at, started_at FROM daily_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return fallback
+        return row["scan_started_at"] or row["started_at"] or fallback
+
+    def _advance_scan_watermarks(self, conn, run_id: str, now: str) -> None:
+        """Advance all planned source checkpoints inside a successful commit."""
+        sources = self._scan_sources_from_run(conn, run_id)
+        if not sources:
+            return
+        scan_started_at = self._scan_started_at_from_run(conn, run_id, now)
+        for source in sources:
+            conn.execute(
+                """
+                INSERT INTO daily_scan_watermarks(
+                    source, successful_scan_started_at, run_id, updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(source) DO UPDATE SET
+                    successful_scan_started_at = excluded.successful_scan_started_at,
+                    run_id = excluded.run_id,
+                    updated_at = excluded.updated_at
+                """,
+                (source, scan_started_at, run_id, now),
+            )
+
+    def get_scan_watermark(self, source: str) -> Optional[sqlite3.Row]:
+        """Return one source scan checkpoint for diagnostics and tests."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM daily_scan_watermarks WHERE source = ?", (source,)
+            ).fetchone()
+
     def set_run_total(self, run_id: str, total_papers: int):
         with self._lock, self._connect() as conn:
             conn.execute(
@@ -259,6 +455,7 @@ class DailyResearchStore:
                     run_id,
                 ),
             )
+            self._advance_scan_watermarks(conn, run_id, now)
 
     def finalize_report_delivery(
         self,
@@ -421,6 +618,7 @@ class DailyResearchStore:
                 """,
                 (now, json.dumps(normalized_paths, ensure_ascii=False), run_id),
             )
+            self._advance_scan_watermarks(conn, run_id, now)
 
     def fail_run(self, run_id: str, error: str):
         now = datetime.now().isoformat()

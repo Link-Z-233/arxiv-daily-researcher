@@ -582,9 +582,34 @@ class DailyResearchPipeline:
                 semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
             )
 
+            # Semantic Scholar is optional enrichment, but a synchronous
+            # lookup can take a while for journal-heavy scans.  Establish the
+            # recovery checkpoint immediately before the source queries, not
+            # before construction/configuration work, so a successful scan
+            # window starts where the APIs were actually queried.
+            effective_scan_days = settings.SEARCH_DAYS
+            if store and run_id:
+                # A failed run must not let its unreported papers age out of
+                # the user-configured window.  The store records a per-source
+                # checkpoint only after a complete report/no-paper scan has
+                # committed, so this recovery window is expanded precisely
+                # when a prior scan did not reach a durable terminal state.
+                effective_scan_days = store.prepare_scan(
+                    run_id,
+                    settings.SEARCH_DAYS,
+                    search_agent.get_enabled_sources(),
+                )
+                if effective_scan_days > settings.SEARCH_DAYS:
+                    logger.warning(
+                        "日报恢复扫描窗口已扩展: 配置 %s 天 -> %s 天；"
+                        "已交付版本会由 SQLite 账本过滤，不会重复推送",
+                        settings.SEARCH_DAYS,
+                        effective_scan_days,
+                    )
+
             try:
                 papers_by_source: Dict[str, List[PaperMetadata]] = search_agent.fetch_all_papers(
-                    days=settings.SEARCH_DAYS
+                    days=effective_scan_days
                 )
             except ArxivFetchError as afe:
                 # ArXiv 抓取彻底失败（多次重试后仍无法获取任何论文）
