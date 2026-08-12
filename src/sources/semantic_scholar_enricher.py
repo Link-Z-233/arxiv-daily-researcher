@@ -9,6 +9,8 @@ import requests
 from typing import Optional, Dict
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
+from .base_source import normalize_arxiv_identifier
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,6 +77,23 @@ class SemanticScholarEnricher:
 
         return _do_get()
 
+    @staticmethod
+    def _clean_doi(doi: object) -> Optional[str]:
+        """Return a minimally safe DOI lookup key, or no key at all."""
+        if not isinstance(doi, str):
+            return None
+        clean_doi = doi.replace("https://doi.org/", "").replace("DOI:", "").strip()
+        if not clean_doi or any(ord(character) < 0x20 for character in clean_doi):
+            return None
+        return clean_doi
+
+    @staticmethod
+    def _external_arxiv_id(external_ids: object) -> Optional[str]:
+        """Read only a valid arXiv ID from an untrusted provider response."""
+        if not isinstance(external_ids, dict):
+            return None
+        return normalize_arxiv_identifier(external_ids.get("ArXiv"))
+
     def get_tldr(self, doi: str) -> Optional[str]:
         """
         获取论文的 AI 生成 TLDR。
@@ -87,7 +106,10 @@ class SemanticScholarEnricher:
         """
         try:
             # 清理 DOI（移除可能的前缀）
-            clean_doi = doi.replace("https://doi.org/", "").replace("DOI:", "").strip()
+            clean_doi = self._clean_doi(doi)
+            if not clean_doi:
+                logger.debug("Semantic Scholar 跳过无效 DOI TLDR 查询")
+                return None
 
             # 构建请求 URL
             url = f"{self.API_BASE_URL}/paper/DOI:{clean_doi}"
@@ -113,7 +135,8 @@ class SemanticScholarEnricher:
             tldr_obj = data.get("tldr")
             if tldr_obj and isinstance(tldr_obj, dict):
                 tldr_text = tldr_obj.get("text", "")
-                if tldr_text:
+                if isinstance(tldr_text, str) and tldr_text.strip():
+                    tldr_text = tldr_text.strip()
                     logger.debug(f"✅ 成功获取 TLDR: {clean_doi[:30]}...")
                     return tldr_text
                 else:
@@ -144,7 +167,10 @@ class SemanticScholarEnricher:
             Optional[Dict]: 包含各种信息的字典，失败时返回 None
         """
         try:
-            clean_doi = doi.replace("https://doi.org/", "").replace("DOI:", "").strip()
+            clean_doi = self._clean_doi(doi)
+            if not clean_doi:
+                logger.debug("Semantic Scholar 跳过无效 DOI 元数据查询")
+                return None
 
             url = f"{self.API_BASE_URL}/paper/DOI:{clean_doi}"
             params = {
@@ -158,13 +184,18 @@ class SemanticScholarEnricher:
 
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                logger.warning("Semantic Scholar 返回的论文元数据不是对象，已忽略")
+                return None
 
             result = {}
 
             # 提取 TLDR
             tldr_obj = data.get("tldr")
             if tldr_obj and isinstance(tldr_obj, dict):
-                result["tldr"] = tldr_obj.get("text")
+                tldr_text = tldr_obj.get("text")
+                if isinstance(tldr_text, str) and tldr_text.strip():
+                    result["tldr"] = tldr_text.strip()
 
             # 提取引用数
             if "citationCount" in data:
@@ -177,12 +208,13 @@ class SemanticScholarEnricher:
                 result["publication_types"] = data["publicationTypes"]
 
             # 提取 arXiv ID（关键新增功能）
-            external_ids = data.get("externalIds", {})
-            if external_ids and "ArXiv" in external_ids:
-                arxiv_id = external_ids["ArXiv"]
+            arxiv_id = self._external_arxiv_id(data.get("externalIds"))
+            if arxiv_id:
                 result["arxiv_id"] = arxiv_id
                 result["arxiv_url"] = f"https://arxiv.org/abs/{arxiv_id}"
                 logger.debug(f"找到 arXiv 版本: {arxiv_id}")
+            elif isinstance(data.get("externalIds"), dict) and "ArXiv" in data["externalIds"]:
+                logger.warning("Semantic Scholar 返回了无效 arXiv ID，已忽略该可选增强")
 
             return result if result else None
 
@@ -201,7 +233,9 @@ class SemanticScholarEnricher:
             Optional[str]: arXiv ID，如 "2401.12345"，失败时返回 None
         """
         try:
-            clean_doi = doi.replace("https://doi.org/", "").replace("DOI:", "").strip()
+            clean_doi = self._clean_doi(doi)
+            if not clean_doi:
+                return None
 
             url = f"{self.API_BASE_URL}/paper/DOI:{clean_doi}"
             params = {
@@ -215,12 +249,10 @@ class SemanticScholarEnricher:
 
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                return None
 
-            external_ids = data.get("externalIds", {})
-            if external_ids and "ArXiv" in external_ids:
-                return external_ids["ArXiv"]
-
-            return None
+            return self._external_arxiv_id(data.get("externalIds"))
 
         except Exception as e:
             logger.debug(f"获取 arXiv ID 失败: {e}")

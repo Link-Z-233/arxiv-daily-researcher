@@ -19,6 +19,12 @@ from typing import List, Dict, Optional, Any
 logger = logging.getLogger(__name__)
 
 _ARXIV_VERSION_RE = re.compile(r"^(?P<canonical>.+?)(?:v(?P<version>[0-9]+))$")
+# URL-producing callers need stricter validation than the generic identity
+# splitter above, which intentionally keeps old database rows readable.
+_VALID_ARXIV_IDENTIFIER_RE = re.compile(
+    r"^(?P<canonical>(?:\d{4}\.\d{4,5}|[A-Za-z][A-Za-z0-9.-]*/\d{7}))"
+    r"(?:v(?P<version>[1-9]\d*))?$"
+)
 
 
 class HistoryLoadError(RuntimeError):
@@ -32,6 +38,25 @@ def split_arxiv_version(paper_id: str) -> tuple[str, Optional[int]]:
     if not match:
         return value, None
     return match.group("canonical"), int(match.group("version"))
+
+
+def normalize_arxiv_identifier(value: object) -> Optional[str]:
+    """Return a safe, canonical arXiv identifier or ``None``.
+
+    Third-party metadata services occasionally expose malformed ``ArXiv``
+    external IDs.  Such values must not be interpolated into arxiv.org URLs
+    or passed to the PDF-analysis path.  This accepts current and legacy IDs,
+    but not URL fragments, prefixes, or arbitrary version-like strings.
+    """
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    match = _VALID_ARXIV_IDENTIFIER_RE.fullmatch(candidate)
+    if match is None:
+        return None
+    canonical = match.group("canonical")
+    version = match.group("version")
+    return f"{canonical}v{version}" if version is not None else canonical
 
 
 def paper_identity(source: str, paper_id: str) -> tuple[str, Optional[int]]:
@@ -97,12 +122,15 @@ class PaperMetadata:
     def has_pdf_access(self) -> bool:
         """是否可以下载PDF进行深度分析"""
         # 优先使用原始PDF链接，否则使用arXiv PDF
-        return (self.pdf_url is not None and self.pdf_url != "") or self.arxiv_id is not None
+        return (self.pdf_url is not None and self.pdf_url != "") or bool(
+            normalize_arxiv_identifier(self.arxiv_id)
+        )
 
     def get_arxiv_pdf_url(self) -> Optional[str]:
         """获取arXiv PDF下载链接"""
-        if self.arxiv_id:
-            return f"http://arxiv.org/pdf/{self.arxiv_id}.pdf"
+        arxiv_id = normalize_arxiv_identifier(self.arxiv_id)
+        if arxiv_id:
+            return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
         return None
 
     def get_best_pdf_url(self) -> Optional[str]:

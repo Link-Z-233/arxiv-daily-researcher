@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from .base_source import BasePaperSource, PaperMetadata
+from .base_source import BasePaperSource, PaperMetadata, normalize_arxiv_identifier
 from .arxiv_source import ArxivSource, normalize_arxiv_domains
 from .huggingface_papers_source import (
     HUGGINGFACE_PAPERS_SOURCE_NAME,
@@ -343,15 +343,18 @@ class SearchAgent:
                         enriched_count += 1
 
                     # 设置 arXiv 信息（用于后续深度分析）
-                    if paper_info.get("arxiv_id"):
-                        paper.arxiv_id = paper_info["arxiv_id"]
+                    arxiv_id = normalize_arxiv_identifier(paper_info.get("arxiv_id"))
+                    if arxiv_id:
+                        paper.arxiv_id = arxiv_id
                         paper.arxiv_url = paper_info.get(
-                            "arxiv_url", f"https://arxiv.org/abs/{paper_info['arxiv_id']}"
+                            "arxiv_url", f"https://arxiv.org/abs/{arxiv_id}"
                         )
                         # 设置 PDF URL 以便下载
-                        paper.pdf_url = f"https://arxiv.org/pdf/{paper_info['arxiv_id']}.pdf"
+                        paper.pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
                         arxiv_found_count += 1
-                        logger.debug(f"    找到 arXiv 版本: {paper_info['arxiv_id']}")
+                        logger.debug(f"    找到 arXiv 版本: {arxiv_id}")
+                    elif paper_info.get("arxiv_id") is not None:
+                        logger.warning("    Semantic Scholar 返回无效 arXiv ID，已忽略 PDF 增强")
 
         if enriched_count > 0 or arxiv_found_count > 0:
             logger.info(f"    TLDR: {enriched_count}/{len(papers)} 篇")
