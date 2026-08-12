@@ -35,7 +35,7 @@ from typing import List, Dict, Optional, Any
 
 import requests
 
-from utils.safe_url import safe_http_url
+from utils.safe_url import safe_configured_http_url, safe_http_url
 from utils.safe_markdown import markdown_link, markdown_text
 
 logger = logging.getLogger(__name__)
@@ -253,15 +253,40 @@ class EmailNotifier(BaseNotifier):
 class WebhookNotifier(BaseNotifier):
     """多平台 Webhook 通知"""
 
-    def __init__(self, platform: str, webhook_url: str, **kwargs):
+    def __init__(
+        self,
+        platform: str,
+        webhook_url: str,
+        *,
+        proxies: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ):
+        normalized_url = safe_configured_http_url(webhook_url)
+        if not normalized_url:
+            raise ValueError("Webhook URL 必须是无内嵌凭据的有效 HTTP(S) 地址")
         self.platform = platform
-        self.webhook_url = webhook_url
+        self.webhook_url = normalized_url
+        self.proxies = dict(proxies) if proxies else None
         self.extra = kwargs  # secret, chat_id 等
 
     def send(self, subject: str, body: str, attachments: Optional[List[Path]] = None) -> bool:
         formatter = getattr(self, f"_format_{self.platform}", self._format_generic)
         url, payload, headers = formatter(subject, body)
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        # Formatter-generated URLs can add a DingTalk signature, so validate
+        # again immediately before the network request.  Do not follow a
+        # webhook redirect: the final endpoint should be explicitly configured
+        # and a 307/308 could otherwise resend the full notification body.
+        if not safe_configured_http_url(url):
+            raise ValueError("Webhook 格式化后生成了无效 URL")
+        request_kwargs = {
+            "json": payload,
+            "headers": headers,
+            "timeout": 30,
+            "allow_redirects": False,
+        }
+        if self.proxies:
+            request_kwargs["proxies"] = self.proxies
+        resp = requests.post(url, **request_kwargs)
         resp.raise_for_status()
         self._validate_platform_response(resp)
         logger.info(f"Webhook [{self.platform}] 通知已发送")
@@ -321,8 +346,20 @@ class WebhookNotifier(BaseNotifier):
             hmac_code = hmac.new(
                 secret.encode("utf-8"), string_to_sign.encode("utf-8"), digestmod=hashlib.sha256
             ).digest()
-            sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
-            url = f"{url}&timestamp={timestamp}&sign={sign}"
+            # Add query parameters structurally.  The old string concatenation
+            # generated an invalid URL when a custom endpoint had no existing
+            # query, and double-escaped some signatures.
+            parsed = urllib.parse.urlsplit(url)
+            query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            query_pairs.extend(
+                [
+                    ("timestamp", timestamp),
+                    ("sign", base64.b64encode(hmac_code).decode("ascii")),
+                ]
+            )
+            url = urllib.parse.urlunsplit(
+                parsed._replace(query=urllib.parse.urlencode(query_pairs))
+            )
 
         payload = {"msgtype": "markdown", "markdown": {"title": subject, "text": body}}
         return url, payload, {"Content-Type": "application/json"}
@@ -374,6 +411,23 @@ class NotifierAgent:
     def _setup_notifiers(self):
         """根据配置初始化通知渠道"""
         s = self.settings
+        try:
+            notification_proxies = s.get_proxy_dict("notifications")
+        except (AttributeError, TypeError):
+            notification_proxies = None
+
+        def register_webhook(channel: str, platform: str, url: str, **kwargs) -> None:
+            try:
+                self._register_notifier(
+                    channel,
+                    WebhookNotifier(platform, url, proxies=notification_proxies, **kwargs),
+                )
+            except ValueError as exc:
+                # A malformed optional channel must never prevent report
+                # finalization or poison all other configured channels.  The
+                # user gets a visible, non-secret log message and can correct
+                # it in the WebUI/config file.
+                logger.error("未启用通知渠道 %s：%s", channel, exc)
 
         # Email
         if s.NOTIFY_EMAIL_ENABLED and s.SMTP_HOST and s.SMTP_TO:
@@ -394,34 +448,39 @@ class NotifierAgent:
 
         # 企业微信
         if s.NOTIFY_WECHAT_ENABLED and s.WECHAT_WEBHOOK_URL:
-            self._register_notifier(
-                "wechat_work", WebhookNotifier("wechat_work", s.WECHAT_WEBHOOK_URL)
-            )
-            logger.info("已启用企业微信通知")
+            register_webhook("wechat_work", "wechat_work", s.WECHAT_WEBHOOK_URL)
+            if "wechat_work" in self.notifiers_by_channel:
+                logger.info("已启用企业微信通知")
 
         # 钉钉
         if s.NOTIFY_DINGTALK_ENABLED and s.DINGTALK_WEBHOOK_URL:
-            self._register_notifier(
+            register_webhook(
                 "dingtalk",
-                WebhookNotifier("dingtalk", s.DINGTALK_WEBHOOK_URL, secret=s.DINGTALK_SECRET)
+                "dingtalk",
+                s.DINGTALK_WEBHOOK_URL,
+                secret=s.DINGTALK_SECRET,
             )
-            logger.info("已启用钉钉通知")
+            if "dingtalk" in self.notifiers_by_channel:
+                logger.info("已启用钉钉通知")
 
         # Telegram
         if s.NOTIFY_TELEGRAM_ENABLED and s.TELEGRAM_BOT_TOKEN and s.TELEGRAM_CHAT_ID:
             url = f"https://api.telegram.org/bot{s.TELEGRAM_BOT_TOKEN}/sendMessage"
-            self._register_notifier("telegram", WebhookNotifier("telegram", url, chat_id=s.TELEGRAM_CHAT_ID))
-            logger.info("已启用 Telegram 通知")
+            register_webhook("telegram", "telegram", url, chat_id=s.TELEGRAM_CHAT_ID)
+            if "telegram" in self.notifiers_by_channel:
+                logger.info("已启用 Telegram 通知")
 
         # Slack
         if s.NOTIFY_SLACK_ENABLED and s.SLACK_WEBHOOK_URL:
-            self._register_notifier("slack", WebhookNotifier("slack", s.SLACK_WEBHOOK_URL))
-            logger.info("已启用 Slack 通知")
+            register_webhook("slack", "slack", s.SLACK_WEBHOOK_URL)
+            if "slack" in self.notifiers_by_channel:
+                logger.info("已启用 Slack 通知")
 
         # 通用 Webhook
         if s.NOTIFY_GENERIC_WEBHOOK_ENABLED and s.GENERIC_WEBHOOK_URL:
-            self._register_notifier("generic", WebhookNotifier("generic", s.GENERIC_WEBHOOK_URL))
-            logger.info("已启用通用 Webhook 通知")
+            register_webhook("generic", "generic", s.GENERIC_WEBHOOK_URL)
+            if "generic" in self.notifiers_by_channel:
+                logger.info("已启用通用 Webhook 通知")
 
     # ------------------------------------------------------------------
     # 运行结果通知

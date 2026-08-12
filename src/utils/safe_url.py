@@ -32,6 +32,37 @@ def safe_http_url(value: object) -> str:
     return url
 
 
+def safe_configured_http_url(value: object, *, allow_query: bool = True) -> str:
+    """Return a safe HTTP(S) service endpoint configured by the local user.
+
+    This is deliberately less restrictive than :func:`safe_external_http_url`:
+    a self-hosted WebDAV server or local notification relay is a valid user
+    configuration.  It still rejects URL-embedded credentials (which would be
+    easy to leak through exports/logs), malformed ports, fragments, and
+    whitespace.  Callers may reject query strings when their protocol treats
+    the whole value as a base endpoint rather than a signed webhook URL.
+    """
+    url = safe_http_url(value)
+    if not url or any(character.isspace() for character in url):
+        return ""
+    try:
+        parsed = urlsplit(url)
+        # Accessing ``port`` forces urlsplit to validate malformed host:port
+        # syntax and bracketed IPv6 literals.
+        _ = parsed.port
+    except ValueError:
+        return ""
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or (not allow_query and parsed.query)
+    ):
+        return ""
+    return url
+
+
 def _numeric_host_address(hostname: str):
     """Return a numeric IP hidden in a hostname spelling, if one is present.
 

@@ -27,6 +27,9 @@ class _Response:
             raise self.payload
         return self.payload
 
+    def raise_for_status(self):
+        return None
+
 
 class NotificationOutboxTests(unittest.TestCase):
     def _store(self):
@@ -156,6 +159,46 @@ class NotificationOutboxTests(unittest.TestCase):
         WebhookNotifier("slack", "https://example.invalid")._validate_platform_response(
             _Response(text="ok")
         )
+
+    def test_webhook_uses_configured_proxy_and_never_follows_redirects(self):
+        notifier = WebhookNotifier(
+            "generic",
+            "http://127.0.0.1:8080/relay",
+            proxies={"https": "http://proxy.invalid:3128"},
+        )
+        with patch("notifications.notifier.requests.post", return_value=_Response({})) as post:
+            notifier.send("Subject", "Body")
+
+        _args, kwargs = post.call_args
+        self.assertEqual(kwargs["timeout"], 30)
+        self.assertFalse(kwargs["allow_redirects"])
+        self.assertEqual(kwargs["proxies"], {"https": "http://proxy.invalid:3128"})
+
+    def test_invalid_webhook_configuration_is_skipped_without_disabling_other_channels(self):
+        settings = SimpleNamespace(
+            NOTIFY_EMAIL_ENABLED=False,
+            NOTIFY_WECHAT_ENABLED=False,
+            NOTIFY_DINGTALK_ENABLED=False,
+            NOTIFY_TELEGRAM_ENABLED=False,
+            NOTIFY_SLACK_ENABLED=False,
+            NOTIFY_GENERIC_WEBHOOK_ENABLED=True,
+            GENERIC_WEBHOOK_URL="javascript:alert(1)",
+            get_proxy_dict=lambda _service: {"https": "http://proxy.invalid:3128"},
+        )
+        agent = NotifierAgent.__new__(NotifierAgent)
+        agent.settings = settings
+        agent.notifiers = []
+        agent.notifiers_by_channel = {}
+
+        agent._setup_notifiers()
+
+        self.assertEqual(agent.configured_channels(), [])
+
+    def test_dingtalk_signature_is_added_to_a_url_without_an_existing_query(self):
+        notifier = WebhookNotifier("dingtalk", "https://robot.example.test/send", secret="secret")
+        with patch("notifications.notifier.time.time", return_value=1.234):
+            url, _payload, _headers = notifier._format_dingtalk("Subject", "Body")
+        self.assertIn("?timestamp=1234&sign=", url)
 
     def test_v2_notification_formats_show_core_qualification_and_ranking(self):
         """A V2 Top-N must not present its ranking score as the pass evidence."""

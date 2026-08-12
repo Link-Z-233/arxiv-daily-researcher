@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from utils.safe_url import safe_http_url  # noqa: E402
+from utils.safe_url import safe_configured_http_url, safe_http_url  # noqa: E402
 
 
 class SafeUrlTests(unittest.TestCase):
@@ -24,6 +24,26 @@ class SafeUrlTests(unittest.TestCase):
         ):
             with self.subTest(unsafe=unsafe):
                 self.assertEqual(safe_http_url(unsafe), "")
+
+    def test_configured_service_urls_allow_local_hosts_but_not_embedded_secrets(self):
+        self.assertEqual(
+            safe_configured_http_url("http://127.0.0.1:8080/webhook?token=kept"),
+            "http://127.0.0.1:8080/webhook?token=kept",
+        )
+        self.assertEqual(
+            safe_configured_http_url("https://dav.example.test/root/", allow_query=False),
+            "https://dav.example.test/root/",
+        )
+        for unsafe in (
+            "https://user:password@example.test/hook",
+            "https://example.test:bad-port/hook",
+            "https://example.test/hook#fragment",
+            "https://example.test/hook?token=1",
+        ):
+            with self.subTest(unsafe=unsafe):
+                self.assertEqual(
+                    safe_configured_http_url(unsafe, allow_query=False), ""
+                )
 
 
 if __name__ == "__main__":
