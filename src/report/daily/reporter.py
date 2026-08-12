@@ -13,6 +13,8 @@
 
 import html
 import logging
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -22,6 +24,10 @@ from .modules.base_module import FormatHelper
 from .modules.renderers import ModuleRendererFactory
 
 logger = logging.getLogger(__name__)
+
+
+class ReportGenerationError(RuntimeError):
+    """Raised when an enabled report format cannot be rendered or persisted."""
 
 # 数据源显示名称映射
 SOURCE_DISPLAY_NAMES = {
@@ -74,6 +80,35 @@ class Reporter:
         return SOURCE_DISPLAY_NAMES.get(source, source.upper())
 
     @staticmethod
+    def _write_text_atomic(filepath: Path, content: str) -> Path:
+        """Durably write a complete report before exposing its final path."""
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=filepath.parent,
+                prefix=f".{filepath.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, filepath)
+            return filepath
+        except Exception:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("无法清理报告临时文件: %s", temporary_path)
+            raise
+
+    @staticmethod
     def _paper_status_label(paper: Dict[str, Any]) -> str:
         """Build a visible version/retry label for a paper entry."""
         paper_meta = paper.get("paper_metadata")
@@ -118,50 +153,42 @@ class Reporter:
         if analyses_by_source is None:
             analyses_by_source = {}
 
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
         report_paths = {}
 
         for source, papers in scored_papers_by_source.items():
             if not papers:
                 continue
 
+            display_name = self.get_source_display_name(source)
+            analyses = analyses_by_source.get(source, [])
+            has_deep_analysis = len(analyses) > 0
+
             # Markdown 报告（如果启用）
             if settings.ENABLE_MARKDOWN_REPORT:
-                # Markdown 报告目录: reports/markdown/[source]/
                 if settings.REPORTS_BY_SOURCE:
                     md_dir = self.report_base_dir / "markdown" / source
                 else:
                     md_dir = self.report_base_dir / "markdown"
-                md_dir.mkdir(parents=True, exist_ok=True)
-
-                # 生成报告文件名
-                display_name = self.get_source_display_name(source)
-                filename = f"{source.upper()}_Report_{timestamp}.md"
-                filepath = md_dir / filename
-
-                # 获取该数据源的深度分析（如果有）
-                analyses = analyses_by_source.get(source, [])
-                # 如果该数据源有深度分析结果，则显示深度分析
-                has_deep_analysis = len(analyses) > 0
-
-                # 生成报告
-                self._generate_single_source_report(
-                    filepath=filepath,
-                    source=source,
-                    display_name=display_name,
-                    papers=papers,
-                    keywords_dict=keywords_dict,
-                    analyses=analyses,
-                    has_deep_analysis=has_deep_analysis,
-                    token_usage=token_usage,
-                )
-
-                report_paths[source] = filepath
+                filepath = md_dir / f"{source.upper()}_Report_{timestamp}.md"
+                try:
+                    report_paths[source] = self._generate_single_source_report(
+                        filepath=filepath,
+                        source=source,
+                        display_name=display_name,
+                        papers=papers,
+                        keywords_dict=keywords_dict,
+                        analyses=analyses,
+                        has_deep_analysis=has_deep_analysis,
+                        token_usage=token_usage,
+                    )
+                except ReportGenerationError:
+                    raise
+                except Exception as exc:
+                    raise ReportGenerationError(
+                        f"[{source}] Markdown 报告生成失败 ({filepath}): {exc}"
+                    ) from exc
                 logger.info(f"[{source}] Markdown 报告已生成: {filepath}")
-            else:
-                display_name = self.get_source_display_name(source)
-                analyses = analyses_by_source.get(source, [])
-                has_deep_analysis = len(analyses) > 0
 
             # 生成 HTML 报告（如果启用）
             if settings.ENABLE_HTML_REPORT:
@@ -170,21 +197,24 @@ class Reporter:
                     html_dir = self.report_base_dir / "html" / source
                 else:
                     html_dir = self.report_base_dir / "html"
-                html_dir.mkdir(parents=True, exist_ok=True)
-
                 html_filepath = html_dir / f"{source.upper()}_Report_{timestamp}.html"
-                html_path = self._generate_html_report(
-                    filepath=html_filepath,
-                    source=source,
-                    display_name=display_name,
-                    papers=papers,
-                    keywords_dict=keywords_dict,
-                    analyses=analyses,
-                    has_deep_analysis=has_deep_analysis,
-                    token_usage=token_usage,
-                )
-                if html_path:
-                    report_paths[f"{source}_html"] = html_path
+                try:
+                    report_paths[f"{source}_html"] = self._generate_html_report(
+                        filepath=html_filepath,
+                        source=source,
+                        display_name=display_name,
+                        papers=papers,
+                        keywords_dict=keywords_dict,
+                        analyses=analyses,
+                        has_deep_analysis=has_deep_analysis,
+                        token_usage=token_usage,
+                    )
+                except ReportGenerationError:
+                    raise
+                except Exception as exc:
+                    raise ReportGenerationError(
+                        f"[{source}] HTML 报告生成失败 ({html_filepath}): {exc}"
+                    ) from exc
 
         return report_paths
 
@@ -198,7 +228,7 @@ class Reporter:
         analyses: List[Dict[str, Any]],
         has_deep_analysis: bool,
         token_usage: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> Path:
         """生成单个数据源的报告"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         today = datetime.now().strftime("%Y-%m-%d")
@@ -247,7 +277,8 @@ class Reporter:
             )
 
         # ========== 及格论文详细信息 ==========
-        if layout.get("show_qualified_section", True) and qualified_count > 0:
+        show_qualified = layout.get("show_qualified_section", True) and qualified_count > 0
+        if show_qualified:
             section_title = layout.get("qualified_section_title", "⭐ 及格论文详细分析")
             lines.append(f"## {section_title}")
             lines.append("")
@@ -261,15 +292,23 @@ class Reporter:
                 lines.extend(paper_lines)
 
         # ========== 所有论文详细信息 ==========
-        if layout.get("show_all_papers_section", True):
-            section_title = layout.get("all_papers_section_title", "📋 所有论文列表")
+        remaining_papers = (
+            [p for p in sorted_papers if not p["score_response"].is_qualified]
+            if show_qualified
+            else sorted_papers
+        )
+        if layout.get("show_all_papers_section", True) and remaining_papers:
+            if show_qualified:
+                section_title = layout.get("remaining_papers_section_title", "📋 其他论文列表")
+            else:
+                section_title = layout.get("all_papers_section_title", "📋 所有论文列表")
             lines.append(f"## {section_title}")
             lines.append("")
 
             qualified_icon = layout.get("qualified_icon", "✅")
             unqualified_icon = layout.get("unqualified_icon", "❌")
 
-            for idx, paper in enumerate(sorted_papers, 1):
+            for idx, paper in enumerate(remaining_papers, 1):
                 paper_lines = self._render_paper_section(
                     paper,
                     keywords_dict,
@@ -300,19 +339,16 @@ class Reporter:
                     )
             lines.append("")
 
-        # 写入文件
         try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines))
+            self._write_text_atomic(filepath, "\n".join(lines))
             logger.info(f"  - 总论文数: {total_papers}")
             logger.info(f"  - 及格论文: {qualified_count}")
             if has_deep_analysis:
                 logger.info(f"  - 深度分析: {analyzed_count}")
         except Exception as e:
             logger.error(f"报告生成失败: {e}")
-            import traceback
-
-            traceback.print_exc()
+            raise ReportGenerationError(f"Markdown 报告写入失败 ({filepath}): {e}") from e
+        return filepath
 
     def _generate_config_section(
         self, keywords_dict: Dict[str, float], passing_score: float
@@ -499,7 +535,7 @@ class Reporter:
         analyses: List[Dict[str, Any]],
         has_deep_analysis: bool,
         token_usage: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Path]:
+    ) -> Path:
         """生成 HTML 格式报告"""
         html_path = filepath
         h = self._h
@@ -726,13 +762,12 @@ class Reporter:
         parts.append("</body></html>")
 
         try:
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(parts))
+            self._write_text_atomic(html_path, "\n".join(parts))
             logger.info(f"[{source}] HTML 报告已生成: {html_path}")
             return html_path
         except Exception as e:
             logger.error(f"HTML 报告生成失败: {e}")
-            return None
+            raise ReportGenerationError(f"HTML 报告写入失败 ({html_path}): {e}") from e
 
     # ==================== 向后兼容接口 ====================
 

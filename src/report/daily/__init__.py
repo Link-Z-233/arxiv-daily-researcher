@@ -4,6 +4,6 @@
 提供 Markdown / HTML 每日论文报告生成功能。
 """
 
-from .reporter import Reporter
+from .reporter import Reporter, ReportGenerationError
 
-__all__ = ["Reporter"]
+__all__ = ["Reporter", "ReportGenerationError"]

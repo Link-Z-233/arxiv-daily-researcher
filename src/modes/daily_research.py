@@ -37,6 +37,62 @@ from utils.daily_research_store import DailyResearchStore
 logger = setup_logger("DailyResearch")
 
 
+def _validate_report_paths(
+    report_paths: Dict[str, Path], scored_papers_by_source: Dict[str, List[Dict[str, Any]]]
+) -> None:
+    """Ensure every enabled report artifact exists before committing history."""
+    expected_keys = set()
+    for source, papers in scored_papers_by_source.items():
+        if not papers:
+            continue
+        if settings.ENABLE_MARKDOWN_REPORT:
+            expected_keys.add(source)
+        if settings.ENABLE_HTML_REPORT:
+            expected_keys.add(f"{source}_html")
+
+    missing = expected_keys.difference(report_paths)
+    invalid = []
+    for key in expected_keys.intersection(report_paths):
+        path = Path(report_paths[key])
+        try:
+            valid = path.is_file() and path.stat().st_size > 0
+        except OSError:
+            valid = False
+        if not valid:
+            invalid.append(f"{key}={path}")
+
+    if missing or invalid:
+        details = []
+        if missing:
+            details.append(f"缺少输出: {', '.join(sorted(missing))}")
+        if invalid:
+            details.append(f"空文件或不可访问: {', '.join(sorted(invalid))}")
+        raise RuntimeError("报告完整性校验失败，未写入论文历史: " + "; ".join(details))
+
+
+def _select_top_papers(
+    scored_papers_by_source: Dict[str, List[Dict[str, Any]]], limit: int
+) -> List[Dict[str, Any]]:
+    """Select notification recommendations exclusively from qualified papers."""
+    qualified = []
+    for source, scored_papers in scored_papers_by_source.items():
+        for paper in scored_papers:
+            score_response = paper["score_response"]
+            if not score_response.is_qualified:
+                continue
+            qualified.append(
+                {
+                    "title": paper["title"],
+                    "score": score_response.total_score,
+                    "source": source,
+                    "tldr": score_response.tldr,
+                    "url": paper["url"],
+                }
+            )
+    qualified.sort(key=lambda item: item["score"], reverse=True)
+    return qualified[: max(0, limit)]
+
+
 def _score_single_paper(
     paper,
     source,
@@ -766,6 +822,7 @@ class DailyResearchPipeline:
                 analyses_by_source=analyses_by_source,
                 token_usage=token_counter.get_summary() if settings.TOKEN_TRACKING_ENABLED else None,
             )
+            _validate_report_paths(report_paths, scored_papers_by_source)
 
             _mark_completed_papers(
                 search_agent, store, run_id, scored_papers_by_source, analyses_by_source
@@ -828,20 +885,9 @@ class DailyResearchPipeline:
             logger.info("=" * 80)
             logger.info("✅ 任务完成！")
 
-            all_scored_flat = []
-            for source, scored_papers in scored_papers_by_source.items():
-                for p in scored_papers:
-                    all_scored_flat.append(
-                        {
-                            "title": p["title"],
-                            "score": p["score_response"].total_score,
-                            "source": source,
-                            "tldr": p["score_response"].tldr,
-                            "url": p["url"],
-                        }
-                    )
-            all_scored_flat.sort(key=lambda x: x["score"], reverse=True)
-            top_papers = all_scored_flat[: settings.NOTIFICATION_TOP_N]
+            top_papers = _select_top_papers(
+                scored_papers_by_source, settings.NOTIFICATION_TOP_N
+            )
 
             run_result = RunResult(
                 run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
