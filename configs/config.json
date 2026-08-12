@@ -18,7 +18,8 @@
     "journals": [],
     "reports_by_source": true,
     "arxiv": {
-      "fetch_timeout_seconds": 180
+      "fetch_timeout_seconds": 180,
+      "announcement_lookback_grace_days": 2
     }
   },
 

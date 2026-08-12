@@ -401,6 +401,7 @@ def build_config_dict(
     journals: Optional[List[str]] = None,
     reports_by_source: bool = True,
     arxiv_fetch_timeout_seconds: int = 180,
+    arxiv_announcement_lookback_grace_days: int = 2,
     domains: Optional[List[str]] = None,
     primary_keywords: Optional[List[str]] = None,
     primary_keyword_weight: float = 1.0,
@@ -501,6 +502,7 @@ def build_config_dict(
             "reports_by_source": reports_by_source,
             "arxiv": {
                 "fetch_timeout_seconds": arxiv_fetch_timeout_seconds,
+                "announcement_lookback_grace_days": arxiv_announcement_lookback_grace_days,
             },
         },
         "run_lock": {
@@ -691,6 +693,9 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["journals"] = ds.get("journals", [])
     flat["reports_by_source"] = ds.get("reports_by_source", True)
     flat["arxiv_fetch_timeout_seconds"] = ds.get("arxiv", {}).get("fetch_timeout_seconds", 180)
+    flat["arxiv_announcement_lookback_grace_days"] = ds.get("arxiv", {}).get(
+        "announcement_lookback_grace_days", 2
+    )
 
     # Run lock
     rl = config.get("run_lock", {})

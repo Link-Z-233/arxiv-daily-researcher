@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import arxiv
 
@@ -65,7 +66,11 @@ class ArxivFetchTests(unittest.TestCase):
         ]
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            source = ArxivSource(Path(temp_dir), max_results=1)
+            # This regression exercises the normal scan boundary itself.  The
+            # delayed-announcement grace behaviour is covered separately.
+            source = ArxivSource(
+                Path(temp_dir), max_results=1, announcement_lookback_grace_days=0
+            )
             source.history = {f"new-{index}": "complete" for index in range(60)}
             fake_client = _FakeClient(submitted, updated)
             source.client = fake_client
@@ -88,6 +93,56 @@ class ArxivFetchTests(unittest.TestCase):
         agent.sources = {"fake": _FailingSource()}
         with self.assertRaisesRegex(RuntimeError, "network unavailable"):
             agent.fetch_all_papers(days=1)
+
+    def test_announcement_grace_catches_late_indexed_submission_without_result_cap(self):
+        now = datetime.now(timezone.utc)
+        delayed = _FakeResult("late-paper-v1", now - timedelta(days=4), now - timedelta(days=4))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = ArxivSource(
+                Path(temp_dir), max_results=1, announcement_lookback_grace_days=2
+            )
+            client = _FakeClient([delayed], [])
+            source.client = client
+
+            papers = source.fetch_papers(days=3, domains=["cs.AI"], fetch_timeout_seconds=10)
+
+        self.assertEqual(["late-paper-v1"], [paper.paper_id for paper in papers])
+        self.assertIsNone(client.searches[0].max_results)
+        self.assertIn("submittedDate:[", client.searches[0].query)
+
+    def test_no_announcement_grace_does_not_widen_normal_submission_window(self):
+        now = datetime.now(timezone.utc)
+        delayed = _FakeResult("late-paper-v1", now - timedelta(days=4), now - timedelta(days=4))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = ArxivSource(
+                Path(temp_dir), announcement_lookback_grace_days=0
+            )
+            source.client = _FakeClient([delayed], [])
+
+            papers = source.fetch_papers(days=3, domains=["cs.AI"], fetch_timeout_seconds=10)
+
+        self.assertEqual([], papers)
+
+    @patch("sources.search_agent.ArxivSource")
+    def test_search_agent_passes_announcement_grace_to_arxiv_source(self, arxiv_source_cls):
+        fake_settings = SimpleNamespace(
+            ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS=4,
+            get_proxy_dict=lambda _source: None,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, patch("config.settings", fake_settings):
+            SearchAgent(
+                history_dir=Path(temp_dir),
+                enabled_sources=["arxiv"],
+                enable_semantic_scholar=False,
+            )
+
+        arxiv_source_cls.assert_called_once_with(
+            history_dir=Path(temp_dir),
+            proxy_dict=None,
+            announcement_lookback_grace_days=4,
+        )
 
 
 if __name__ == "__main__":

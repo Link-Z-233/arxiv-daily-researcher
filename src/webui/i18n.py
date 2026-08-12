@@ -274,6 +274,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "单次 ArXiv 抓取硬超时，超时后自动重试，避免任务长时间卡住",
         "en": "Hard timeout for one ArXiv fetch. Retries on timeout to avoid stuck runs.",
     },
+    "arxiv_announcement_lookback_grace_label": {
+        "zh": "ArXiv 延迟公告回看（天）",
+        "en": "ArXiv delayed-announcement lookback (days)",
+    },
+    "arxiv_announcement_lookback_grace_help": {
+        "zh": "额外回看可能因周末公告或 API 索引延迟而晚出现的论文。已交付的同一版本会自动去重，不会重复推送。",
+        "en": "Rescan this many extra days for papers delayed by announcements or API indexing. Delivered exact versions are deduplicated.",
+    },
     "arxiv_domains_title": {"zh": "ArXiv 目标分类", "en": "ArXiv Target Domains"},
     "arxiv_domains_hint": {
         "zh": "ArXiv 分类代码，详见 https://arxiv.org/category_taxonomy",

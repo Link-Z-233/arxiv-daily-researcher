@@ -78,7 +78,13 @@ class ArxivSource(BasePaperSource):
     - 支持网络代理
     """
 
-    def __init__(self, history_dir: Path, max_results: int = 100, proxy_dict: dict = None):
+    def __init__(
+        self,
+        history_dir: Path,
+        max_results: int = 100,
+        proxy_dict: dict = None,
+        announcement_lookback_grace_days: int = 2,
+    ):
         """
         初始化 ArXiv 数据源。
 
@@ -86,9 +92,13 @@ class ArxivSource(BasePaperSource):
             history_dir: 历史记录存储目录
             max_results: 兼容旧配置的参数。日报抓取不再按数量截断，始终扫描时间窗口内的全部结果。
             proxy_dict: 代理配置字典，如 {"http": "...", "https": "..."}
+            announcement_lookback_grace_days: 为公告/API 索引延迟额外回看的天数。
         """
         super().__init__("arxiv", history_dir)
         self.max_results = max_results
+        self.announcement_lookback_grace_days = max(
+            0, int(announcement_lookback_grace_days)
+        )
         # arXiv API 对分页请求有严格的速率要求。max_results 只保留用于兼容旧配置，
         # 日报查询使用 max_results=None，不能因为候选数量达到配置值而漏掉论文。
         self.client = arxiv.Client(page_size=100, delay_seconds=6.0, num_retries=3)
@@ -167,8 +177,11 @@ class ArxivSource(BasePaperSource):
             domains = ["quant-ph"]
 
         all_papers = {}
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
-        now_date = datetime.now(timezone.utc)
+        fetched_at = datetime.now(timezone.utc)
+        normal_days = max(1, int(days))
+        effective_days = normal_days + self.announcement_lookback_grace_days
+        cutoff_date = fetched_at - timedelta(days=effective_days)
+        now_date = fetched_at
 
         try:
             from config import settings as _settings
@@ -184,7 +197,12 @@ class ArxivSource(BasePaperSource):
 
         logger.info("[ArXiv] 开始抓取论文")
         logger.info(f"  目标领域: {domains}")
-        logger.info(f"  时间范围: 最近 {days} 天")
+        logger.info(
+            "  时间范围: 配置 %s 天 + 公告延迟回看 %s 天（实际回看 %s 天）",
+            normal_days,
+            self.announcement_lookback_grace_days,
+            effective_days,
+        )
         logger.info("  抓取策略: 按提交时间和最后更新时间完整分页（不受 max_results 限制）")
 
         # 记录因严重错误失败的领域及其最后错误信息

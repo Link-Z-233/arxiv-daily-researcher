@@ -140,6 +140,9 @@ class SearchAgent:
             self.sources["arxiv"] = ArxivSource(
                 history_dir=self.history_dir,
                 proxy_dict=arxiv_proxy,
+                announcement_lookback_grace_days=getattr(
+                    _settings, "ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS", 2
+                ),
             )
             logger.info("[SearchAgent] 已启用 ArXiv 数据源")
 

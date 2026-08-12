@@ -72,6 +72,9 @@ class Settings(BaseSettings):
 
     # ArXiv 抓取配置
     ARXIV_FETCH_TIMEOUT_SECONDS: int = 180  # 单次抓取硬超时，避免无限阻塞
+    # arXiv 公告和 API 索引偶尔会晚于论文的 submittedDate。日报在正常
+    # 扫描窗口之外额外回看这段时间；精确版本交付账本会去除重叠结果。
+    ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS: int = 2
 
     # Semantic Scholar 配置
     ENABLE_SEMANTIC_SCHOLAR_TLDR: bool = True  # 是否获取AI生成的TLDR
@@ -308,6 +311,10 @@ class Settings(BaseSettings):
                     if isinstance(arxiv_cfg, dict):
                         self.ARXIV_FETCH_TIMEOUT_SECONDS = arxiv_cfg.get(
                             "fetch_timeout_seconds", self.ARXIV_FETCH_TIMEOUT_SECONDS
+                        )
+                        self.ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS = arxiv_cfg.get(
+                            "announcement_lookback_grace_days",
+                            self.ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS,
                         )
 
             # 加载关键词配置

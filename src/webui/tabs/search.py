@@ -109,6 +109,15 @@ def render(_env_values: dict, config_values: dict):
         help=t("arxiv_fetch_timeout_help"),
     )
 
+    st.number_input(
+        t("arxiv_announcement_lookback_grace_label"),
+        min_value=0,
+        max_value=30,
+        value=flat.get("arxiv_announcement_lookback_grace_days", 2),
+        key="arxiv_announcement_lookback_grace_days",
+        help=t("arxiv_announcement_lookback_grace_help"),
+    )
+
     st.divider()
 
     # ---- ArXiv Domains ----
@@ -152,5 +161,8 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "enabled_sources": enabled,
         "reports_by_source": st.session_state.get("reports_by_source", True),
         "arxiv_fetch_timeout_seconds": st.session_state.get("arxiv_fetch_timeout_seconds", 180),
+        "arxiv_announcement_lookback_grace_days": st.session_state.get(
+            "arxiv_announcement_lookback_grace_days", 2
+        ),
         "domains": domains,
     }
