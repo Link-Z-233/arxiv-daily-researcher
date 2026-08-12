@@ -5,10 +5,8 @@ OpenAlex 期刊数据源
 相比 Crossref，OpenAlex 提供更完整的摘要和元数据。
 """
 
-import json
 import logging
 import re
-import traceback
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,6 +16,11 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 from .base_source import BasePaperSource, PaperMetadata
 
 logger = logging.getLogger(__name__)
+
+
+class OpenAlexFetchError(RuntimeError):
+    """Raised when any configured journal cannot be fetched completely."""
+
 
 # 期刊名称到 ISSN 的映射（与 Crossref 保持一致）
 JOURNAL_ISSN_MAP = {
@@ -124,7 +127,7 @@ class OpenAlexSource(BasePaperSource):
         参数:
             history_dir: 历史记录存储目录
             journals: 要抓取的期刊代码列表，如 ["prl", "pra"]
-            max_results: 每个期刊最多抓取的论文数
+            max_results: 兼容旧配置的参数。日报抓取不按数量截断，始终扫描时间窗口内的全部结果。
             email: 用户邮箱（用于礼貌池，提高速率限制）
             api_key: OpenAlex API Key（可选，2026年2月后必需）
         """
@@ -194,12 +197,31 @@ class OpenAlexSource(BasePaperSource):
         返回:
             List[PaperMetadata]: 论文元数据列表
         """
-        if journals:
+        if journals is not None:
             self.journals = journals
 
         if not self.journals:
             logger.warning("[OpenAlex] 未指定期刊，跳过抓取")
             return []
+
+        # Keep the source safe when it is used directly, rather than only via
+        # SearchAgent (which performs the same configuration validation).  In
+        # particular, mixed-case journal codes must not be silently skipped or
+        # fetched twice.
+        normalized_journals = []
+        seen_journals = set()
+        for configured_code in self.journals:
+            if not isinstance(configured_code, str) or not configured_code.strip():
+                raise OpenAlexFetchError(
+                    f"OpenAlex 期刊代码必须是非空字符串: {configured_code!r}"
+                )
+            journal_code = configured_code.strip().lower()
+            if journal_code not in JOURNAL_ISSN_MAP:
+                raise OpenAlexFetchError(f"OpenAlex 未知期刊代码: {configured_code}")
+            if journal_code not in seen_journals:
+                normalized_journals.append(journal_code)
+                seen_journals.add(journal_code)
+        self.journals = normalized_journals
 
         all_papers = []
         from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -210,9 +232,10 @@ class OpenAlexSource(BasePaperSource):
 
         for journal_code in self.journals:
             journal_info = self.get_journal_info(journal_code)
-            if not journal_info:
-                logger.warning(f"  未知期刊代码: {journal_code}，跳过")
-                continue
+            # The journal list above is validated, but retain this guard for
+            # future changes to the journal map.
+            if not journal_info:  # pragma: no cover - defensive invariant
+                raise OpenAlexFetchError(f"OpenAlex 未知期刊代码: {journal_code}")
 
             issn_list = journal_info["issn"]
             journal_name = journal_info["full_name"]
@@ -230,11 +253,14 @@ class OpenAlexSource(BasePaperSource):
                 all_papers.extend(papers)
                 logger.info(f"    {display_name}: 发现 {len(papers)} 篇新论文")
 
-            except Exception as e:
-                logger.error(f"    {display_name} 抓取失败: {e}")
-                import traceback
-
-                traceback.print_exc()
+            except Exception as exc:
+                # A partial journal list is worse than a failed daily run: it
+                # looks complete, then the missed items can age out of the
+                # time window and never be reported.  Propagate the failure so
+                # the pipeline retries the entire configured set next run.
+                raise OpenAlexFetchError(
+                    f"OpenAlex 期刊 {journal_code} ({display_name}) 抓取未完成: {exc}"
+                ) from exc
 
         logger.info(f"[OpenAlex] 总计发现 {len(all_papers)} 篇新论文")
         return all_papers
@@ -323,176 +349,185 @@ class OpenAlexSource(BasePaperSource):
         elif self.email:
             base_params["mailto"] = self.email
 
-        # 实现分页逻辑，支持获取超过200条的结果
-        page = 1
-        per_page = min(200, self.max_results)  # OpenAlex单页最大200
-        total_fetched = 0
+        # Daily fetches must exhaust the date window.  ``max_results`` remains
+        # an API-compatible constructor field for older configurations, but it
+        # is not a result budget: a quiet day can have hundreds of papers and
+        # truncating at a user-facing display limit silently loses them.
+        #
+        # OpenAlex supports offset paging only up to a finite depth.  Cursor
+        # paging is therefore required here: a busy journal or a wider retry
+        # window must not silently stop at that API limit.
+        page = 0
+        per_page = 200  # OpenAlex 的单页上限
+        api_total = 0
+        cursor = "*"
+        seen_cursors = set()
 
-        try:
-            while total_fetched < self.max_results:
-                params = {
-                    "filter": f"primary_location.source.issn:{issn_filter},from_publication_date:{from_date}",
-                    "per_page": per_page,
-                    "page": page,
-                    "sort": "publication_date:desc",
-                    "select": "id,doi,title,authorships,abstract_inverted_index,publication_date,primary_location,open_access,locations,best_oa_location,ids",
-                }
-                params.update(base_params)
+        while True:
+            if cursor in seen_cursors:
+                raise OpenAlexFetchError("OpenAlex 分页 cursor 重复，无法确认抓取完整性")
+            seen_cursors.add(cursor)
+            page += 1
+            params = {
+                "filter": f"primary_location.source.issn:{issn_filter},from_publication_date:{from_date}",
+                "per-page": per_page,
+                "cursor": cursor,
+                "sort": "publication_date:desc",
+                "select": "id,doi,title,authorships,abstract_inverted_index,publication_date,primary_location,open_access,locations,best_oa_location,ids",
+            }
+            params.update(base_params)
 
-                logger.debug(f"  正在获取第 {page} 页...")
-                data = self._api_request(url, params)
+            logger.debug(f"  正在获取第 {page} 页...")
+            data = self._api_request(url, params)
+            if not isinstance(data, dict):
+                raise OpenAlexFetchError("OpenAlex API 响应不是 JSON 对象")
 
-                results = data.get("results", [])
-                if not results:
-                    logger.debug(f"  第 {page} 页无更多结果，停止分页")
-                    break
+            results = data.get("results", [])
+            if not isinstance(results, list):
+                raise OpenAlexFetchError("OpenAlex API 响应 results 字段不是列表")
+            if not results:
+                logger.debug(f"  第 {page} 页无更多结果，停止分页")
+                break
+            api_total += len(results)
 
-                for item in results:
-                    doi = item.get("doi")
-                    if not doi:
-                        # 使用 OpenAlex ID 作为后备
-                        openalex_id = item.get("id", "").replace("https://openalex.org/", "")
-                        if not openalex_id:
-                            continue
-                        doi = f"openalex:{openalex_id}"
-
-                    # 去重检查
-                    if self.is_processed(doi):
+            for item in results:
+                doi = item.get("doi")
+                if not doi:
+                    # 使用 OpenAlex ID 作为后备
+                    openalex_id = item.get("id", "").replace("https://openalex.org/", "")
+                    if not openalex_id:
                         continue
+                    doi = f"openalex:{openalex_id}"
 
-                    # 提取标题
-                    title = item.get("title", "Untitled")
-                    if not title or title == "Untitled":
-                        continue
+                # 去重检查
+                if self.is_processed(doi):
+                    continue
 
-                    # 清理标题（移除可能的HTML标签）
-                    title = re.sub(r"<[^>]+>", "", title)
-                    title = re.sub(r"\s+", " ", title).strip()
+                # 提取标题
+                title = item.get("title", "Untitled")
+                if not title or title == "Untitled":
+                    continue
 
-                    # 提取作者
-                    authors = []
-                    authorships = item.get("authorships", [])
-                    for authorship in authorships[:20]:  # 最多20个作者
-                        author = authorship.get("author", {})
-                        display_name = author.get("display_name")
-                        if display_name:
-                            authors.append(display_name)
+                # 清理标题（移除可能的HTML标签）
+                title = re.sub(r"<[^>]+>", "", title)
+                title = re.sub(r"\s+", " ", title).strip()
 
-                    # 提取并重建摘要
-                    abstract = ""
-                    inverted_index = item.get("abstract_inverted_index")
-                    if inverted_index:
-                        abstract = self._rebuild_abstract(inverted_index)
-                        logger.debug(f"    ✅ [{title[:30]}...] 成功获取摘要")
-                    else:
-                        logger.warning(
-                            f"    ⚠️  [{title[:30]}...] OpenAlex 未提供摘要数据 (可能因期刊版权限制)"
-                        )
+                # 提取作者
+                authors = []
+                authorships = item.get("authorships", [])
+                for authorship in authorships[:20]:  # 最多20个作者
+                    author = authorship.get("author", {})
+                    display_name = author.get("display_name")
+                    if display_name:
+                        authors.append(display_name)
 
-                    # 提取发布日期
-                    pub_date_str = item.get("publication_date")
-                    published_date = self._parse_date(pub_date_str)
-
-                    # 提取 URL
-                    if doi.startswith("http"):
-                        landing_page_url = doi
-                    elif doi.startswith("openalex:"):
-                        landing_page_url = f"https://openalex.org/{doi.replace('openalex:', '')}"
-                    else:
-                        landing_page_url = f"https://doi.org/{doi}"
-                    primary_location = item.get("primary_location", {})
-                    if primary_location and primary_location.get("landing_page_url"):
-                        landing_page_url = primary_location["landing_page_url"]
-
-                    # 提取 PDF URL（如果开放获取）
-                    pdf_url = None
-                    open_access = item.get("open_access", {})
-                    if open_access.get("is_oa") and open_access.get("oa_url"):
-                        pdf_url = open_access["oa_url"]
-                        logger.debug(f"    ✅ [{title[:30]}...] 找到开放获取 PDF")
-
-                    # 从 locations 提取 arXiv 信息（使用正则表达式提高健壮性）
-                    arxiv_id = None
-                    arxiv_url = None
-                    locations = item.get("locations", [])
-                    for loc in locations:
-                        source_info = loc.get("source", {})
-                        if source_info:
-                            source_name = source_info.get("display_name", "")
-                            # 检查是否是 arXiv 来源
-                            if "arxiv" in source_name.lower():
-                                loc_url = loc.get("landing_page_url", "")
-                                if loc_url and "arxiv.org" in loc_url:
-                                    arxiv_url = loc_url
-                                    # 使用正则表达式提取 arXiv ID，更健壮
-                                    try:
-                                        match = re.search(
-                                            r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", loc_url
-                                        )
-                                        if match:
-                                            arxiv_id = match.group(1)
-                                    except Exception as e:
-                                        logger.debug(f"arXiv ID提取失败: {e}")
-                                    break
-
-                    # 🎯 优先策略：如果找到 arXiv 版本，使用 ArXiv 源获取完整元数据
-                    if arxiv_id:
-                        logger.info(
-                            f"    🔄 [{title[:30]}...] 检测到 arXiv 版本: {arxiv_id}，转而使用 ArXiv 源获取完整元数据"
-                        )
-                        arxiv_metadata = self._fetch_from_arxiv(
-                            arxiv_id, journal_code, journal_name, doi
-                        )
-                        if arxiv_metadata:
-                            papers.append(arxiv_metadata)
-                            total_fetched += 1
-                            if total_fetched >= self.max_results:
-                                break
-                            continue  # 跳过 OpenAlex 的元数据提取，直接处理下一篇论文
-                        else:
-                            logger.warning(f"    ⚠️  从 ArXiv 获取失败，回退到 OpenAlex 元数据")
-                            # 继续使用 OpenAlex 数据
-                    else:
-                        logger.debug(
-                            f"    ℹ️  [{title[:30]}...] 未找到 arXiv 版本，使用 OpenAlex 元数据"
-                        )
-
-                    # 构建论文元数据
-                    metadata = PaperMetadata(
-                        paper_id=doi,
-                        title=title,
-                        authors=authors,
-                        abstract=abstract,
-                        published_date=published_date,
-                        url=landing_page_url,
-                        source=journal_code,  # 使用期刊代码作为 source
-                        pdf_url=pdf_url,
-                        doi=doi if not doi.startswith("openalex:") else None,
-                        journal=journal_name,
-                        arxiv_id=arxiv_id,
-                        arxiv_url=arxiv_url,
+                # 提取并重建摘要
+                abstract = ""
+                inverted_index = item.get("abstract_inverted_index")
+                if inverted_index:
+                    abstract = self._rebuild_abstract(inverted_index)
+                    logger.debug(f"    ✅ [{title[:30]}...] 成功获取摘要")
+                else:
+                    logger.warning(
+                        f"    ⚠️  [{title[:30]}...] OpenAlex 未提供摘要数据 (可能因期刊版权限制)"
                     )
-                    papers.append(metadata)
-                    total_fetched += 1
 
-                    if total_fetched >= self.max_results:
-                        break
+                # 提取发布日期
+                pub_date_str = item.get("publication_date")
+                published_date = self._parse_date(pub_date_str)
 
-                # 检查是否还有更多页
-                page += 1
-                if total_fetched >= self.max_results:
-                    logger.debug(f"  已达到最大结果数 {self.max_results}，停止分页")
-                    break
+                # 提取 URL
+                if doi.startswith("http"):
+                    landing_page_url = doi
+                elif doi.startswith("openalex:"):
+                    landing_page_url = f"https://openalex.org/{doi.replace('openalex:', '')}"
+                else:
+                    landing_page_url = f"https://doi.org/{doi}"
+                primary_location = item.get("primary_location", {})
+                if primary_location and primary_location.get("landing_page_url"):
+                    landing_page_url = primary_location["landing_page_url"]
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"OpenAlex API 请求失败: {e}")
-        except json.JSONDecodeError as e:
-            logger.error(f"OpenAlex API 响应解析失败: {e}")
-        except Exception as e:
-            logger.error(f"OpenAlex 数据处理失败: {e}")
-            traceback.print_exc()
+                # 提取 PDF URL（如果开放获取）
+                pdf_url = None
+                open_access = item.get("open_access", {})
+                if open_access.get("is_oa") and open_access.get("oa_url"):
+                    pdf_url = open_access["oa_url"]
+                    logger.debug(f"    ✅ [{title[:30]}...] 找到开放获取 PDF")
 
-        logger.info(f"  共获取 {len(papers)} 篇论文（分 {page - 1} 页）")
+                # 从 locations 提取 arXiv 信息（使用正则表达式提高健壮性）
+                arxiv_id = None
+                arxiv_url = None
+                locations = item.get("locations", [])
+                for loc in locations:
+                    source_info = loc.get("source", {})
+                    if source_info:
+                        source_name = source_info.get("display_name", "")
+                        # 检查是否是 arXiv 来源
+                        if "arxiv" in source_name.lower():
+                            loc_url = loc.get("landing_page_url", "")
+                            if loc_url and "arxiv.org" in loc_url:
+                                arxiv_url = loc_url
+                                # 使用正则表达式提取 arXiv ID，更健壮
+                                try:
+                                    match = re.search(
+                                        r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", loc_url
+                                    )
+                                    if match:
+                                        arxiv_id = match.group(1)
+                                except Exception as exc:
+                                    logger.debug(f"arXiv ID提取失败: {exc}")
+                                break
+
+                # 🎯 优先策略：如果找到 arXiv 版本，使用 ArXiv 源获取完整元数据
+                if arxiv_id:
+                    logger.info(
+                        f"    🔄 [{title[:30]}...] 检测到 arXiv 版本: {arxiv_id}，转而使用 ArXiv 源获取完整元数据"
+                    )
+                    arxiv_metadata = self._fetch_from_arxiv(
+                        arxiv_id, journal_code, journal_name, doi
+                    )
+                    if arxiv_metadata:
+                        papers.append(arxiv_metadata)
+                        continue  # 跳过 OpenAlex 的元数据提取，直接处理下一篇论文
+                    logger.warning(f"    ⚠️  从 ArXiv 获取失败，回退到 OpenAlex 元数据")
+                else:
+                    logger.debug(
+                        f"    ℹ️  [{title[:30]}...] 未找到 arXiv 版本，使用 OpenAlex 元数据"
+                    )
+
+                # 构建论文元数据
+                metadata = PaperMetadata(
+                    paper_id=doi,
+                    title=title,
+                    authors=authors,
+                    abstract=abstract,
+                    published_date=published_date,
+                    url=landing_page_url,
+                    source=journal_code,  # 使用期刊代码作为 source
+                    pdf_url=pdf_url,
+                    doi=doi if not doi.startswith("openalex:") else None,
+                    journal=journal_name,
+                    arxiv_id=arxiv_id,
+                    arxiv_url=arxiv_url,
+                )
+                papers.append(metadata)
+
+            # A short page is the normal terminal signal.  A full cursor page
+            # must contain a usable continuation token.  Treating a missing
+            # token as an ordinary end would turn an API/proxy truncation into
+            # a plausible-looking, but incomplete, daily report.
+            if len(results) < per_page:
+                break
+
+            meta = data.get("meta")
+            next_cursor = meta.get("next_cursor") if isinstance(meta, dict) else None
+            if not isinstance(next_cursor, str) or not next_cursor.strip():
+                raise OpenAlexFetchError(
+                    f"OpenAlex 第 {page} 页已满但未返回有效 next_cursor"
+                )
+            cursor = next_cursor.strip()
+
+        logger.info(f"  共获取 {len(papers)} 篇论文（API 返回 {api_total} 条，分 {page} 页）")
         return papers
 
     def _rebuild_abstract(self, inverted_index: Dict[str, List[int]]) -> str:

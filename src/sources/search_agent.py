@@ -45,11 +45,13 @@ class SearchAgent:
 
         参数:
             history_dir: 历史记录存储目录
-            enabled_sources: 启用的数据源列表，如 ["arxiv", "prl", "pra"]
+            enabled_sources: 启用的数据源列表，如 ["arxiv", "prl", "pra"]。
+                只接受 ``arxiv`` 或已知的期刊代码；未知代码属于配置错误。
             arxiv_domains: ArXiv 领域列表，如 ["quant-ph", "cs.AI"]
             journals: 期刊代码列表，如 ["prl", "pra"]
-            max_results: 每个数据源最多抓取的论文数（全局默认值）
-            max_results_per_source: 按数据源单独配置的最大结果数，如 {"arxiv": 150, "prl": 50}
+            max_results: 旧配置兼容字段。日报扫描不按数量截断，始终处理
+                时间窗口内的全部论文。
+            max_results_per_source: 旧配置兼容字段；不作为日报抓取预算。
             openalex_email: OpenAlex 礼貌池邮箱
             openalex_api_key: OpenAlex API Key
             enable_semantic_scholar: 是否启用 Semantic Scholar TLDR
@@ -92,6 +94,47 @@ class SearchAgent:
         """根据配置初始化数据源"""
         from config import settings as _settings
 
+        # Configuration must be fail-closed.  Silently ignoring a typo (for
+        # example ``cs.AI`` accidentally placed in data_sources.enabled) makes
+        # a daily report look complete while an intended source was never
+        # queried.  Normalize once so UI/manual JSON configuration behaves the
+        # same way as the OpenAlex source itself.
+        normalized_sources = []
+        seen_sources = set()
+        for configured_source in self.enabled_sources:
+            if not isinstance(configured_source, str) or not configured_source.strip():
+                raise ValueError(
+                    f"数据源代码必须是非空字符串: {configured_source!r}"
+                )
+            source = configured_source.strip().lower()
+            if source != "arxiv" and source not in JOURNAL_ISSN_MAP:
+                raise ValueError(
+                    f"未知数据源代码: {configured_source}。"
+                    "请使用 arxiv 或已支持的 OpenAlex 期刊代码。"
+                )
+            if source not in seen_sources:
+                normalized_sources.append(source)
+                seen_sources.add(source)
+        self.enabled_sources = normalized_sources
+
+        normalized_journals = []
+        seen_journals = set()
+        for configured_journal in self.journals:
+            if not isinstance(configured_journal, str) or not configured_journal.strip():
+                raise ValueError(
+                    f"期刊代码必须是非空字符串: {configured_journal!r}"
+                )
+            journal = configured_journal.strip().lower()
+            if journal not in JOURNAL_ISSN_MAP:
+                raise ValueError(
+                    f"未知 OpenAlex 期刊代码: {configured_journal}。"
+                    "请使用内置支持的期刊代码。"
+                )
+            if journal not in seen_journals:
+                normalized_journals.append(journal)
+                seen_journals.add(journal)
+        self.journals = normalized_journals
+
         # 检查是否启用 ArXiv
         if "arxiv" in self.enabled_sources:
             arxiv_proxy = _settings.get_proxy_dict("arxiv")
@@ -106,16 +149,19 @@ class SearchAgent:
         # 期刊代码可以直接作为 enabled_sources 的一部分
         journal_codes = []
         for source in self.enabled_sources:
-            if source != "arxiv" and source in JOURNAL_ISSN_MAP:
+            if source != "arxiv":
                 journal_codes.append(source)
 
         # 也支持通过 journals 参数指定
         for journal in self.journals:
-            if journal not in journal_codes and journal in JOURNAL_ISSN_MAP:
+            if journal not in journal_codes:
                 journal_codes.append(journal)
 
         if journal_codes:
-            # 使用期刊中最大的单独配置值，如果都没有则用全局默认
+            # ``max_results`` only exists for backward configuration
+            # compatibility.  OpenAlexSource deliberately does not use it as
+            # a daily-scan cap; retaining this value avoids breaking callers
+            # that instantiate it directly.
             openalex_max = max(
                 (self._get_max_results(jc) for jc in journal_codes),
                 default=self.max_results,
