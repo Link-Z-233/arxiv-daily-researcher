@@ -89,6 +89,29 @@ class ConfigIOReliabilityTests(unittest.TestCase):
             self.assertEqual(settings.KEYWORD_DB_PATH, root / "runtime-data" / "keywords" / "store.db")
             self.assertEqual(settings.DAILY_RESEARCH_DB_PATH, root / "runtime-data" / "daily" / "custom.db")
 
+    def test_custom_data_dir_moves_implicit_state_paths_as_one_tree(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config.json"
+            config_path.write_text("{paths: {data_dir: 'portable-state'}}", encoding="utf-8")
+            settings = Settings(PROJECT_ROOT=root)
+
+            settings.load_from_search_config(config_path)
+
+            state_root = root / "portable-state"
+            self.assertEqual(settings.DATA_DIR, state_root)
+            self.assertEqual(settings.REF_PDF_DIR, state_root / "reference_pdfs")
+            self.assertEqual(settings.REPORTS_DIR, state_root / "reports")
+            self.assertEqual(settings.RESEARCH_REPORTS_DIR, state_root / "reports" / "trend_research")
+            self.assertEqual(settings.DOWNLOAD_DIR, state_root / "downloaded_pdfs")
+            self.assertEqual(settings.HISTORY_FILE, state_root / "history.json")
+            self.assertEqual(settings.HISTORY_DIR, state_root / "history")
+            self.assertEqual(settings.KEYWORD_DB_PATH, state_root / "keywords" / "keywords.db")
+            self.assertEqual(
+                settings.DAILY_RESEARCH_DB_PATH,
+                state_root / "daily_research" / "daily_research.db",
+            )
+
     def test_project_relative_path_resolver_rejects_an_existing_escape_symlink(self):
         with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as outside_dir:
             root = Path(temp_dir)

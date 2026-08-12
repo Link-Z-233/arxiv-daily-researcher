@@ -509,9 +509,19 @@ class Settings(BaseSettings):
                     self.DATA_DIR = resolve_project_relative_path(
                         self.PROJECT_ROOT, paths["data_dir"], label="paths.data_dir"
                     )
-                    self.DAILY_RESEARCH_DB_PATH = (
-                        self.DATA_DIR / "daily_research" / "daily_research.db"
-                    )
+                    # A custom data root is expected to move the complete
+                    # default state tree.  Explicit sibling path settings
+                    # below still win, but keeping implicit defaults under the
+                    # new root avoids splitting history, reports and SQLite
+                    # delivery state across two unrelated directories.
+                    self.REF_PDF_DIR = self.DATA_DIR / "reference_pdfs"
+                    self.REPORTS_DIR = self.DATA_DIR / "reports"
+                    self.RESEARCH_REPORTS_DIR = self.REPORTS_DIR / "trend_research"
+                    self.DOWNLOAD_DIR = self.DATA_DIR / "downloaded_pdfs"
+                    self.HISTORY_FILE = self.DATA_DIR / "history.json"
+                    self.HISTORY_DIR = self.DATA_DIR / "history"
+                    self.KEYWORD_DB_PATH = self.DATA_DIR / "keywords" / "keywords.db"
+                    self.DAILY_RESEARCH_DB_PATH = self.DATA_DIR / "daily_research" / "daily_research.db"
                 if "reference_pdfs" in paths:
                     self.REF_PDF_DIR = resolve_project_relative_path(
                         self.PROJECT_ROOT,
