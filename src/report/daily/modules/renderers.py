@@ -5,6 +5,7 @@
 """
 
 from typing import List, Dict, Any, Optional
+from config import settings
 from utils.safe_markdown import markdown_link, markdown_text
 
 from .base_module import BaseModuleRenderer, FormatHelper
@@ -297,6 +298,7 @@ class ScoringRenderer(BaseModuleRenderer):
         show_reasoning = config.get('show_reasoning', True)
 
         lines = []
+        max_score_label = f"{float(settings.MAX_SCORE_PER_KEYWORD):g}"
         status_icon = "✅" if score_resp.is_qualified else "❌"
 
         # 总分行
@@ -312,7 +314,9 @@ class ScoringRenderer(BaseModuleRenderer):
                 for kw, score in score_resp.keyword_scores.items():
                     weight = keywords_dict.get(kw, 0)
                     weighted = score * weight
-                    rows.append((kw, f"{weight:.1f}", f"{score:.1f}/10", f"{weighted:.1f}"))
+                    rows.append(
+                        (kw, f"{weight:.1f}", f"{score:.1f}/{max_score_label}", f"{weighted:.1f}")
+                    )
 
                 if score_resp.author_bonus > 0:
                     experts = ", ".join(score_resp.expert_authors_found)
@@ -330,7 +334,7 @@ class ScoringRenderer(BaseModuleRenderer):
                     weighted = score * weight
                     detail_lines.append(
                         f"- **{markdown_text(kw, multiline=False)}** "
-                        f"(权重{weight:.1f}): {score:.1f}/10 → {weighted:.1f}"
+                        f"(权重{weight:.1f}): {score:.1f}/{max_score_label} → {weighted:.1f}"
                     )
 
                 if score_resp.author_bonus > 0:

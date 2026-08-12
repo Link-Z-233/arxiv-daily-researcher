@@ -137,7 +137,7 @@ def _score_single_paper(
     if score_response is None:
         score_response = analysis_agent.score_paper_with_keywords(
             title=paper.title,
-            authors=paper.get_authors_string(),
+            authors=paper.authors,
             abstract=paper.abstract,
             keywords_dict=all_keywords,
         )
@@ -259,7 +259,7 @@ def _score_or_hydrate_paper(
         else:
             score_response = analysis_agent.score_paper_with_keywords(
                 title=paper.title,
-                authors=paper.get_authors_string(),
+                authors=paper.authors,
                 abstract=paper.abstract,
                 keywords_dict=all_keywords,
             )

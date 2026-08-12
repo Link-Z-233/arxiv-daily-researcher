@@ -655,6 +655,7 @@ class Reporter:
 
         # 论文卡片
         parts.append("<h2>Papers</h2>")
+        max_score_label = f"{float(settings.MAX_SCORE_PER_KEYWORD):g}"
         if not sorted_papers and qualified_only:
             parts.append(
                 '<p class="meta">No papers met the passing score. All candidates were still scored and archived.</p>'
@@ -752,7 +753,7 @@ class Reporter:
                         f'<tr style="border-bottom:1px solid var(--color-border);">'
                         f'<td style="padding:4px 8px;">{h(kw)}</td>'
                         f'<td style="text-align:center;padding:4px 8px;">{weight:.1f}</td>'
-                        f'<td style="text-align:center;padding:4px 8px;">{score:.1f}/10</td>'
+                        f'<td style="text-align:center;padding:4px 8px;">{score:.1f}/{max_score_label}</td>'
                         f'<td style="text-align:center;padding:4px 8px;">{weighted:.1f}</td></tr>'
                     )
                 if sr.author_bonus > 0:
