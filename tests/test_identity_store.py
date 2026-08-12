@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sources.arxiv_source import ArxivSource  # noqa: E402
+from sources.base_source import HistoryLoadError  # noqa: E402
 from sources.base_source import PaperMetadata, split_arxiv_version  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from report.daily.reporter import Reporter  # noqa: E402
@@ -678,6 +679,21 @@ class IdentityStoreTests(unittest.TestCase):
             self.assertEqual(history_path.read_text(encoding="utf-8"), before)
             self.assertFalse(source.is_processed("2501.12347v1"))
             self.assertEqual(list(Path(temp_dir).glob(".*.tmp")), [])
+
+    def test_corrupt_legacy_history_fails_closed_unless_sqlite_mode_bypasses_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "arxiv_history.json"
+            history_path.write_text("{not valid json", encoding="utf-8")
+            source = ArxivSource(Path(temp_dir))
+
+            with self.assertRaisesRegex(HistoryLoadError, "兼容历史不可用"):
+                source.is_processed("2501.12345v1")
+            with self.assertRaisesRegex(HistoryLoadError, "无法安全更新"):
+                source.mark_as_processed("2501.12345v1")
+            self.assertEqual(history_path.read_text(encoding="utf-8"), "{not valid json")
+
+            source.set_history_filtering_enabled(False)
+            self.assertFalse(source.is_processed("2501.12345v1"))
 
 
 if __name__ == "__main__":

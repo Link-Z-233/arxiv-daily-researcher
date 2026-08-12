@@ -43,6 +43,7 @@ class SearchAgent:
         openalex_api_key: str = None,
         enable_semantic_scholar: bool = True,
         semantic_scholar_api_key: str = None,
+        use_legacy_history_filter: bool = True,
     ):
         """
         初始化搜索调度器。
@@ -61,6 +62,9 @@ class SearchAgent:
             openalex_api_key: OpenAlex API Key
             enable_semantic_scholar: 是否启用 Semantic Scholar TLDR
             semantic_scholar_api_key: Semantic Scholar API Key
+            use_legacy_history_filter: 是否让旧 JSON history 在抓取阶段
+                跳过论文。SQLite 持久化日报应传 False，由精确交付账本
+                统一去重，避免旧版过早写入的 history 造成永久漏报。
         """
         self.history_dir = history_dir
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -78,6 +82,7 @@ class SearchAgent:
         self.max_results_per_source = max_results_per_source or {}
         self.openalex_email = openalex_email
         self.openalex_api_key = openalex_api_key
+        self.use_legacy_history_filter = bool(use_legacy_history_filter)
 
         # 初始化 Semantic Scholar 增强器
         self.enable_semantic_scholar = enable_semantic_scholar
@@ -101,6 +106,17 @@ class SearchAgent:
         # written into OpenAlex history or denied PDF analysis.
         self._source_backends: Dict[str, str] = {}
         self._init_sources()
+        self._configure_history_filtering()
+
+    def _configure_history_filtering(self) -> None:
+        """Keep JSON history as a compatibility cache when SQLite is authoritative."""
+        for source in self.sources.values():
+            source.set_history_filtering_enabled(self.use_legacy_history_filter)
+        if not self.use_legacy_history_filter:
+            logger.info(
+                "[SearchAgent] SQLite 交付账本为权威状态；"
+                "抓取阶段不以旧 JSON history 跳过论文"
+            )
 
     def _init_sources(self):
         """根据配置初始化数据源"""

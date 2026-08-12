@@ -208,6 +208,30 @@ class OpenAlexFetchTests(unittest.TestCase):
 
         self.assertEqual(papers, [])
 
+    def test_sqlite_mode_does_not_let_legacy_arxiv_history_hide_a_candidate(self):
+        work = _work(1)
+        work["locations"] = [
+            {
+                "source": {"display_name": "arXiv"},
+                "landing_page_url": "https://arxiv.org/abs/2501.12345v2",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = OpenAlexSource(Path(temp_dir), journals=["prl"])
+            source.history["2501.12345v2"] = "2026-08-01T00:00:00"
+            source.set_history_filtering_enabled(False)
+            source._api_request = lambda _url, _params: {"results": [work]}
+            source._fetch_from_arxiv = (
+                lambda arxiv_id, journal_code, journal_name, doi: _arxiv_metadata(
+                    arxiv_id, journal_code, journal_name, doi
+                )
+            )
+
+            papers = source.fetch_papers(days=1)
+
+        self.assertEqual([work["doi"]], [paper.paper_id for paper in papers])
+
     def test_search_agent_rejects_unknown_source_instead_of_ignoring_it(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaisesRegex(ValueError, "未知数据源代码"):

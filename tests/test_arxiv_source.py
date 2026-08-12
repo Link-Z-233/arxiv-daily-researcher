@@ -279,6 +279,22 @@ class ArxivFetchTests(unittest.TestCase):
             announcement_lookback_grace_days=4,
         )
 
+    @patch("sources.search_agent.ArxivSource")
+    def test_search_agent_can_bypass_legacy_history_when_sqlite_is_authoritative(
+        self, arxiv_source_cls
+    ):
+        fake_source = arxiv_source_cls.return_value
+        fake_source.display_name = "ArXiv"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            SearchAgent(
+                history_dir=Path(temp_dir),
+                enabled_sources=["arxiv"],
+                enable_semantic_scholar=False,
+                use_legacy_history_filter=False,
+            )
+
+        fake_source.set_history_filtering_enabled.assert_called_once_with(False)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 _ARXIV_VERSION_RE = re.compile(r"^(?P<canonical>.+?)(?:v(?P<version>[0-9]+))$")
 
 
+class HistoryLoadError(RuntimeError):
+    """Raised when a legacy history cache cannot safely be used for de-duplication."""
+
+
 def split_arxiv_version(paper_id: str) -> tuple[str, Optional[int]]:
     """Return an arXiv canonical identifier and its explicit version."""
     value = str(paper_id or "").strip()
@@ -159,6 +163,12 @@ class BasePaperSource(ABC):
         self.history_file = history_dir / f"{source_name}_history.json"
         self.history: Dict[str, str] = {}
         self._history_lock = threading.Lock()
+        # JSON history is authoritative only in the explicit compatibility
+        # mode without the SQLite delivery ledger.  The SearchAgent disables
+        # this filter for normal persistent daily runs, where an old history
+        # entry must never hide a paper that was not durably delivered.
+        self.history_filtering_enabled = True
+        self._history_load_error: Optional[str] = None
         self._load_history()
 
     @abstractmethod
@@ -194,7 +204,25 @@ class BasePaperSource(ABC):
     def is_processed(self, paper_id: str) -> bool:
         """检查论文是否已处理过（线程安全）"""
         with self._history_lock:
+            if not self.history_filtering_enabled:
+                return False
+            if self._history_load_error:
+                raise HistoryLoadError(
+                    f"[{self.source_name}] 兼容历史不可用，拒绝以空历史继续去重: "
+                    f"{self._history_load_error}"
+                )
             return history_key(self.source_name, paper_id) in self.history
+
+    def set_history_filtering_enabled(self, enabled: bool) -> None:
+        """Choose whether legacy JSON history may suppress fetched papers.
+
+        A persistent daily run uses the SQLite exact-version delivery ledger
+        after fetching.  Disabling this compatibility filter means stale or
+        corrupt JSON history cannot hide an unfinished old paper; the ledger
+        remains responsible for preventing duplicate report delivery.
+        """
+        with self._history_lock:
+            self.history_filtering_enabled = bool(enabled)
 
     def mark_as_processed(self, paper_id: str):
         """标记论文为已处理（线程安全）"""
@@ -209,6 +237,15 @@ class BasePaperSource(ABC):
         if not paper_ids:
             return
         with self._history_lock:
+            if self._history_load_error:
+                # Do not overwrite forensic evidence of a damaged compatibility
+                # cache with a partial fresh file.  SQLite-backed callers catch
+                # this after their durable delivery transaction; compatibility
+                # callers fail closed before they can duplicate a report.
+                raise HistoryLoadError(
+                    f"[{self.source_name}] 无法安全更新损坏的兼容历史: "
+                    f"{self._history_load_error}"
+                )
             previous_history = self.history.copy()
             processed_at = datetime.now().isoformat()
             for paper_id in paper_ids:
@@ -242,18 +279,33 @@ class BasePaperSource(ABC):
         return {"version": previous_version, "processed_at": processed_at}
 
     def _load_history(self):
-        """从文件加载历史记录"""
+        """Load the compatibility history without silently trusting an empty fallback."""
+        self._history_load_error = None
         if self.history_file.exists():
             try:
                 with open(self.history_file, "r", encoding="utf-8") as f:
                     raw_history = json.load(f)
-                    self.history = {
-                        history_key(self.source_name, paper_id): processed_at
-                        for paper_id, processed_at in raw_history.items()
-                    }
+                    if not isinstance(raw_history, dict):
+                        raise ValueError("历史文件根节点必须是对象")
+                    normalized_history = {}
+                    for paper_id, processed_at in raw_history.items():
+                        if not isinstance(paper_id, str) or not paper_id.strip():
+                            raise ValueError("历史文件包含无效论文标识")
+                        if not isinstance(processed_at, str) or not processed_at.strip():
+                            raise ValueError("历史文件包含无效处理时间")
+                        normalized_history[
+                            history_key(self.source_name, paper_id)
+                        ] = processed_at
+                    self.history = normalized_history
                 logger.debug(f"[{self.source_name}] 加载历史记录: {len(self.history)} 条")
             except Exception as e:
-                logger.warning(f"[{self.source_name}] 加载历史记录失败: {e}")
+                self._history_load_error = str(e)
+                logger.error(
+                    "[%s] 兼容历史加载失败；SQLite 持久化模式会改由交付账本去重，"
+                    "关闭持久化时将拒绝继续运行: %s",
+                    self.source_name,
+                    e,
+                )
                 self.history = {}
         else:
             self.history = {}
@@ -292,5 +344,12 @@ class BasePaperSource(ABC):
         """清空历史记录（线程安全）"""
         with self._history_lock:
             self.history = {}
-            self._save_history()
+            try:
+                self._save_history()
+            except Exception:
+                # Keep the in-memory cache aligned with the on-disk source of
+                # truth when an attempted clear cannot be committed.
+                self._load_history()
+                raise
+            self._history_load_error = None
         logger.info(f"[{self.source_name}] 历史记录已清空")

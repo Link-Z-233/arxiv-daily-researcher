@@ -348,6 +348,15 @@ class OpenAlexSource(BasePaperSource):
         if not canonical:
             return False
         with self._history_lock:
+            if not self.history_filtering_enabled:
+                return False
+            if self._history_load_error:
+                from .base_source import HistoryLoadError
+
+                raise HistoryLoadError(
+                    "[openalex] 兼容历史不可用，拒绝以空历史继续去重: "
+                    f"{self._history_load_error}"
+                )
             return canonical in self.history
 
     @staticmethod

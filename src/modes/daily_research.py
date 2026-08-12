@@ -729,6 +729,10 @@ class DailyResearchPipeline:
                 openalex_api_key=settings.OPENALEX_API_KEY,
                 enable_semantic_scholar=settings.ENABLE_SEMANTIC_SCHOLAR_TLDR,
                 semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
+                # The persistent exact-version delivery ledger is stronger
+                # than legacy JSON history.  Let it see every candidate so a
+                # stale historical marker cannot make unfinished work vanish.
+                use_legacy_history_filter=store is None,
             )
 
             # Semantic Scholar is optional enrichment, but a synchronous
@@ -929,8 +933,12 @@ class DailyResearchPipeline:
                                     cache_lock,
                                     keyword_tracker,
                                     store,
-                                    search_agent.get_previous_processed_version(
-                                        paper.paper_id, source
+                                    (
+                                        None
+                                        if store
+                                        else search_agent.get_previous_processed_version(
+                                            paper.paper_id, source
+                                        )
                                     ),
                                 ): paper
                                 for paper in papers
@@ -968,8 +976,12 @@ class DailyResearchPipeline:
                                     cache_lock,
                                     keyword_tracker,
                                     store,
-                                    search_agent.get_previous_processed_version(
-                                        paper.paper_id, source
+                                    (
+                                        None
+                                        if store
+                                        else search_agent.get_previous_processed_version(
+                                            paper.paper_id, source
+                                        )
                                     ),
                                 )
                             except Exception as e:
