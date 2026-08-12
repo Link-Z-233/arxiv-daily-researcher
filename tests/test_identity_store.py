@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -14,6 +15,7 @@ from sources.base_source import PaperMetadata, split_arxiv_version  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from report.daily.reporter import Reporter  # noqa: E402
 from agents.analysis_agent import WeightedScoreResponse  # noqa: E402
+from modes.daily_research import _exclude_sqlite_delivered_papers  # noqa: E402
 
 
 def _paper(paper_id: str) -> PaperMetadata:
@@ -152,6 +154,131 @@ class IdentityStoreTests(unittest.TestCase):
             store.update_analysis(run_id, "arxiv", paper.paper_id, {"summary": "analysis"})
             hydrated = store.hydrate_analysis(store.get_paper_record("arxiv", paper.paper_id))
             self.assertEqual(hydrated, {"summary": "analysis"})
+
+    def test_finalization_atomically_records_delivery_outbox_and_revision_date(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_v1 = store.start_run(1)
+            v1 = _paper("2501.12345v1")
+            store.upsert_paper_seen(run_v1, "arxiv", v1)
+            score = WeightedScoreResponse(
+                total_score=4,
+                keyword_scores={"quantum": 4},
+                author_bonus=0,
+                expert_authors_found=[],
+                passing_score=3,
+                is_qualified=True,
+                reasoning="relevant",
+                tldr="A concise TLDR",
+                extracted_keywords=["quantum"],
+            )
+            store.update_score(
+                run_v1,
+                "arxiv",
+                {"paper_metadata": v1, "paper_id": v1.paper_id, "score_response": score},
+            )
+            store.update_translation(run_v1, "arxiv", v1.paper_id, "中文摘要")
+            store.finalize_report_delivery(
+                run_v1,
+                {"arxiv": Path(temp_dir) / "v1.md"},
+                {"arxiv": [{"paper_metadata": v1, "paper_id": v1.paper_id, "requires_analysis": False}]},
+                [
+                    {
+                        "event_type": "daily_run_result",
+                        "channel": "wechat_work",
+                        "payload": {"result": {"run_timestamp": "2026-08-12"}},
+                    }
+                ],
+            )
+
+            self.assertTrue(store.is_paper_delivered("arxiv", v1.paper_id))
+            self.assertEqual(store.get_pending_notification_count(), 1)
+
+            run_v2 = store.start_run(1)
+            v2 = _paper("2501.12345v2")
+            store.upsert_paper_seen(run_v2, "arxiv", v2)
+            previous = store.get_previous_version_record("arxiv", v2)
+            self.assertEqual(previous["paper_id"], v1.paper_id)
+            self.assertIsNotNone(previous["delivered_at"])
+
+    def test_sqlite_delivery_ledger_prevents_duplicate_when_json_history_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(1)
+            paper = _paper("2501.12345v1")
+            store.upsert_paper_seen(run_id, "arxiv", paper)
+            score = WeightedScoreResponse(
+                total_score=4,
+                keyword_scores={"quantum": 4},
+                author_bonus=0,
+                expert_authors_found=[],
+                passing_score=3,
+                is_qualified=True,
+                reasoning="relevant",
+                tldr="A concise TLDR",
+                extracted_keywords=["quantum"],
+            )
+            store.update_score(
+                run_id,
+                "arxiv",
+                {"paper_metadata": paper, "paper_id": paper.paper_id, "score_response": score},
+            )
+            store.update_translation(run_id, "arxiv", paper.paper_id, "中文摘要")
+            store.finalize_report_delivery(
+                run_id,
+                {"arxiv": Path(temp_dir) / "report.md"},
+                {"arxiv": [{"paper_metadata": paper, "paper_id": paper.paper_id, "requires_analysis": False}]},
+            )
+
+            filtered = _exclude_sqlite_delivered_papers(store, {"arxiv": [paper]})
+            self.assertEqual(filtered, {"arxiv": []})
+
+    def test_finalization_rejects_missing_translation_without_partial_delivery(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(1)
+            paper = _paper("2501.12345v1")
+            store.upsert_paper_seen(run_id, "arxiv", paper)
+            score = WeightedScoreResponse(
+                total_score=4,
+                keyword_scores={"quantum": 4},
+                author_bonus=0,
+                expert_authors_found=[],
+                passing_score=3,
+                is_qualified=True,
+                reasoning="relevant",
+                tldr="A concise TLDR",
+                extracted_keywords=["quantum"],
+            )
+            store.update_score(
+                run_id,
+                "arxiv",
+                {"paper_metadata": paper, "paper_id": paper.paper_id, "score_response": score},
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "摘要翻译尚未完成"):
+                store.finalize_report_delivery(
+                    run_id,
+                    {"arxiv": Path(temp_dir) / "report.md"},
+                    {"arxiv": [{"paper_metadata": paper, "paper_id": paper.paper_id, "requires_analysis": False}]},
+                )
+            self.assertFalse(store.is_paper_delivered("arxiv", paper.paper_id))
+            self.assertEqual(store.get_pending_notification_count(), 0)
+
+    def test_history_batch_write_is_atomic_and_failure_does_not_mutate_memory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = ArxivSource(Path(temp_dir))
+            source.mark_many_as_processed(["2501.12345v1", "2501.12346v1"])
+            history_path = Path(temp_dir) / "arxiv_history.json"
+            before = history_path.read_text(encoding="utf-8")
+
+            with patch("sources.base_source.os.replace", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    source.mark_many_as_processed(["2501.12347v1"])
+
+            self.assertEqual(history_path.read_text(encoding="utf-8"), before)
+            self.assertFalse(source.is_processed("2501.12347v1"))
+            self.assertEqual(list(Path(temp_dir).glob(".*.tmp")), [])
 
 
 if __name__ == "__main__":

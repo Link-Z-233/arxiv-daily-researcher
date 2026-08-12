@@ -24,7 +24,7 @@ import base64
 import time
 import urllib.parse
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -258,8 +258,44 @@ class WebhookNotifier(BaseNotifier):
         url, payload, headers = formatter(subject, body)
         resp = requests.post(url, json=payload, headers=headers, timeout=30)
         resp.raise_for_status()
+        self._validate_platform_response(resp)
         logger.info(f"Webhook [{self.platform}] 通知已发送")
         return True
+
+    def _validate_platform_response(self, response) -> None:
+        """Reject application-level webhook errors hidden behind HTTP 2xx."""
+        if self.platform == "generic":
+            return
+
+        if self.platform == "slack":
+            # Slack incoming webhooks conventionally return a bare `ok` body,
+            # rather than JSON.
+            if response.text.strip().lower() != "ok":
+                raise RuntimeError(f"Webhook [slack] 业务失败: {response.text[:500]!r}")
+            return
+
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Webhook [{self.platform}] 返回了无法验证的非 JSON 成功响应"
+            ) from exc
+
+        if not isinstance(body, dict):
+            raise RuntimeError(f"Webhook [{self.platform}] 返回了无效响应: {body!r}")
+
+        if self.platform in ("wechat_work", "dingtalk"):
+            if body.get("errcode") != 0:
+                raise RuntimeError(
+                    f"Webhook [{self.platform}] 业务失败: "
+                    f"errcode={body.get('errcode')!r}, errmsg={body.get('errmsg', '')!r}"
+                )
+        elif self.platform == "telegram":
+            if body.get("ok") is not True:
+                raise RuntimeError(
+                    f"Webhook [telegram] 业务失败: "
+                    f"description={body.get('description', '')!r}"
+                )
 
     def _format_wechat_work(self, subject: str, body: str):
         """企业微信机器人 — body 已含完整 Markdown 模板内容"""
@@ -320,7 +356,15 @@ class NotifierAgent:
 
         self.settings = settings
         self.notifiers: List[BaseNotifier] = []
+        self.notifiers_by_channel: Dict[str, BaseNotifier] = {}
         self._setup_notifiers()
+
+    def _register_notifier(self, channel: str, notifier: BaseNotifier) -> None:
+        """Register a uniquely addressable notifier for direct outbox dispatch."""
+        if channel in self.notifiers_by_channel:
+            raise ValueError(f"重复的通知渠道配置: {channel}")
+        self.notifiers.append(notifier)
+        self.notifiers_by_channel[channel] = notifier
 
     def _setup_notifiers(self):
         """根据配置初始化通知渠道"""
@@ -329,7 +373,8 @@ class NotifierAgent:
         # Email
         if s.NOTIFY_EMAIL_ENABLED and s.SMTP_HOST and s.SMTP_TO:
             to_addrs = [a.strip() for a in s.SMTP_TO.split(",") if a.strip()]
-            self.notifiers.append(
+            self._register_notifier(
+                "email",
                 EmailNotifier(
                     host=s.SMTP_HOST,
                     port=s.SMTP_PORT,
@@ -338,18 +383,21 @@ class NotifierAgent:
                     from_addr=s.SMTP_FROM,
                     to_addrs=to_addrs,
                     use_tls=s.SMTP_USE_TLS,
-                )
+                ),
             )
             logger.info("已启用邮件通知")
 
         # 企业微信
         if s.NOTIFY_WECHAT_ENABLED and s.WECHAT_WEBHOOK_URL:
-            self.notifiers.append(WebhookNotifier("wechat_work", s.WECHAT_WEBHOOK_URL))
+            self._register_notifier(
+                "wechat_work", WebhookNotifier("wechat_work", s.WECHAT_WEBHOOK_URL)
+            )
             logger.info("已启用企业微信通知")
 
         # 钉钉
         if s.NOTIFY_DINGTALK_ENABLED and s.DINGTALK_WEBHOOK_URL:
-            self.notifiers.append(
+            self._register_notifier(
+                "dingtalk",
                 WebhookNotifier("dingtalk", s.DINGTALK_WEBHOOK_URL, secret=s.DINGTALK_SECRET)
             )
             logger.info("已启用钉钉通知")
@@ -357,50 +405,176 @@ class NotifierAgent:
         # Telegram
         if s.NOTIFY_TELEGRAM_ENABLED and s.TELEGRAM_BOT_TOKEN and s.TELEGRAM_CHAT_ID:
             url = f"https://api.telegram.org/bot{s.TELEGRAM_BOT_TOKEN}/sendMessage"
-            self.notifiers.append(WebhookNotifier("telegram", url, chat_id=s.TELEGRAM_CHAT_ID))
+            self._register_notifier("telegram", WebhookNotifier("telegram", url, chat_id=s.TELEGRAM_CHAT_ID))
             logger.info("已启用 Telegram 通知")
 
         # Slack
         if s.NOTIFY_SLACK_ENABLED and s.SLACK_WEBHOOK_URL:
-            self.notifiers.append(WebhookNotifier("slack", s.SLACK_WEBHOOK_URL))
+            self._register_notifier("slack", WebhookNotifier("slack", s.SLACK_WEBHOOK_URL))
             logger.info("已启用 Slack 通知")
 
         # 通用 Webhook
         if s.NOTIFY_GENERIC_WEBHOOK_ENABLED and s.GENERIC_WEBHOOK_URL:
-            self.notifiers.append(WebhookNotifier("generic", s.GENERIC_WEBHOOK_URL))
+            self._register_notifier("generic", WebhookNotifier("generic", s.GENERIC_WEBHOOK_URL))
             logger.info("已启用通用 Webhook 通知")
 
     # ------------------------------------------------------------------
     # 运行结果通知
     # ------------------------------------------------------------------
 
-    def notify(self, result: RunResult) -> None:
-        """格式化并发送运行结果通知到所有已配置的渠道"""
-        if not self.notifiers:
-            logger.debug("未配置任何通知渠道，跳过")
-            return
+    def configured_channels(self) -> List[str]:
+        """Return stable outbox channel identifiers for currently configured senders."""
+        return list(self.notifiers_by_channel)
 
-        if result.success and not self.settings.NOTIFY_ON_SUCCESS:
-            return
-        if not result.success and not self.settings.NOTIFY_ON_FAILURE:
-            return
+    def send_run_result_to_channel(self, channel: str, result: RunResult) -> None:
+        """Send one daily result through exactly one configured channel.
+
+        Unlike :meth:`notify`, errors intentionally propagate to the caller so
+        the durable outbox can retain and retry the specific failed channel.
+        """
+        notifier = self.notifiers_by_channel.get(channel)
+        if notifier is None:
+            raise LookupError(f"通知渠道当前未配置: {channel}")
 
         subject = self._format_subject(result)
         html_body = self._format_html_body(result)
-        attachments = (
-            self._collect_attachments(result) if self.settings.NOTIFY_ATTACH_REPORTS else []
-        )
+        attachments = self._collect_attachments(result) if self.settings.NOTIFY_ATTACH_REPORTS else []
+        platform = self._platform_for_notifier(notifier)
+        body = self._format_body_for_platform(result, platform)
+        if isinstance(notifier, EmailNotifier) and html_body:
+            notifier.send(subject, body, attachments, html_body=html_body)
+        else:
+            notifier.send(subject, body, attachments)
 
-        for notifier in self.notifiers:
+    def notify(self, result: RunResult) -> Dict[str, Optional[str]]:
+        """Best-effort backwards-compatible direct notification API.
+
+        Returns one result per channel instead of hiding individual failures.
+        Daily report delivery uses the durable outbox methods below.
+        """
+        if not self.notifiers:
+            logger.debug("未配置任何通知渠道，跳过")
+            return {}
+
+        if result.success and not self.settings.NOTIFY_ON_SUCCESS:
+            return {}
+        if not result.success and not self.settings.NOTIFY_ON_FAILURE:
+            return {}
+
+        outcomes: Dict[str, Optional[str]] = {}
+        for channel in self.configured_channels():
             try:
-                platform = self._platform_for_notifier(notifier)
-                body = self._format_body_for_platform(result, platform)
-                if isinstance(notifier, EmailNotifier) and html_body:
-                    notifier.send(subject, body, attachments, html_body=html_body)
-                else:
-                    notifier.send(subject, body, attachments)
+                self.send_run_result_to_channel(channel, result)
+                outcomes[channel] = None
             except Exception as e:
-                logger.warning(f"通知发送失败 ({type(notifier).__name__}): {e}")
+                outcomes[channel] = str(e)
+                logger.warning("通知发送失败 (%s): %s", channel, e)
+        return outcomes
+
+    def enqueue_run_result(self, store, run_id: str, result: RunResult) -> int:
+        """Queue an eligible daily result once per configured channel.
+
+        The payload contains report metadata, not credentials.  It stays usable
+        after process restart and is rendered again immediately before delivery.
+        """
+        if result.success and not self.settings.NOTIFY_ON_SUCCESS:
+            return 0
+        if not result.success and not self.settings.NOTIFY_ON_FAILURE:
+            return 0
+
+        payload = {"result": asdict(result)}
+        created = 0
+        for channel in self.configured_channels():
+            if store.enqueue_notification(run_id, "daily_run_result", channel, payload):
+                created += 1
+        return created
+
+    def deliver_pending_run_results(self, store, limit: int = 100) -> Dict[str, int]:
+        """Deliver due daily-report notifications, preserving per-channel state.
+
+        A failed channel is rescheduled in the outbox; it never changes the
+        completed-paper state or reopens an already delivered report as new work.
+        """
+        rows = store.claim_due_notifications(event_type="daily_run_result", limit=limit)
+        summary = {"claimed": len(rows), "sent": 0, "deferred": 0}
+        max_attempts = max(1, int(getattr(self.settings, "RETRY_MAX_ATTEMPTS", 3)))
+
+        for row in rows:
+            outbox_id = row["outbox_id"]
+            channel = row["channel"]
+            try:
+                payload = json.loads(row["payload_json"])
+                result = RunResult(**payload["result"])
+            except Exception as exc:
+                store.reschedule_notification(
+                    outbox_id,
+                    f"通知 payload 无法恢复: {exc}",
+                    self._retry_delay(max_attempts),
+                )
+                logger.error("通知 outbox payload 无法恢复 (id=%s): %s", outbox_id, exc)
+                summary["deferred"] += 1
+                continue
+
+            if channel not in self.notifiers_by_channel:
+                delay = max(60, self._retry_delay(max_attempts))
+                store.reschedule_notification(
+                    outbox_id,
+                    f"通知渠道当前未配置: {channel}",
+                    delay,
+                )
+                logger.warning(
+                    "通知 outbox 暂不发送 (id=%s, channel=%s)：渠道未配置，%ss 后重试",
+                    outbox_id,
+                    channel,
+                    delay,
+                )
+                summary["deferred"] += 1
+                continue
+
+            sent = False
+            last_error = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    self.send_run_result_to_channel(channel, result)
+                    store.mark_notification_sent(outbox_id)
+                    summary["sent"] += 1
+                    sent = True
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < max_attempts:
+                        wait_seconds = self._retry_delay(attempt)
+                        logger.warning(
+                            "通知发送失败，将重试 (outbox=%s, channel=%s, %s/%s, %ss): %s",
+                            outbox_id,
+                            channel,
+                            attempt,
+                            max_attempts,
+                            wait_seconds,
+                            exc,
+                        )
+                        store.increment_notification_attempt(outbox_id)
+                        time.sleep(wait_seconds)
+
+            if not sent:
+                retry_after = self._retry_delay(max_attempts)
+                store.reschedule_notification(outbox_id, str(last_error), retry_after)
+                logger.error(
+                    "通知多次发送失败，已保留待补发 (outbox=%s, channel=%s, %ss 后重试): %s",
+                    outbox_id,
+                    channel,
+                    retry_after,
+                    last_error,
+                )
+                summary["deferred"] += 1
+
+        return summary
+
+    def _retry_delay(self, attempt: int) -> int:
+        """Use the project's bounded exponential retry policy for outbox rows."""
+        minimum = max(1, int(getattr(self.settings, "RETRY_MIN_WAIT", 2)))
+        maximum = max(minimum, int(getattr(self.settings, "RETRY_MAX_WAIT", 30)))
+        return min(minimum * (2 ** max(0, attempt - 1)), maximum)
 
     # ------------------------------------------------------------------
     # 研究趋势分析结果通知

@@ -254,6 +254,19 @@ class SearchAgent:
         elif "openalex" in self.sources:
             self.sources["openalex"].mark_as_processed(paper_id)
 
+    def mark_many_as_processed(self, paper_ids_by_source: Dict[str, List[str]]) -> None:
+        """Flush compatibility histories in per-backend atomic batches."""
+        arxiv_ids = paper_ids_by_source.get("arxiv", [])
+        if arxiv_ids and "arxiv" in self.sources:
+            self.sources["arxiv"].mark_many_as_processed(arxiv_ids)
+
+        openalex_ids = []
+        for source, paper_ids in paper_ids_by_source.items():
+            if source != "arxiv":
+                openalex_ids.extend(paper_ids)
+        if openalex_ids and "openalex" in self.sources:
+            self.sources["openalex"].mark_many_as_processed(openalex_ids)
+
     def get_previous_processed_version(self, paper_id: str, source: str):
         """Return legacy-history information for the previous arXiv version."""
         source_obj = self.get_source(source)

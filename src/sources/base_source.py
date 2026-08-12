@@ -6,8 +6,10 @@
 
 import json
 import logging
+import os
 import re
 import threading
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -196,9 +198,26 @@ class BasePaperSource(ABC):
 
     def mark_as_processed(self, paper_id: str):
         """标记论文为已处理（线程安全）"""
+        self.mark_many_as_processed([paper_id])
+
+    def mark_many_as_processed(self, paper_ids: List[str]):
+        """Atomically add a batch of successfully delivered paper versions.
+
+        Keeping all related IDs in one history file replacement avoids a partial
+        write where an interruption marks only some papers from a complete report.
+        """
+        if not paper_ids:
+            return
         with self._history_lock:
-            self.history[history_key(self.source_name, paper_id)] = datetime.now().isoformat()
-            self._save_history()
+            previous_history = self.history.copy()
+            processed_at = datetime.now().isoformat()
+            for paper_id in paper_ids:
+                self.history[history_key(self.source_name, paper_id)] = processed_at
+            try:
+                self._save_history()
+            except Exception:
+                self.history = previous_history
+                raise
 
     def get_previous_processed_version(self, paper_id: str) -> Optional[Dict[str, Any]]:
         """Return the latest processed arXiv version before ``paper_id``."""
@@ -240,13 +259,30 @@ class BasePaperSource(ABC):
             self.history = {}
 
     def _save_history(self):
-        """保存历史记录到文件"""
+        """Atomically save the compatibility history, propagating write failures."""
+        temporary_path = None
         try:
             self.history_dir.mkdir(parents=True, exist_ok=True)
-            with open(self.history_file, "w", encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.history_dir,
+                prefix=f".{self.history_file.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as f:
+                temporary_path = Path(f.name)
                 json.dump(self.history, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[{self.source_name}] 保存历史记录失败: {e}")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, self.history_file)
+        except Exception:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("[%s] 无法清理历史临时文件: %s", self.source_name, temporary_path)
+            raise
 
     def get_history_count(self) -> int:
         """获取历史记录数量"""

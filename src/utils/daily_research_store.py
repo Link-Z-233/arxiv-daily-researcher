@@ -9,7 +9,7 @@ work without prematurely hiding papers from future runs.
 import json
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
@@ -101,6 +101,33 @@ class DailyResearchStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_paper_deliveries_identity "
                 "ON paper_deliveries(source, canonical_id, version)"
+            )
+
+            # An outbox makes notification delivery independent from paper completion.
+            # A notification can be retried without allowing the paper back into a
+            # later daily scan as a supposedly new result.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notification_outbox (
+                    outbox_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    sent_at TEXT,
+                    UNIQUE(run_id, event_type, channel)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notification_outbox_pending "
+                "ON notification_outbox(status, next_attempt_at)"
             )
 
     @staticmethod
@@ -202,6 +229,145 @@ class DailyResearchStore:
                 ),
             )
 
+    def finalize_report_delivery(
+        self,
+        run_id: str,
+        report_paths: Dict[str, Any],
+        delivered_papers_by_source: Dict[str, list[Dict[str, Any]]],
+        notification_entries: Optional[list[Dict[str, Any]]] = None,
+    ) -> None:
+        """Atomically record a completed report and its notification outbox rows.
+
+        A report is considered delivered only after every included paper has
+        completed its required analysis.  The same transaction records paper
+        delivery, completes the run and queues one notification per channel.
+        This removes the crash window where a paper was hidden from future scans
+        but its daily notification had not yet been persisted.
+        """
+        now = datetime.now().isoformat()
+        entries = notification_entries or []
+        normalized_paths = {key: str(value) for key, value in report_paths.items()}
+
+        with self._lock, self._connect() as conn:
+            run = conn.execute(
+                "SELECT run_id FROM daily_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise KeyError(f"daily run does not exist: {run_id}")
+
+            for source, papers in delivered_papers_by_source.items():
+                report_path = normalized_paths.get(source) or normalized_paths.get(
+                    f"{source}_html"
+                )
+                for paper_info in papers:
+                    paper = paper_info.get("paper_metadata")
+                    paper_id = paper_info.get("paper_id")
+                    if paper is None or not paper_id:
+                        raise ValueError(f"无法记录缺少元数据的日报论文: {source}:{paper_id}")
+
+                    record = conn.execute(
+                        """
+                        SELECT score_status, translation_status, analysis_status,
+                               score_json, abstract_cn, paper_json
+                        FROM daily_papers
+                        WHERE source = ? AND paper_id = ?
+                        """,
+                        (source, paper_id),
+                    ).fetchone()
+                    if record is None:
+                        raise RuntimeError(f"日报论文尚未持久化: {source}:{paper_id}")
+
+                    if record["score_status"] != "succeeded" or not record["score_json"]:
+                        raise RuntimeError(f"评分尚未完成，不能交付日报: {source}:{paper_id}")
+                    if paper.abstract and paper.abstract.strip() and (
+                        record["translation_status"] != "succeeded"
+                        or not (record["abstract_cn"] or "").strip()
+                    ):
+                        raise RuntimeError(f"摘要翻译尚未完成，不能交付日报: {source}:{paper_id}")
+
+                    requires_analysis = bool(
+                        paper_info.get("requires_analysis", False)
+                    )
+                    if requires_analysis and record["analysis_status"] != "succeeded":
+                        raise RuntimeError(
+                            f"深度分析尚未完成，不能交付日报: {source}:{paper_id}"
+                        )
+
+                    if not requires_analysis:
+                        conn.execute(
+                            """
+                            UPDATE daily_papers
+                            SET analysis_status = 'not_required'
+                            WHERE source = ? AND paper_id = ?
+                              AND analysis_status != 'succeeded'
+                            """,
+                            (source, paper_id),
+                        )
+
+                    conn.execute(
+                        """
+                        INSERT INTO paper_deliveries(
+                            run_id, source, paper_id, canonical_id, version,
+                            report_path, delivered_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(run_id, source, paper_id) DO UPDATE SET
+                            report_path = excluded.report_path
+                        """,
+                        (
+                            run_id,
+                            source,
+                            paper_id,
+                            paper.canonical_id or paper.paper_id,
+                            paper.version or 0,
+                            report_path,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE daily_papers
+                        SET run_id = ?, completed_at = COALESCE(completed_at, ?), last_error = NULL
+                        WHERE source = ? AND paper_id = ?
+                        """,
+                        (run_id, now, source, paper_id),
+                    )
+
+            for entry in entries:
+                try:
+                    event_type = entry["event_type"]
+                    channel = entry["channel"]
+                    payload = entry["payload"]
+                except KeyError as exc:
+                    raise ValueError(f"无效通知 outbox 条目: {entry!r}") from exc
+                conn.execute(
+                    """
+                    INSERT INTO notification_outbox(
+                        run_id, event_type, channel, payload_json, status,
+                        attempt_count, next_attempt_at, created_at
+                    )
+                    VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+                    ON CONFLICT(run_id, event_type, channel) DO NOTHING
+                    """,
+                    (
+                        run_id,
+                        event_type,
+                        channel,
+                        json.dumps(payload, ensure_ascii=False),
+                        now,
+                        now,
+                    ),
+                )
+
+            conn.execute(
+                """
+                UPDATE daily_runs
+                SET completed_at = ?, status = 'completed', error = NULL, report_paths_json = ?
+                WHERE run_id = ?
+                """,
+                (now, json.dumps(normalized_paths, ensure_ascii=False), run_id),
+            )
+
     def fail_run(self, run_id: str, error: str):
         now = datetime.now().isoformat()
         with self._lock, self._connect() as conn:
@@ -214,12 +380,205 @@ class DailyResearchStore:
                 (now, "failed", error[:4000], run_id),
             )
 
+    # ------------------------------------------------------------------
+    # Notification outbox
+    # ------------------------------------------------------------------
+
+    def enqueue_notification(
+        self,
+        run_id: str,
+        event_type: str,
+        channel: str,
+        payload: Dict[str, Any],
+    ) -> bool:
+        """Persist one channel delivery request without overwriting an existing one.
+
+        The unique key provides idempotence when the process restarts between
+        report completion and notification dispatch.
+        """
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO notification_outbox(
+                    run_id, event_type, channel, payload_json, status,
+                    attempt_count, next_attempt_at, created_at
+                )
+                VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+                ON CONFLICT(run_id, event_type, channel) DO NOTHING
+                """,
+                (
+                    run_id,
+                    event_type,
+                    channel,
+                    json.dumps(payload, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def claim_due_notifications(
+        self,
+        event_type: Optional[str] = None,
+        limit: int = 100,
+        stale_claim_seconds: int = 900,
+    ) -> list[sqlite3.Row]:
+        """Claim due outbox rows for one sender process.
+
+        Claims protect against duplicate concurrent delivery.  A process crash can
+        leave a row in ``sending``; the next run safely recovers an old claim.
+        External notification protocols cannot guarantee exactly-once delivery
+        across a crash after the remote side accepted a request, so this gives
+        durable at-least-once delivery with a visible attempt history.
+        """
+        now_dt = datetime.now()
+        now = now_dt.isoformat()
+        stale_before = (now_dt - timedelta(seconds=max(1, stale_claim_seconds))).isoformat()
+        max_rows = max(1, int(limit))
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE notification_outbox
+                SET status = 'pending', claimed_at = NULL, next_attempt_at = ?
+                WHERE status = 'sending' AND claimed_at IS NOT NULL AND claimed_at <= ?
+                """,
+                (now, stale_before),
+            )
+
+            clauses = ["status = 'pending'", "next_attempt_at <= ?"]
+            params: list[Any] = [now]
+            if event_type is not None:
+                clauses.append("event_type = ?")
+                params.append(event_type)
+            query = (
+                "SELECT outbox_id FROM notification_outbox WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY created_at ASC, outbox_id ASC LIMIT ?"
+            )
+            params.append(max_rows)
+            outbox_ids = [row["outbox_id"] for row in conn.execute(query, params).fetchall()]
+            claimed = []
+            for outbox_id in outbox_ids:
+                cursor = conn.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET status = 'sending', claimed_at = ?, attempt_count = attempt_count + 1
+                    WHERE outbox_id = ? AND status = 'pending'
+                    """,
+                    (now, outbox_id),
+                )
+                if cursor.rowcount:
+                    claimed.append(
+                        conn.execute(
+                            "SELECT * FROM notification_outbox WHERE outbox_id = ?", (outbox_id,)
+                        ).fetchone()
+                    )
+            return claimed
+
+    def increment_notification_attempt(self, outbox_id: int) -> int:
+        """Record an additional immediate delivery attempt for a claimed row."""
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE notification_outbox
+                SET attempt_count = attempt_count + 1, claimed_at = ?
+                WHERE outbox_id = ? AND status = 'sending'
+                """,
+                (now, outbox_id),
+            )
+            row = conn.execute(
+                "SELECT attempt_count FROM notification_outbox WHERE outbox_id = ?", (outbox_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"notification outbox row does not exist: {outbox_id}")
+            return row["attempt_count"]
+
+    def mark_notification_sent(self, outbox_id: int) -> None:
+        """Finalize a successful external notification delivery."""
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE notification_outbox
+                SET status = 'sent', sent_at = ?, claimed_at = NULL,
+                    last_error = NULL
+                WHERE outbox_id = ?
+                """,
+                (now, outbox_id),
+            )
+
+    def reschedule_notification(
+        self, outbox_id: int, error: str, retry_after_seconds: int
+    ) -> None:
+        """Release a failed claim for a later retry while retaining its payload."""
+        now_dt = datetime.now()
+        next_attempt = (now_dt + timedelta(seconds=max(1, retry_after_seconds))).isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE notification_outbox
+                SET status = 'pending', claimed_at = NULL, next_attempt_at = ?, last_error = ?
+                WHERE outbox_id = ?
+                """,
+                (next_attempt, error[:4000], outbox_id),
+            )
+
+    def get_notification_outbox(self, outbox_id: int) -> Optional[sqlite3.Row]:
+        """Return an outbox row for diagnostics and tests."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM notification_outbox WHERE outbox_id = ?", (outbox_id,)
+            ).fetchone()
+
+    def get_pending_notification_count(self, event_type: Optional[str] = None) -> int:
+        """Return the number of notification rows that still need delivery."""
+        with self._connect() as conn:
+            if event_type is None:
+                row = conn.execute(
+                    "SELECT count(*) AS count FROM notification_outbox WHERE status != 'sent'"
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT count(*) AS count FROM notification_outbox
+                    WHERE status != 'sent' AND event_type = ?
+                    """,
+                    (event_type,),
+                ).fetchone()
+            return int(row["count"])
+
     def get_paper_record(self, source: str, paper_id: str) -> Optional[sqlite3.Row]:
         with self._connect() as conn:
             return conn.execute(
                 "SELECT * FROM daily_papers WHERE source = ? AND paper_id = ?",
                 (source, paper_id),
             ).fetchone()
+
+    def is_paper_delivered(self, source: str, paper_id: str) -> bool:
+        """Return whether this exact paper version has entered a completed daily report."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM paper_deliveries
+                WHERE source = ? AND paper_id = ?
+                LIMIT 1
+                """,
+                (source, paper_id),
+            ).fetchone()
+            if row is not None:
+                return True
+            # Backward-compatible fallback for pre-delivery-table databases.
+            row = conn.execute(
+                """
+                SELECT 1 FROM daily_papers
+                WHERE source = ? AND paper_id = ? AND completed_at IS NOT NULL
+                LIMIT 1
+                """,
+                (source, paper_id),
+            ).fetchone()
+            return row is not None
 
     @staticmethod
     def _analysis_json(analysis: Any) -> str:
@@ -238,6 +597,24 @@ class DailyResearchStore:
         if getattr(paper, "version", None) is None:
             return None
         with self._connect() as conn:
+            delivered = conn.execute(
+                """
+                SELECT daily_papers.*, paper_deliveries.delivered_at
+                FROM paper_deliveries
+                JOIN daily_papers
+                  ON daily_papers.source = paper_deliveries.source
+                 AND daily_papers.paper_id = paper_deliveries.paper_id
+                WHERE paper_deliveries.source = ?
+                  AND paper_deliveries.canonical_id = ?
+                  AND paper_deliveries.version < ?
+                ORDER BY paper_deliveries.version DESC, paper_deliveries.delivered_at DESC
+                LIMIT 1
+                """,
+                (source, paper.canonical_id, paper.version),
+            ).fetchone()
+            if delivered is not None:
+                return delivered
+            # Fallback for databases produced before paper_deliveries existed.
             return conn.execute(
                 """
                 SELECT * FROM daily_papers

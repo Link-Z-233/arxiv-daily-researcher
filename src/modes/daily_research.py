@@ -15,6 +15,7 @@
 """
 
 import hashlib
+from dataclasses import asdict
 import logging
 import threading
 import time
@@ -91,6 +92,25 @@ def _select_top_papers(
             )
     qualified.sort(key=lambda item: item["score"], reverse=True)
     return qualified[: max(0, limit)]
+
+
+def _exclude_sqlite_delivered_papers(
+    store: DailyResearchStore, papers_by_source: Dict[str, List[PaperMetadata]]
+) -> Dict[str, List[PaperMetadata]]:
+    """Filter exact versions already committed to the SQLite delivery ledger."""
+    filtered = {}
+    for source, papers in papers_by_source.items():
+        delivered = [
+            paper for paper in papers if store.is_paper_delivered(source, paper.paper_id)
+        ]
+        if delivered:
+            logger.info(
+                "[%s] SQLite 交付记录跳过 %s 篇已完成论文（兼容历史文件恢复）",
+                source,
+                len(delivered),
+            )
+        filtered[source] = [paper for paper in papers if paper not in delivered]
+    return filtered
 
 
 def _score_single_paper(
@@ -317,7 +337,11 @@ def _add_paper_delivery_context(
     previous_pushed_at = None
     if previous_record is not None:
         previous_version = previous_record["version"]
-        previous_pushed_at = previous_record["completed_at"]
+        previous_pushed_at = (
+            previous_record["delivered_at"]
+            if "delivered_at" in previous_record.keys()
+            else None
+        ) or previous_record["completed_at"]
     elif previous_history:
         previous_version = previous_history.get("version")
         previous_pushed_at = previous_history.get("processed_at")
@@ -356,6 +380,75 @@ def _mark_completed_papers(
                 store.mark_completed(run_id, source, paper_id)
 
 
+def _delivered_papers_for_finalization(
+    scored_papers_by_source: Dict[str, List[Dict[str, Any]]],
+    analyses_by_source: Dict[str, List[Dict[str, Any]]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Build the exact paper set eligible for an atomic report delivery commit."""
+    delivered = {}
+    for source, scored_papers in scored_papers_by_source.items():
+        analyzed_ids = {item["paper_id"] for item in analyses_by_source.get(source, [])}
+        eligible = []
+        for paper_info in scored_papers:
+            paper_meta = paper_info.get("paper_metadata")
+            requires_analysis = bool(
+                settings.DAILY_ENABLE_DEEP_ANALYSIS
+                and paper_info["score_response"].is_qualified
+                and paper_meta
+                and paper_meta.has_pdf_access()
+            )
+            if requires_analysis and paper_info["paper_id"] not in analyzed_ids:
+                raise RuntimeError(
+                    f"深度分析尚未完成，不能交付日报: {source}:{paper_info['paper_id']}"
+                )
+            eligible.append({**paper_info, "requires_analysis": requires_analysis})
+        if eligible:
+            delivered[source] = eligible
+    return delivered
+
+
+def _run_result_notification_entries(
+    notifier: NotifierAgent, result: RunResult
+) -> List[Dict[str, Any]]:
+    """Return one durable notification request per currently configured channel."""
+    if result.success and not notifier.settings.NOTIFY_ON_SUCCESS:
+        return []
+    if not result.success and not notifier.settings.NOTIFY_ON_FAILURE:
+        return []
+    payload = {"result": asdict(result)}
+    return [
+        {"event_type": "daily_run_result", "channel": channel, "payload": payload}
+        for channel in notifier.configured_channels()
+    ]
+
+
+def _build_daily_run_result(
+    total_papers_count: int,
+    scored_papers_by_source: Dict[str, List[Dict[str, Any]]],
+    analyses_by_source: Dict[str, List[Dict[str, Any]]],
+    report_paths: Dict[str, Path],
+) -> RunResult:
+    """Build the immutable report-delivery notification payload before committing it."""
+    run_result = RunResult(
+        run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        total_papers_fetched=total_papers_count,
+        top_papers=_select_top_papers(scored_papers_by_source, settings.NOTIFICATION_TOP_N),
+    )
+    for source, scored_papers in scored_papers_by_source.items():
+        source_qualified = sum(1 for p in scored_papers if p["score_response"].is_qualified)
+        source_analyzed = len(analyses_by_source.get(source, []))
+        run_result.papers_by_source[source] = len(scored_papers)
+        run_result.qualified_by_source[source] = source_qualified
+        run_result.analyzed_by_source[source] = source_analyzed
+        run_result.total_qualified += source_qualified
+        run_result.total_analyzed += source_analyzed
+
+    run_result.report_paths = {source: str(path) for source, path in report_paths.items()}
+    if settings.TOKEN_TRACKING_ENABLED:
+        run_result.token_usage = token_counter.get_summary()
+    return run_result
+
+
 class DailyResearchPipeline:
     """
     每日研究模式流水线。
@@ -369,6 +462,8 @@ class DailyResearchPipeline:
         """
         store = None
         run_id = None
+        notifier = None
+        report_delivery_committed = False
         try:
             print("\n" + "=" * 80)
             print("🚀 多数据源研究系统启动")
@@ -385,6 +480,24 @@ class DailyResearchPipeline:
                 store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
                 run_id = store.start_run(0)
                 logger.info(f"论文级持久化已启用: {settings.DAILY_RESEARCH_DB_PATH}")
+
+            # Notification retries are independent from the current paper scan.
+            # Do this before processing so an old failed webhook is not delayed
+            # by a long LLM run, and never affects whether a paper is "new".
+            if settings.ENABLE_NOTIFICATIONS and store:
+                try:
+                    notifier = NotifierAgent()
+                    retry_summary = notifier.deliver_pending_run_results(store)
+                    if retry_summary["claimed"]:
+                        logger.info(
+                            "已补发待处理通知: 发送 %s，延后 %s",
+                            retry_summary["sent"],
+                            retry_summary["deferred"],
+                        )
+                except Exception as exc:
+                    # The report pipeline must remain available even if a
+                    # notification provider or its templates are broken.
+                    logger.warning("待补发通知检查失败，将继续生成日报: %s", exc)
 
             # ==================== 阶段1: 配置加载 ====================
             logger.info(">>> 阶段1: 加载配置...")
@@ -479,6 +592,13 @@ class DailyResearchPipeline:
                     store.fail_run(run_id, error_detail)
                 return fetch_fail_result
 
+            if store:
+                # SQLite is the authoritative delivery ledger.  The JSON history
+                # exists for compatibility and may fail to flush after a valid
+                # transaction; do not let that make an already delivered version
+                # appear as a fresh paper on the next run.
+                papers_by_source = _exclude_sqlite_delivered_papers(store, papers_by_source)
+
             total_papers_count = sum(len(papers) for papers in papers_by_source.values())
 
             if total_papers_count == 0:
@@ -487,13 +607,12 @@ class DailyResearchPipeline:
                 no_papers_result = RunResult(
                     run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), success=True
                 )
-                if settings.ENABLE_NOTIFICATIONS:
-                    try:
-                        NotifierAgent().notify(no_papers_result)
-                    except Exception:
-                        pass
                 if store and run_id:
                     store.complete_run(run_id, {})
+                if settings.ENABLE_NOTIFICATIONS:
+                    # No-paper runs do not have a report delivery to recover;
+                    # retain the legacy best-effort behaviour for this status-only notice.
+                    (notifier or NotifierAgent()).notify(no_papers_result)
                 return no_papers_result
 
             logger.info(
@@ -824,11 +943,52 @@ class DailyResearchPipeline:
             )
             _validate_report_paths(report_paths, scored_papers_by_source)
 
-            _mark_completed_papers(
-                search_agent, store, run_id, scored_papers_by_source, analyses_by_source
+            # Commit the critical daily-delivery state before optional keyword
+            # trend post-processing.  A later interruption therefore cannot turn
+            # a valid report into a second day's "new" paper batch.
+            run_result = _build_daily_run_result(
+                total_papers_count,
+                scored_papers_by_source,
+                analyses_by_source,
+                report_paths,
             )
-            if store:
-                store.complete_run(run_id, {s: str(p) for s, p in report_paths.items()})
+            if store and run_id:
+                notification_entries = []
+                if settings.ENABLE_NOTIFICATIONS:
+                    try:
+                        notifier = notifier or NotifierAgent()
+                        notification_entries = _run_result_notification_entries(notifier, run_result)
+                    except Exception as exc:
+                        # A malformed/temporarily unavailable notifier must not
+                        # reopen already analyzed papers.  A normal provider
+                        # delivery failure still has its per-channel outbox row.
+                        logger.error("无法建立通知 outbox 条目，日报仍将完成: %s", exc)
+                store.finalize_report_delivery(
+                    run_id,
+                    report_paths,
+                    _delivered_papers_for_finalization(
+                        scored_papers_by_source, analyses_by_source
+                    ),
+                    notification_entries,
+                )
+                report_delivery_committed = True
+                try:
+                    search_agent.mark_many_as_processed(
+                        {
+                            source: [paper_info["paper_id"] for paper_info in scored_papers]
+                            for source, scored_papers in scored_papers_by_source.items()
+                        }
+                    )
+                except Exception as exc:
+                    # JSON history is a compatibility cache. SQLite already
+                    # committed the authoritative delivery state above, and is
+                    # checked on the next scan to prevent duplicate reports.
+                    logger.error("兼容历史文件同步失败，SQLite 仍会防止重复日报: %s", exc)
+            else:
+                _mark_completed_papers(
+                    search_agent, store, run_id, scored_papers_by_source, analyses_by_source
+                )
+                report_delivery_committed = True
 
             # ==================== 阶段7: 关键词趋势处理 ====================
             if settings.KEYWORD_TRACKER_ENABLED and settings.KEYWORD_NORMALIZATION_ENABLED:
@@ -885,31 +1045,14 @@ class DailyResearchPipeline:
             logger.info("=" * 80)
             logger.info("✅ 任务完成！")
 
-            top_papers = _select_top_papers(
-                scored_papers_by_source, settings.NOTIFICATION_TOP_N
-            )
-
-            run_result = RunResult(
-                run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                total_papers_fetched=total_papers_count,
-                top_papers=top_papers,
-            )
-
             for source, scored_papers in scored_papers_by_source.items():
-                source_qualified = sum(1 for p in scored_papers if p["score_response"].is_qualified)
-                source_analyzed = len(analyses_by_source.get(source, []))
-                run_result.papers_by_source[source] = len(scored_papers)
-                run_result.qualified_by_source[source] = source_qualified
-                run_result.analyzed_by_source[source] = source_analyzed
-                run_result.total_qualified += source_qualified
-                run_result.total_analyzed += source_analyzed
                 logger.info(
-                    f"  [{source}] 抓取: {len(scored_papers)} | 及格: {source_qualified} | 深度分析: {source_analyzed}"
+                    "  [%s] 抓取: %s | 及格: %s | 深度分析: %s",
+                    source,
+                    len(scored_papers),
+                    run_result.qualified_by_source[source],
+                    run_result.analyzed_by_source[source],
                 )
-
-            run_result.report_paths = {s: str(p) for s, p in report_paths.items()}
-            if settings.TOKEN_TRACKING_ENABLED:
-                run_result.token_usage = token_counter.get_summary()
 
             logger.info(
                 f"  - 总计: 抓取 {total_papers_count} | 及格 {run_result.total_qualified} | 深度分析 {run_result.total_analyzed}"
@@ -937,28 +1080,37 @@ class DailyResearchPipeline:
                 print(f"   • [{source}] {path}")
             print("=" * 80 + "\n")
 
-            # ==================== 阶段8: 发送通知 ====================
+            # ==================== 阶段8: 持久化并发送通知 ====================
             if settings.ENABLE_NOTIFICATIONS:
-                logger.info(">>> 阶段8: 发送通知...")
-                try:
-                    notifier = NotifierAgent()
+                logger.info(">>> 阶段8: 写入通知 outbox 并发送...")
+                notifier = notifier or NotifierAgent()
+                if store and run_id:
+                    try:
+                        delivery_summary = notifier.deliver_pending_run_results(store)
+                        logger.info(
+                            "通知派发完成: 发送 %s，待补发 %s",
+                            delivery_summary["sent"],
+                            delivery_summary["deferred"],
+                        )
+                    except Exception as exc:
+                        logger.error("通知 outbox 派发异常，已保留待补发记录: %s", exc)
+                else:
+                    # Explicitly preserve the non-persistence mode, where an
+                    # outbox cannot survive restarts.
                     notifier.notify(run_result)
-                    logger.info("通知发送完成")
-                except Exception as e:
-                    logger.warning(f"通知发送失败: {e}")
 
             return run_result
 
         except KeyboardInterrupt:
             logger.warning("\n用户中断程序执行")
             print("\n⚠️  程序已被用户中断")
-            if store and run_id:
+            if store and run_id and not report_delivery_committed:
                 store.fail_run(run_id, "用户中断程序执行")
         except Exception as e:
             logger.error(f"程序执行出错: {e}", exc_info=True)
             print(f"\n❌ 程序执行失败: {e}")
             print("详细错误信息已记录到日志文件")
-            if store and run_id:
+            if store and run_id and not report_delivery_committed:
                 store.fail_run(run_id, str(e))
             import traceback
 
