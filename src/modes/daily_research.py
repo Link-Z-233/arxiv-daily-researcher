@@ -362,7 +362,7 @@ def _score_or_hydrate_paper(
         # Restore durable optional enrichment before calculating cache keys.
         # In particular, an earlier retry may have retained an arXiv PDF URL
         # while a new source response was temporarily missing it.
-        store.upsert_paper_seen(run_id, source, paper)
+        store.restore_optional_enrichment_from_record(paper, existing_record)
         fingerprints = build_stage_input_fingerprints(
             paper,
             all_keywords,

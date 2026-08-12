@@ -136,6 +136,30 @@ class DailyResearchStateTests(unittest.TestCase):
             self.assertEqual(retry_agent.translation_calls, 0)
             self.assertEqual(result["abstract_cn"], "中文摘要")
 
+    def test_optional_enrichment_is_hydrated_before_one_fingerprinted_upsert(self):
+        """A retry must not need a preliminary SQLite write to restore a PDF URL."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            first = _paper()
+            first.pdf_url = "https://arxiv.org/pdf/2501.12345v1.pdf"
+            first_run = store.start_run(1)
+            store.upsert_paper_seen(first_run, "arxiv", first)
+
+            retry = _paper()
+            retry_run = store.start_run(1)
+            with patch.object(store, "upsert_paper_seen", wraps=store.upsert_paper_seen) as upsert:
+                self._run_score_or_hydrate(
+                    store, retry_run, retry, _Agent(), {"quantum": 1.0}
+                )
+
+            self.assertEqual(upsert.call_count, 1)
+            self.assertEqual(retry.pdf_url, first.pdf_url)
+            record = store.get_paper_record("arxiv", retry.paper_id)
+            expected = build_stage_input_fingerprints(
+                retry, {"quantum": 1.0}, _Agent.deep_template
+            )
+            self.assertEqual(record["analysis_input_fingerprint"], expected["analysis"])
+
     def test_new_scores_persist_non_secret_audit_evidence(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "daily.db")

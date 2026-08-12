@@ -1336,6 +1336,26 @@ class DailyResearchStore:
             if not current_value and persisted_value:
                 setattr(paper, field, persisted_value)
 
+    @classmethod
+    def restore_optional_enrichment_from_record(
+        cls, paper: "PaperMetadata", record: Optional[sqlite3.Row]
+    ) -> None:
+        """Hydrate best-effort fields from an already loaded paper record.
+
+        The daily worker needs these fields before it computes the stage input
+        fingerprints.  Keeping this as a read-only helper avoids a preliminary
+        ``upsert_paper_seen`` transaction solely to get the same hydration,
+        while ``upsert_paper_seen`` still performs the restoration itself for
+        all other callers.
+        """
+        if record is None:
+            return
+        try:
+            persisted_paper_json = record["paper_json"]
+        except (IndexError, KeyError, TypeError):
+            return
+        cls._restore_optional_enrichment(paper, persisted_paper_json)
+
     def upsert_paper_seen(
         self,
         run_id: str,
