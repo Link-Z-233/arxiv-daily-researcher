@@ -320,7 +320,11 @@ class Settings(BaseSettings):
             # 加载目标领域
             if "target_domains" in config:
                 domains = config["target_domains"].get("domains", [])
-                if domains:
+                # Preserve an explicit empty list.  SearchAgent validates it
+                # fail-closed when arXiv is enabled; silently retaining the
+                # old default here would make a user believe they had changed
+                # the scan scope while the worker kept querying quant-ph.
+                if domains is not None:
                     self.TARGET_DOMAINS = domains
 
             # 加载数据源配置

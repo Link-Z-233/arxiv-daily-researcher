@@ -10,7 +10,7 @@ import arxiv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from sources.arxiv_source import ArxivSource  # noqa: E402
+from sources.arxiv_source import ArxivSource, normalize_arxiv_domains  # noqa: E402
 from sources.search_agent import SearchAgent  # noqa: E402
 
 
@@ -51,6 +51,48 @@ class _FailingSource:
 
 
 class ArxivFetchTests(unittest.TestCase):
+    def test_empty_or_malformed_arxiv_domains_fail_closed(self):
+        with self.assertRaisesRegex(ValueError, "未配置目标领域"):
+            normalize_arxiv_domains([])
+        with self.assertRaisesRegex(ValueError, "无效的 ArXiv 领域代码"):
+            normalize_arxiv_domains(["cs.AI OR all:electron"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = ArxivSource(Path(temp_dir))
+            with self.assertRaisesRegex(ValueError, "未配置目标领域"):
+                source.fetch_papers(days=1, domains=[], fetch_timeout_seconds=10)
+
+    def test_search_agent_rejects_empty_enabled_sources_or_arxiv_domains(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "至少启用一个"):
+                SearchAgent(
+                    history_dir=Path(temp_dir),
+                    enabled_sources=[],
+                    enable_semantic_scholar=False,
+                )
+            with self.assertRaisesRegex(ValueError, "未配置目标领域"):
+                SearchAgent(
+                    history_dir=Path(temp_dir),
+                    enabled_sources=["arxiv"],
+                    arxiv_domains=[],
+                    enable_semantic_scholar=False,
+                )
+
+    @patch("sources.search_agent.ArxivSource")
+    def test_search_agent_uses_default_domain_only_when_omitted(self, arxiv_source_cls):
+        fake_source = arxiv_source_cls.return_value
+        fake_source.display_name = "ArXiv"
+        fake_source.fetch_papers.return_value = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            agent = SearchAgent(
+                history_dir=Path(temp_dir),
+                enabled_sources=["arxiv"],
+                enable_semantic_scholar=False,
+            )
+            agent.fetch_all_papers(days=1)
+
+        fake_source.fetch_papers.assert_called_once_with(days=1, domains=["quant-ph"])
+
     def test_daily_scan_is_unbounded_and_includes_recent_revision(self):
         now = datetime.now(timezone.utc)
         recent = now - timedelta(days=1)

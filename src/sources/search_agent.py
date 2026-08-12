@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 from .base_source import BasePaperSource, PaperMetadata
-from .arxiv_source import ArxivSource
+from .arxiv_source import ArxivSource, normalize_arxiv_domains
 from .huggingface_papers_source import (
     HUGGINGFACE_PAPERS_SOURCE_NAME,
     HuggingFacePapersSource,
@@ -65,8 +65,11 @@ class SearchAgent:
         self.history_dir = history_dir
         self.history_dir.mkdir(parents=True, exist_ok=True)
 
-        self.enabled_sources = enabled_sources or ["arxiv"]
-        self.arxiv_domains = arxiv_domains or []
+        # ``None`` means use the defaults.  Explicitly empty lists must retain
+        # their meaning so validation can fail closed instead of silently
+        # querying a different scope (or no scope at all).
+        self.enabled_sources = enabled_sources if enabled_sources is not None else ["arxiv"]
+        self.arxiv_domains = arxiv_domains
         self.journals = journals or []
         # Kept in the public constructor so old integrations do not break.
         # Daily source scans intentionally ignore both values and exhaust the
@@ -108,6 +111,9 @@ class SearchAgent:
         # a daily report look complete while an intended source was never
         # queried.  Normalize once so UI/manual JSON configuration behaves the
         # same way as the OpenAlex source itself.
+        if isinstance(self.enabled_sources, (str, bytes)):
+            raise ValueError("数据源配置必须是非空列表，不能是单个字符串")
+
         normalized_sources = []
         seen_sources = set()
         for configured_source in self.enabled_sources:
@@ -129,6 +135,9 @@ class SearchAgent:
                 seen_sources.add(source)
         self.enabled_sources = normalized_sources
 
+        if not self.enabled_sources:
+            raise ValueError("至少启用一个论文数据源，不能生成空日报")
+
         normalized_journals = []
         seen_journals = set()
         for configured_journal in self.journals:
@@ -149,6 +158,7 @@ class SearchAgent:
 
         # 检查是否启用 ArXiv
         if "arxiv" in self.enabled_sources:
+            self.arxiv_domains = normalize_arxiv_domains(self.arxiv_domains)
             arxiv_proxy = _settings.get_proxy_dict("arxiv")
             self.sources["arxiv"] = ArxivSource(
                 history_dir=self.history_dir,

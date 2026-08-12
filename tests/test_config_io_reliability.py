@@ -76,6 +76,15 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         self.assertNotIn("max_results", legacy_flat)
         self.assertNotIn("max_results_per_source", legacy_flat)
 
+    def test_explicit_empty_source_or_domain_lists_are_not_replaced_by_defaults(self):
+        config = build_config_dict(enabled_sources=[], domains=[])
+        self.assertEqual(config["data_sources"]["enabled"], [])
+        self.assertEqual(config["target_domains"]["domains"], [])
+
+        flat = flatten_config_dict(config)
+        self.assertEqual(flat["enabled_sources"], [])
+        self.assertEqual(flat["domains"], [])
+
     def test_arxiv_announcement_grace_round_trips_through_config_io(self):
         config = build_config_dict(arxiv_announcement_lookback_grace_days=4)
         self.assertEqual(

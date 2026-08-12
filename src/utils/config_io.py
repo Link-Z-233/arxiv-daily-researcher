@@ -508,7 +508,10 @@ def build_config_dict(
             "search_days": search_days,
         },
         "data_sources": {
-            "enabled": enabled_sources or ["arxiv"],
+            # Preserve an explicit empty list so the worker can reject it
+            # visibly.  Replacing it with a hidden default changes a user's
+            # intended source scope at save time.
+            "enabled": enabled_sources if enabled_sources is not None else ["arxiv"],
             "journals": journals or [],
             "reports_by_source": reports_by_source,
             "arxiv": {
@@ -528,7 +531,7 @@ def build_config_dict(
             "max_age_hours": run_lock_max_age_hours,
         },
         "target_domains": {
-            "domains": domains or ["quant-ph"],
+            "domains": domains if domains is not None else ["quant-ph"],
         },
         "keywords": {
             "primary_keywords": {

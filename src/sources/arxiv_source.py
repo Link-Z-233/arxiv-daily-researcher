@@ -9,6 +9,7 @@ ArXiv 论文数据源
 
 import arxiv
 import logging
+import re
 import signal
 import time
 from datetime import datetime, date, timedelta, timezone
@@ -18,6 +19,55 @@ from typing import List, Optional
 from .base_source import BasePaperSource, PaperMetadata
 
 logger = logging.getLogger(__name__)
+
+
+_ARXIV_CATEGORY_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[.-][A-Za-z0-9-]+)*$")
+
+
+def normalize_arxiv_domains(domains: Optional[List[str]]) -> List[str]:
+    """Return a safe, non-empty arXiv category list.
+
+    ``None`` retains the long-standing direct-source default.  An explicit
+    empty list is different: it almost always means a configuration mistake,
+    and treating it as a successful zero-result scan would advance the daily
+    checkpoint while querying no arXiv category at all.
+
+    Category values are also kept deliberately narrow before they are placed
+    in an arXiv query string.  This turns malformed UI/manual configuration
+    into a visible error instead of a surprising broad or empty query.
+    """
+    if domains is None:
+        return ["quant-ph"]
+    if isinstance(domains, (str, bytes)):
+        raise ValueError("ArXiv 目标领域必须是分类列表，不能是单个字符串")
+
+    try:
+        configured_domains = list(domains)
+    except TypeError as exc:
+        raise ValueError("ArXiv 目标领域必须是非空分类列表") from exc
+
+    normalized = []
+    seen = set()
+    for configured_domain in configured_domains:
+        if not isinstance(configured_domain, str):
+            raise ValueError(
+                f"ArXiv 领域代码必须是非空字符串: {configured_domain!r}"
+            )
+        domain = configured_domain.strip()
+        if not domain or not _ARXIV_CATEGORY_PATTERN.fullmatch(domain):
+            raise ValueError(
+                f"无效的 ArXiv 领域代码: {configured_domain!r}。"
+                "示例: quant-ph、cs.AI、physics.optics"
+            )
+        if domain not in seen:
+            normalized.append(domain)
+            seen.add(domain)
+
+    if not normalized:
+        raise ValueError(
+            "ArXiv 已启用但未配置目标领域；请至少设置一个分类，例如 quant-ph 或 cs.AI"
+        )
+    return normalized
 
 
 class _ArxivTimeoutError(TimeoutError):
@@ -173,8 +223,7 @@ class ArxivSource(BasePaperSource):
         返回:
             List[PaperMetadata]: 论文元数据列表
         """
-        if domains is None:
-            domains = ["quant-ph"]
+        domains = normalize_arxiv_domains(domains)
 
         all_papers = {}
         fetched_at = datetime.now(timezone.utc)

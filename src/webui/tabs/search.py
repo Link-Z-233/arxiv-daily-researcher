@@ -82,6 +82,8 @@ def render(_env_values: dict, config_values: dict):
     st.markdown(f'<p class="hint-text">{t("data_sources_hint")}</p>', unsafe_allow_html=True)
 
     current_sources = flat.get("enabled_sources", ["arxiv"])
+    if not isinstance(current_sources, list):
+        current_sources = []
 
     # Create checkboxes in a grid
     cols = st.columns(4)
@@ -120,7 +122,7 @@ def render(_env_values: dict, config_values: dict):
     )
 
     st.info(t("huggingface_papers_source_notice"))
-    if "huggingface_papers" in current_sources:
+    if source_states.get("huggingface_papers", False):
         hf_col1, hf_col2 = st.columns(2)
         with hf_col1:
             st.number_input(
@@ -166,6 +168,8 @@ def render(_env_values: dict, config_values: dict):
     st.markdown(f'<p class="hint-text">{t("arxiv_domains_hint")}</p>', unsafe_allow_html=True)
 
     current_domains = flat.get("domains", ["quant-ph"])
+    if not isinstance(current_domains, list):
+        current_domains = []
 
     st.multiselect(
         t("select_arxiv_cats"),
@@ -186,9 +190,6 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
     """Collect current values from session state. Returns config updates."""
     # Collect enabled sources
     enabled = [src for src in ALL_DATA_SOURCES if st.session_state.get(f"source_{src}", False)]
-    if not enabled:
-        enabled = ["arxiv"]
-
     # Collect domains
     domains = list(st.session_state.get("arxiv_domains", ["quant-ph"]))
     custom = st.session_state.get("custom_domains", "")
