@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -22,6 +23,26 @@ def _work(index: int) -> dict:
         "open_access": {},
         "locations": [],
     }
+
+
+def _arxiv_metadata(arxiv_id: str, journal_code: str, journal_name: str, doi: str):
+    """Return a journal record enriched with arXiv metadata."""
+    from sources.base_source import PaperMetadata
+
+    return PaperMetadata(
+        paper_id=doi,
+        title="arXiv enriched title",
+        authors=["Test Author"],
+        abstract="arXiv enriched abstract",
+        published_date=datetime.now(),
+        url=f"https://arxiv.org/abs/{arxiv_id}",
+        source=journal_code,
+        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}.pdf",
+        doi=doi,
+        journal=journal_name,
+        arxiv_id=arxiv_id,
+        arxiv_url=f"https://arxiv.org/abs/{arxiv_id}",
+    )
 
 
 class OpenAlexFetchTests(unittest.TestCase):
@@ -78,6 +99,48 @@ class OpenAlexFetchTests(unittest.TestCase):
             source._api_request = lambda _url, _params: {"results": {"not": "a list"}}
             with self.assertRaisesRegex(OpenAlexFetchError, "results"):
                 source.fetch_papers(days=1)
+
+    def test_arxiv_enriched_journal_paper_keeps_doi_as_its_history_identity(self):
+        work = _work(1)
+        work["locations"] = [
+            {
+                "source": {"display_name": "arXiv"},
+                "landing_page_url": "https://arxiv.org/abs/2501.12345v2",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = OpenAlexSource(Path(temp_dir), journals=["prl"])
+            source._api_request = lambda _url, _params: {"results": [work]}
+            source._fetch_from_arxiv = lambda arxiv_id, journal_code, journal_name, doi: _arxiv_metadata(
+                arxiv_id, journal_code, journal_name, doi
+            )
+
+            first_scan = source.fetch_papers(days=1)
+            self.assertEqual(first_scan[0].paper_id, work["doi"])
+            source.mark_as_processed(first_scan[0].paper_id)
+            second_scan = source.fetch_papers(days=1)
+
+        self.assertEqual(second_scan, [])
+
+    def test_legacy_arxiv_key_suppresses_one_time_duplicate_journal_delivery(self):
+        work = _work(1)
+        work["locations"] = [
+            {
+                "source": {"display_name": "arXiv"},
+                "landing_page_url": "https://arxiv.org/abs/2501.12345v2",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = OpenAlexSource(Path(temp_dir), journals=["prl"])
+            source.history["2501.12345v2"] = "2026-08-01T00:00:00"
+            source._api_request = lambda _url, _params: {"results": [work]}
+            source._fetch_from_arxiv = lambda *_args: self.fail("legacy item must be skipped")
+
+            papers = source.fetch_papers(days=1)
+
+        self.assertEqual(papers, [])
 
     def test_search_agent_rejects_unknown_source_instead_of_ignoring_it(self):
         with tempfile.TemporaryDirectory() as temp_dir:

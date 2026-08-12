@@ -294,9 +294,14 @@ class OpenAlexSource(BasePaperSource):
 
             result = results[0]
 
-            # 转换为统一格式，保留期刊信息
+            # Keep the OpenAlex/DOI identity even when we enrich its metadata
+            # from arXiv.  ``_fetch_journal_papers`` checks ``is_processed``
+            # with this DOI on the next scan; using ``result.get_short_id()``
+            # here used to write a different history key and made the same
+            # journal article appear new every day.  The arXiv identifier is
+            # still retained separately for metadata and PDF access.
             metadata = PaperMetadata(
-                paper_id=result.get_short_id(),
+                paper_id=doi,
                 title=result.title,
                 authors=[author.name for author in result.authors],
                 abstract=result.summary,  # arXiv 提供完整摘要
@@ -319,6 +324,21 @@ class OpenAlexSource(BasePaperSource):
         except Exception as e:
             logger.warning(f"    ⚠️  从 arXiv 获取论文失败 ({arxiv_id}): {e}")
             return None
+
+    def _has_legacy_arxiv_history(self, arxiv_id: str) -> bool:
+        """Recognize pre-v3.3 journal history written with an arXiv ID.
+
+        Before stable journal identities were fixed, an OpenAlex work with an
+        arXiv location was marked as processed under ``<arxiv-id>vN`` even
+        though future OpenAlex scans check its DOI.  Retaining this narrow
+        compatibility lookup avoids a one-time duplicate after upgrading.
+        New records are always stored under their DOI/OpenAlex ID instead.
+        """
+        canonical = str(arxiv_id or "").strip()
+        if not canonical:
+            return False
+        with self._history_lock:
+            return canonical in self.history
 
     def _fetch_journal_papers(
         self, issn_list: List[str], journal_code: str, journal_name: str, from_date: str
@@ -456,6 +476,7 @@ class OpenAlexSource(BasePaperSource):
 
                 # 从 locations 提取 arXiv 信息（使用正则表达式提高健壮性）
                 arxiv_id = None
+                arxiv_history_id = None
                 arxiv_url = None
                 locations = item.get("locations", [])
                 for loc in locations:
@@ -470,16 +491,27 @@ class OpenAlexSource(BasePaperSource):
                                 # 使用正则表达式提取 arXiv ID，更健壮
                                 try:
                                     match = re.search(
-                                        r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", loc_url
+                                        r"arxiv\.org/(?:abs|pdf)/"
+                                        r"(?P<canonical>\d{4}\.\d{4,5})(?P<version>v\d+)?",
+                                        loc_url,
                                     )
                                     if match:
-                                        arxiv_id = match.group(1)
+                                        arxiv_id = match.group("canonical")
+                                        arxiv_history_id = (
+                                            f"{arxiv_id}{match.group('version') or ''}"
+                                        )
                                 except Exception as exc:
                                     logger.debug(f"arXiv ID提取失败: {exc}")
                                 break
 
                 # 🎯 优先策略：如果找到 arXiv 版本，使用 ArXiv 源获取完整元数据
                 if arxiv_id:
+                    if self._has_legacy_arxiv_history(arxiv_history_id or arxiv_id):
+                        logger.info(
+                            "    ↪ [%s...] 已由旧版历史记录处理，跳过重复期刊论文",
+                            title[:30],
+                        )
+                        continue
                     logger.info(
                         f"    🔄 [{title[:30]}...] 检测到 arXiv 版本: {arxiv_id}，转而使用 ArXiv 源获取完整元数据"
                     )
