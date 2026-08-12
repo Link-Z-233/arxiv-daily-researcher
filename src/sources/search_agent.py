@@ -239,25 +239,36 @@ class SearchAgent:
                 self.semantic_scholar_enricher.session.proxies.update(s2_proxy)
                 logger.info("[SearchAgent] Semantic Scholar 已配置网络代理")
 
-    def fetch_all_papers(self, days: int = 7) -> Dict[str, List[PaperMetadata]]:
+    def fetch_all_papers(
+        self,
+        days: int = 7,
+        scan_receipt_callbacks: Optional[Dict[str, callable]] = None,
+    ) -> Dict[str, List[PaperMetadata]]:
         """
         从所有启用的数据源抓取论文。
 
         参数:
             days: 搜索最近 N 天的论文
+            scan_receipt_callbacks: 可选的来源→回调映射。当前 arXiv 使用它
+                在成功或失败扫描后持久化完整的领域级扫描收据。
 
         返回:
             Dict[str, List[PaperMetadata]]: {数据源名: 论文列表}
             例如: {"arxiv": [...], "prl": [...], "pra": [...]}
         """
         results = {}
+        receipt_callbacks = scan_receipt_callbacks or {}
 
         for source_name, source in self.sources.items():
             logger.info(f">>> 从 {source.display_name} 抓取论文...")
 
             try:
                 if source_name == "arxiv":
-                    papers = source.fetch_papers(days=days, domains=self.arxiv_domains)
+                    papers = source.fetch_papers(
+                        days=days,
+                        domains=self.arxiv_domains,
+                        scan_receipt_callback=receipt_callbacks.get("arxiv"),
+                    )
                     results["arxiv"] = papers
 
                 elif source_name == "openalex":

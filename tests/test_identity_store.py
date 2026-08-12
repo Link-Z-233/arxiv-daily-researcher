@@ -49,6 +49,89 @@ def _hf_paper(arxiv_id: str) -> PaperMetadata:
 
 
 class IdentityStoreTests(unittest.TestCase):
+    def test_scan_receipts_are_run_scoped_durable_and_visible_in_recent_runs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(0)
+            store.prepare_scan(run_id, 3, ["arxiv"])
+            receipt = {
+                "source": "arxiv",
+                "status": "succeeded",
+                "scanned_at": "2026-08-13T08:00:00+00:00",
+                "domain_receipts": [
+                    {
+                        "domain": "cs.AI",
+                        "status": "succeeded",
+                        "queries": {
+                            "submitted": {"api_entries_checked": 3},
+                            "updated": {"api_entries_checked": 2},
+                        },
+                        "new_candidates": 4,
+                    }
+                ],
+            }
+            store.record_scan_receipt(run_id, "arxiv", receipt)
+
+            # A replacement represents a final retry result for the same
+            # source/run rather than creating ambiguous multiple receipts.
+            retry_receipt = {**receipt, "status": "failed"}
+            store.record_scan_receipt(run_id, "arxiv", retry_receipt)
+            store.fail_run(run_id, "arxiv transient failure")
+
+            receipts = store.get_scan_receipts(run_id)
+            self.assertEqual(1, len(receipts))
+            self.assertEqual("failed", receipts[0]["status"])
+            self.assertEqual("cs.AI", receipts[0]["domain_receipts"][0]["domain"])
+
+            recent = store.get_recent_runs()
+            self.assertEqual(run_id, recent[0]["run_id"])
+            self.assertEqual("failed", recent[0]["status"])
+            self.assertEqual("failed", recent[0]["receipts"][0]["status"])
+
+    def test_scan_receipt_rejects_wrong_source_or_missing_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            receipt = {
+                "source": "arxiv",
+                "status": "succeeded",
+                "scanned_at": "2026-08-13T08:00:00+00:00",
+                "domain_receipts": [],
+            }
+            with self.assertRaisesRegex(KeyError, "daily run does not exist"):
+                store.record_scan_receipt("missing", "arxiv", receipt)
+
+            run_id = store.start_run(0)
+            with self.assertRaisesRegex(ValueError, "来源不匹配"):
+                store.record_scan_receipt(run_id, "openalex", receipt)
+
+    def test_scan_receipt_table_is_added_to_pre_receipt_database(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "daily.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE daily_runs (
+                        run_id TEXT PRIMARY KEY,
+                        started_at TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        total_papers INTEGER DEFAULT 0
+                    )
+                    """
+                )
+            store = DailyResearchStore(db_path)
+            run_id = store.start_run(0)
+            store.record_scan_receipt(
+                run_id,
+                "arxiv",
+                {
+                    "source": "arxiv",
+                    "status": "succeeded",
+                    "scanned_at": "2026-08-13T08:00:00+00:00",
+                    "domain_receipts": [],
+                },
+            )
+            self.assertEqual("succeeded", store.get_scan_receipts(run_id)[0]["status"])
+
     def test_successful_scan_advances_watermarks_and_failed_gap_expands_recovery_window(self):
         """A failed daily run must not let undelivered papers age out of the scan window."""
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -196,6 +196,28 @@ class DailyResearchStore:
                 )
                 """
             )
+            # Scan receipts complement the checkpoint; they never replace it.
+            # A watermark answers "what interval is safe to recover from?",
+            # while this table answers "what did this run actually query?".
+            # Keep failed receipts too: they are exactly the evidence needed to
+            # distinguish a genuinely quiet day from an incomplete scan.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_scan_receipts (
+                    receipt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    receipt_json TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    UNIQUE(run_id, source)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_daily_scan_receipts_run "
+                "ON daily_scan_receipts(run_id, receipt_id)"
+            )
 
     @staticmethod
     def _migrate_run_scan_state(conn):
@@ -529,6 +551,144 @@ class DailyResearchStore:
             return conn.execute(
                 "SELECT * FROM daily_scan_watermarks WHERE source = ?", (source,)
             ).fetchone()
+
+    @staticmethod
+    def _validate_scan_receipt(run_id: str, source: str, receipt: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate the small public receipt schema before persisting it.
+
+        The source owns detailed fields, but the store must reject a receipt
+        that is accidentally attached to the wrong run/source or lacks a
+        terminal status.  This keeps the audit trail useful even after future
+        source implementations are added.
+        """
+        if not isinstance(receipt, dict):
+            raise ValueError("扫描收据必须是 JSON 对象")
+        normalized_source = str(source or "").strip().lower()
+        if not normalized_source:
+            raise ValueError("扫描收据缺少数据源")
+        receipt_source = str(receipt.get("source") or "").strip().lower()
+        if receipt_source != normalized_source:
+            raise ValueError(
+                f"扫描收据来源不匹配: expected {normalized_source}, got {receipt_source or '<empty>'}"
+            )
+        status = receipt.get("status")
+        if status not in {"succeeded", "failed"}:
+            raise ValueError(f"扫描收据状态无效: {status!r}")
+        if not isinstance(receipt.get("scanned_at"), str) or not receipt["scanned_at"].strip():
+            raise ValueError("扫描收据缺少 scanned_at")
+        if not isinstance(receipt.get("domain_receipts", []), list):
+            raise ValueError("扫描收据 domain_receipts 必须是列表")
+        # A JSON round trip both ensures serialisability and detaches callers'
+        # mutable dicts from the durable record.
+        try:
+            encoded = json.dumps(receipt, ensure_ascii=False, sort_keys=True)
+            decoded = json.loads(encoded)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"扫描收据不可 JSON 序列化: {exc}") from exc
+        return decoded
+
+    def record_scan_receipt(self, run_id: str, source: str, receipt: Dict[str, Any]) -> None:
+        """Persist one source receipt for a daily run, replacing retry details.
+
+        A source may retry a domain internally.  Its callback is invoked only
+        after the scan reaches a terminal source-level result, so one
+        ``(run_id, source)`` row represents the final evidence for that run.
+        Failed receipts intentionally remain durable; ``fail_run`` does not
+        erase them.
+        """
+        normalized_source = str(source or "").strip().lower()
+        payload = self._validate_scan_receipt(run_id, normalized_source, receipt)
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            run = conn.execute(
+                "SELECT run_id FROM daily_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise KeyError(f"daily run does not exist: {run_id}")
+            conn.execute(
+                """
+                INSERT INTO daily_scan_receipts(
+                    run_id, source, status, receipt_json, recorded_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, source) DO UPDATE SET
+                    status = excluded.status,
+                    receipt_json = excluded.receipt_json,
+                    recorded_at = excluded.recorded_at
+                """,
+                (
+                    run_id,
+                    normalized_source,
+                    payload["status"],
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            )
+
+    def get_scan_receipts(self, run_id: str) -> list[Dict[str, Any]]:
+        """Return parsed source receipts in stable source order for diagnostics/UI."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source, status, receipt_json, recorded_at
+                FROM daily_scan_receipts
+                WHERE run_id = ?
+                ORDER BY source ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        receipts = []
+        for row in rows:
+            try:
+                receipt = json.loads(row["receipt_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # A corrupt legacy row must remain visible rather than silently
+                # disappearing from a diagnostic screen.
+                receipt = {"source": row["source"], "status": "corrupt"}
+            if not isinstance(receipt, dict):
+                receipt = {"source": row["source"], "status": "corrupt"}
+            receipt["source"] = row["source"]
+            receipt["status"] = row["status"]
+            receipt["recorded_at"] = row["recorded_at"]
+            receipts.append(receipt)
+        return receipts
+
+    def get_recent_runs(self, limit: int = 20) -> list[Dict[str, Any]]:
+        """Return recent run summaries plus receipts for local observability."""
+        max_rows = max(1, min(int(limit), 200))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT run_id, started_at, scan_started_at, scan_days,
+                       scanned_sources_json, completed_at, status, total_papers,
+                       error, report_paths_json
+                FROM daily_runs
+                ORDER BY started_at DESC, run_id DESC
+                LIMIT ?
+                """,
+                (max_rows,),
+            ).fetchall()
+        runs = []
+        for row in rows:
+            try:
+                sources = json.loads(row["scanned_sources_json"] or "[]")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                sources = []
+            runs.append(
+                {
+                    "run_id": row["run_id"],
+                    "started_at": row["started_at"],
+                    "scan_started_at": row["scan_started_at"],
+                    "scan_days": row["scan_days"],
+                    "scanned_sources": sources if isinstance(sources, list) else [],
+                    "completed_at": row["completed_at"],
+                    "status": row["status"],
+                    "total_papers": int(row["total_papers"] or 0),
+                    "error": row["error"],
+                    "receipts": self.get_scan_receipts(row["run_id"]),
+                }
+            )
+        return runs
 
     def set_run_total(self, run_id: str, total_papers: int):
         with self._lock, self._connect() as conn:

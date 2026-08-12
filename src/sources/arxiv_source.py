@@ -14,7 +14,7 @@ import signal
 import time
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .base_source import BasePaperSource, PaperMetadata
 
@@ -75,12 +75,15 @@ class _ArxivTimeoutError(TimeoutError):
 
 
 class ArxivFetchError(RuntimeError):
-    """
-    ArXiv 抓取失败异常。
+    """ArXiv 抓取失败异常。
 
     当 ArXiv API 返回服务端错误（5xx）或其他致命错误，且经过多次重试仍无法获取任何论文时抛出。
     不同于超时或速率限制（这些会自动重试），本异常表示操作已彻底失败。
     """
+
+
+class ArxivScanReceiptError(ArxivFetchError):
+    """Raised when a complete arXiv scan cannot produce an audit receipt."""
 
 
 class _timeout_guard:
@@ -193,7 +196,8 @@ class ArxivSource(BasePaperSource):
         cutoff_date: datetime,
         boundary_field: str,
         fetch_timeout_seconds: int,
-    ) -> tuple[list, int]:
+        page_size: Optional[int] = None,
+    ) -> tuple[list, Dict[str, int]]:
         """
         获取一个无数量上限的查询结果。
 
@@ -202,15 +206,95 @@ class ArxivSource(BasePaperSource):
         """
         results = []
         api_total = 0
+        in_window_count = 0
+        page_count = 0
+        # arxiv.py does not expose page callbacks.  Its Client results iterator
+        # still walks pages in fixed ``client.page_size`` chunks, so derive the
+        # number of observed result pages from consumed API entries.  This is
+        # exact for full pages and intentionally reports one final
+        # partial/boundary page when we stop at the first older record.
+        configured_page_size = max(
+            1, int(page_size or getattr(self.client, "page_size", 100))
+        )
         with _timeout_guard(fetch_timeout_seconds):
             for result in self.client.results(search):
                 api_total += 1
+                page_count = ((api_total - 1) // configured_page_size) + 1
                 boundary = getattr(result, boundary_field)
                 if boundary < cutoff_date:
                     # 两个查询都按边界字段降序排列，可以安全地停止后续分页。
                     break
+                in_window_count += 1
                 results.append(result)
-        return results, api_total
+        return results, {
+            "api_entries_checked": api_total,
+            "pages_observed": page_count,
+            "window_entries": in_window_count,
+        }
+
+    @staticmethod
+    def _new_domain_receipt(domain: str, searches: tuple) -> Dict[str, Any]:
+        """Build a JSON-safe receipt before any request is attempted."""
+        return {
+            "domain": domain,
+            "status": "running",
+            "queries": {
+                query_kind: {
+                    "boundary_field": boundary_field,
+                    "api_entries_checked": 0,
+                    "pages_observed": 0,
+                    "window_entries": 0,
+                    "attempts": 0,
+                    "error": None,
+                }
+                for query_kind, _search, boundary_field in searches
+            },
+            "deduplicated_within_domain": 0,
+            "skipped_legacy_history": 0,
+            "skipped_already_collected": 0,
+            "new_candidates": 0,
+            "error": None,
+        }
+
+    def _build_scan_receipt(
+        self,
+        *,
+        fetched_at: datetime,
+        normal_days: int,
+        effective_days: int,
+        cutoff_date: datetime,
+        domains: List[str],
+        domain_receipts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Return a complete, non-secret receipt for one arXiv source scan."""
+        return {
+            "source": "arxiv",
+            "status": "succeeded"
+            if all(item.get("status") == "succeeded" for item in domain_receipts)
+            else "failed",
+            "scanned_at": fetched_at.isoformat(),
+            # ``requested_scan_days`` is the recovery-aware interval passed by
+            # the daily pipeline.  The source-level announcement grace below
+            # is additional and is deliberately shown separately.
+            "requested_scan_days": normal_days,
+            "announcement_lookback_grace_days": self.announcement_lookback_grace_days,
+            "effective_days": effective_days,
+            "window_start": cutoff_date.isoformat(),
+            "window_end": fetched_at.isoformat(),
+            "domains": list(domains),
+            "domain_receipts": domain_receipts,
+            "total_new_candidates": sum(
+                int(item.get("new_candidates", 0)) for item in domain_receipts
+            ),
+        }
+
+    @staticmethod
+    def _notify_scan_receipt(
+        callback: Optional[Callable[[Dict[str, Any]], None]], receipt: Dict[str, Any]
+    ) -> None:
+        """Persist a receipt through the caller without hiding callback errors."""
+        if callback is not None:
+            callback(receipt)
 
     def fetch_papers(self, days: int, domains: List[str] = None, **kwargs) -> List[PaperMetadata]:
         """
@@ -254,6 +338,9 @@ class ArxivSource(BasePaperSource):
         )
         logger.info("  抓取策略: 按提交时间和最后更新时间完整分页（不受 max_results 限制）")
 
+        scan_receipt_callback = kwargs.get("scan_receipt_callback")
+        domain_receipts: List[Dict[str, Any]] = []
+
         # 记录因严重错误失败的领域及其最后错误信息
         failed_domains: list = []
 
@@ -290,6 +377,8 @@ class ArxivSource(BasePaperSource):
                     "updated",
                 ),
             )
+            domain_receipt = self._new_domain_receipt(domain, searches)
+            domain_receipts.append(domain_receipt)
 
             # 添加重试机制
             max_retries = 3
@@ -302,22 +391,27 @@ class ArxivSource(BasePaperSource):
                 try:
                     domain_papers = {}
                     count = 0
-                    api_total = 0
                     skipped_processed = 0
-                    skipped_old = 0
+                    skipped_already_collected = 0
+                    duplicate_within_domain = 0
+                    active_query_kind = None
                     for query_kind, search, boundary_field in searches:
-                        query_results, query_total = self._fetch_query_results(
+                        active_query_kind = query_kind
+                        domain_receipt["queries"][query_kind]["attempts"] += 1
+                        query_results, query_receipt = self._fetch_query_results(
                             search,
                             cutoff_date,
                             boundary_field,
                             fetch_timeout_seconds,
                         )
-                        api_total += query_total
+                        domain_receipt["queries"][query_kind].update(query_receipt)
+                        domain_receipt["queries"][query_kind]["error"] = None
                         for result in query_results:
                             paper_id = result.get_short_id()
 
                             # 同一版本可能同时出现在 submitted/updated 查询中。
                             if paper_id in domain_papers:
+                                duplicate_within_domain += 1
                                 continue
 
                             # 历史记录只跳过已经成功处理的精确版本；不能用连续已处理
@@ -326,15 +420,33 @@ class ArxivSource(BasePaperSource):
                                 skipped_processed += 1
                                 continue
 
-                            boundary = getattr(result, boundary_field)
-                            if boundary < cutoff_date:
-                                skipped_old += 1
+                            # A paper can belong to more than one configured
+                            # category.  Retain it once but report that cross-
+                            # domain de-duplication explicitly, instead of
+                            # making a lower per-domain result look mysterious.
+                            if paper_id in all_papers:
+                                skipped_already_collected += 1
                                 continue
 
                             domain_papers[paper_id] = self._metadata_from_result(result)
 
                     all_papers.update(domain_papers)
                     count = len(domain_papers)
+                    domain_receipt.update(
+                        {
+                            "status": "succeeded",
+                            "deduplicated_within_domain": duplicate_within_domain,
+                            "skipped_legacy_history": skipped_processed,
+                            "skipped_already_collected": skipped_already_collected,
+                            "new_candidates": count,
+                            "error": None,
+                        }
+                    )
+
+                    api_total = sum(
+                        query["api_entries_checked"]
+                        for query in domain_receipt["queries"].values()
+                    )
 
                     # 增强诊断日志
                     logger.info(f"    领域 {domain}: 发现 {count} 篇新论文（提交/更新查询 API 结果 {api_total} 条）")
@@ -342,7 +454,7 @@ class ArxivSource(BasePaperSource):
                         logger.info(
                             f"    诊断信息: API 返回 {api_total} 篇，"
                             f"已处理跳过 {skipped_processed} 篇，"
-                            f"时间过滤 {skipped_old} 篇"
+                            f"跨领域去重 {skipped_already_collected} 篇"
                         )
                     domain_failed = False
                     break  # 成功则退出重试循环
@@ -350,6 +462,8 @@ class ArxivSource(BasePaperSource):
                 except Exception as e:
                     error_msg = str(e)
                     last_error_msg = error_msg
+                    if active_query_kind is not None:
+                        domain_receipt["queries"][active_query_kind]["error"] = error_msg[:1000]
                     if isinstance(e, _ArxivTimeoutError):
                         retry_count += 1
                         if retry_count <= max_retries:
@@ -391,9 +505,36 @@ class ArxivSource(BasePaperSource):
                             break
 
             if domain_failed:
+                domain_receipt.update(
+                    {
+                        "status": "failed",
+                        "error": last_error_msg or "ArXiv domain scan failed",
+                    }
+                )
                 failed_domains.append((domain, last_error_msg))
 
+        # The per-domain `new_candidates` counters intentionally show how
+        # many entries were unique at the point that category was scanned.
+        # The source-level count below is the authoritative cross-category
+        # total, because one paper may be listed in several categories.
+
         papers = list(all_papers.values())
+        receipt = self._build_scan_receipt(
+            fetched_at=fetched_at,
+            normal_days=normal_days,
+            effective_days=effective_days,
+            cutoff_date=cutoff_date,
+            domains=domains,
+            domain_receipts=domain_receipts,
+        )
+        receipt["total_new_candidates"] = len(papers)
+        try:
+            self._notify_scan_receipt(scan_receipt_callback, receipt)
+        except Exception as exc:
+            # Without the receipt there is no durable evidence that every
+            # configured category was scanned.  Fail closed before reports or
+            # watermarks can be committed.
+            raise ArxivScanReceiptError(f"无法持久化 ArXiv 扫描收据: {exc}") from exc
         logger.info(f"[ArXiv] 总计发现 {len(papers)} 篇新论文")
 
         # 任意领域失败都必须明确报错。部分领域成功不能伪装成完整日报，

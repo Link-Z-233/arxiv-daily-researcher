@@ -10,7 +10,7 @@
 """
 
 from .base_source import BasePaperSource, PaperMetadata
-from .arxiv_source import ArxivSource, ArxivFetchError
+from .arxiv_source import ArxivSource, ArxivFetchError, ArxivScanReceiptError
 from .huggingface_papers_source import HuggingFacePapersFetchError, HuggingFacePapersSource
 from .openalex_source import OpenAlexSource
 from .semantic_scholar_enricher import SemanticScholarEnricher
@@ -21,6 +21,7 @@ __all__ = [
     "PaperMetadata",
     "ArxivSource",
     "ArxivFetchError",
+    "ArxivScanReceiptError",
     "HuggingFacePapersSource",
     "HuggingFacePapersFetchError",
     "OpenAlexSource",

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -21,6 +22,7 @@ from typing import Optional
 import streamlit as st
 
 from utils.run_lock import is_lock_held
+from utils.daily_research_store import DailyResearchStore
 from utils.webui_trigger import enqueue_trigger, trigger_directory
 from webui.i18n import t
 
@@ -30,6 +32,7 @@ _LOCK_DIR     = _PROJECT_ROOT / "data" / "run"
 _MAIN_PY      = _PROJECT_ROOT / "main.py"
 _TRIGGER_QUEUE_DIR = trigger_directory(_LOCK_DIR.parent)
 _TRIGGER_STATUS_DIR = _TRIGGER_QUEUE_DIR / "status"
+_DEFAULT_DAILY_DB_PATH = _PROJECT_ROOT / "data" / "daily_research" / "daily_research.db"
 
 _IS_DOCKER_WEBUI = not _MAIN_PY.exists()
 
@@ -255,6 +258,137 @@ def _show_last_run_hint() -> None:
         st.caption(t("rm_no_panel_process"))
 
 
+def _format_scan_time(value: object) -> str:
+    """Render stored ISO timestamps compactly without assuming timezone shape."""
+    text = str(value or "").strip()
+    return text.replace("T", " ")[:19] if text else "—"
+
+
+def _daily_db_path_from_config(config_values: dict) -> Path:
+    """Resolve the same relative persistence path accepted by the WebUI.
+
+    The run manager must not silently inspect the default database when the
+    user has configured a different local persistence path in Advanced.
+    Absolute paths are accepted because the existing configuration already
+    permits them; malformed values fall back only for display diagnostics.
+    """
+    configured = config_values.get("daily_research_db_path")
+    if not isinstance(configured, str) or not configured.strip():
+        return _DEFAULT_DAILY_DB_PATH
+    path = Path(configured.strip())
+    return path if path.is_absolute() else _PROJECT_ROOT / path
+
+
+def _receipt_query_summary(query: object) -> str:
+    if not isinstance(query, dict):
+        return "—"
+    checked = query.get("api_entries_checked", 0)
+    window_entries = query.get("window_entries", 0)
+    pages = query.get("pages_observed", 0)
+    attempts = query.get("attempts", 0)
+    return f"checked {checked} · in window {window_entries} · pages {pages} · attempts {attempts}"
+
+
+def _render_scan_receipts(config_values: dict) -> None:
+    """Show durable arXiv scan evidence, not an inferred report count.
+
+    This remains local-only UI observability.  An unavailable/corrupt database
+    is stated plainly and never changes scheduler, history, or delivery state.
+    """
+    st.markdown(
+        f'<p class="section-title">🔎 {t("rm_scan_receipts_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption(t("rm_scan_receipts_hint"))
+
+    database_path = _daily_db_path_from_config(config_values)
+    if not database_path.is_file():
+        st.info(t("rm_scan_receipts_empty"))
+        return
+
+    try:
+        runs = DailyResearchStore(database_path).get_recent_runs(limit=10)
+    except Exception as exc:
+        st.warning(f"{t('rm_scan_receipts_load_error')}: {exc}")
+        return
+
+    arxiv_runs = [
+        run for run in runs if any(receipt.get("source") == "arxiv" for receipt in run["receipts"])
+    ]
+    if not arxiv_runs:
+        st.info(t("rm_scan_receipts_empty"))
+        return
+
+    for index, run in enumerate(arxiv_runs):
+        arxiv_receipt = next(
+            receipt for receipt in run["receipts"] if receipt.get("source") == "arxiv"
+        )
+        receipt_status = arxiv_receipt.get("status", "unknown")
+        label = (
+            f"{_format_scan_time(run.get('scan_started_at') or run.get('started_at'))} · "
+            f"{t('rm_scan_receipt_run')}: {run.get('status', 'unknown')} · "
+            f"ArXiv: {receipt_status}"
+        )
+        with st.expander(label, expanded=index == 0):
+            requested_days = arxiv_receipt.get("requested_scan_days", run.get("scan_days"))
+            grace_days = arxiv_receipt.get("announcement_lookback_grace_days", 0)
+            effective_days = arxiv_receipt.get("effective_days", requested_days)
+            domains = arxiv_receipt.get("domains", [])
+            col1, col2, col3 = st.columns(3)
+            col1.metric(t("rm_scan_receipt_window"), f"{requested_days} + {grace_days} = {effective_days} {t('rm_scan_receipt_days')}")
+            col2.metric(t("rm_scan_receipt_candidates"), arxiv_receipt.get("total_new_candidates", 0))
+            col3.metric(t("rm_scan_receipt_domains"), len(domains) if isinstance(domains, list) else 0)
+            st.caption(
+                f"{t('rm_scan_receipt_window_range')}: "
+                f"{_format_scan_time(arxiv_receipt.get('window_start'))} → "
+                f"{_format_scan_time(arxiv_receipt.get('window_end'))}"
+            )
+            if run.get("error"):
+                st.error(f"{t('rm_scan_receipt_run_error')}: {run['error']}")
+
+            domain_rows = []
+            for domain in arxiv_receipt.get("domain_receipts", []):
+                if not isinstance(domain, dict):
+                    continue
+                queries = domain.get("queries", {})
+                domain_rows.append(
+                    {
+                        t("rm_scan_receipt_domain"): domain.get("domain", "—"),
+                        t("rm_scan_receipt_status"): domain.get("status", "unknown"),
+                        t("rm_scan_receipt_submitted"): _receipt_query_summary(
+                            queries.get("submitted") if isinstance(queries, dict) else None
+                        ),
+                        t("rm_scan_receipt_updated"): _receipt_query_summary(
+                            queries.get("updated") if isinstance(queries, dict) else None
+                        ),
+                        t("rm_scan_receipt_new"): domain.get("new_candidates", 0),
+                        t("rm_scan_receipt_history_skip"): domain.get(
+                            "skipped_legacy_history", 0
+                        ),
+                        t("rm_scan_receipt_dedup"): (
+                            int(domain.get("deduplicated_within_domain", 0))
+                            + int(domain.get("skipped_already_collected", 0))
+                        ),
+                    }
+                )
+                if domain.get("error"):
+                    st.warning(
+                        f"{domain.get('domain', '—')}: {domain['error']}"
+                    )
+            if domain_rows:
+                st.dataframe(domain_rows, hide_index=True, use_container_width=True)
+            else:
+                st.caption(t("rm_scan_receipts_no_domain_detail"))
+
+            # Raw receipt is intentionally opt-in, and contains only source
+            # query counters/configured category names (never credentials).
+            with st.expander(t("rm_scan_receipt_raw"), expanded=False):
+                st.code(
+                    json.dumps(arxiv_receipt, ensure_ascii=False, indent=2, sort_keys=True),
+                    language="json",
+                )
+
+
 # ─── 状态面板 ────────────────────────────────────────────────────────────────
 
 
@@ -436,6 +570,10 @@ def render(_env_values: dict, config_values: dict) -> None:
         unsafe_allow_html=True,
     )
     _render_status()
+
+    st.divider()
+
+    _render_scan_receipts(config_values)
 
     st.divider()
 

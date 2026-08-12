@@ -91,7 +91,9 @@ class ArxivFetchTests(unittest.TestCase):
             )
             agent.fetch_all_papers(days=1)
 
-        fake_source.fetch_papers.assert_called_once_with(days=1, domains=["quant-ph"])
+        fake_source.fetch_papers.assert_called_once_with(
+            days=1, domains=["quant-ph"], scan_receipt_callback=None
+        )
 
     def test_daily_scan_is_unbounded_and_includes_recent_revision(self):
         now = datetime.now(timezone.utc)
@@ -129,6 +131,97 @@ class ArxivFetchTests(unittest.TestCase):
             [arxiv.SortCriterion.SubmittedDate, arxiv.SortCriterion.LastUpdatedDate],
         )
         self.assertIn("submittedDate:[", fake_client.searches[0].query)
+
+    def test_scan_receipt_records_query_scope_paging_and_deduplication(self):
+        now = datetime.now(timezone.utc)
+        recent = now - timedelta(hours=6)
+        old = now - timedelta(days=9)
+        submitted = [
+            _FakeResult("same-v1", recent, recent),
+            _FakeResult("submitted-v1", recent, recent),
+            _FakeResult("older-v1", old, old),
+        ]
+        updated = [
+            _FakeResult("same-v1", recent, recent),
+            _FakeResult("updated-v2", now - timedelta(days=30), recent),
+            _FakeResult("older-update-v1", old, old),
+        ]
+
+        receipts = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = ArxivSource(
+                Path(temp_dir), announcement_lookback_grace_days=2
+            )
+            source.client = _FakeClient(submitted, updated)
+            papers = source.fetch_papers(
+                days=3,
+                domains=["cs.AI"],
+                fetch_timeout_seconds=10,
+                scan_receipt_callback=receipts.append,
+            )
+
+        self.assertEqual({"same-v1", "submitted-v1", "updated-v2"}, {p.paper_id for p in papers})
+        self.assertEqual(1, len(receipts))
+        receipt = receipts[0]
+        self.assertEqual("succeeded", receipt["status"])
+        self.assertEqual(3, receipt["requested_scan_days"])
+        self.assertEqual(2, receipt["announcement_lookback_grace_days"])
+        self.assertEqual(5, receipt["effective_days"])
+        self.assertEqual(["cs.AI"], receipt["domains"])
+        domain = receipt["domain_receipts"][0]
+        self.assertEqual("succeeded", domain["status"])
+        self.assertEqual(1, domain["deduplicated_within_domain"])
+        self.assertEqual(3, domain["new_candidates"])
+        self.assertEqual(3, domain["queries"]["submitted"]["api_entries_checked"])
+        self.assertEqual(3, domain["queries"]["updated"]["api_entries_checked"])
+        self.assertEqual(2, domain["queries"]["submitted"]["window_entries"])
+        self.assertEqual(2, domain["queries"]["updated"]["window_entries"])
+        self.assertEqual(1, domain["queries"]["submitted"]["pages_observed"])
+        self.assertEqual(1, domain["queries"]["submitted"]["attempts"])
+
+    def test_failed_domain_still_emits_failed_scan_receipt(self):
+        now = datetime.now(timezone.utc)
+
+        class _AlwaysFailingClient:
+            page_size = 100
+
+            def results(self, _search):
+                raise RuntimeError("upstream unavailable")
+
+        receipts = []
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "sources.arxiv_source.time.sleep"
+        ):
+            source = ArxivSource(Path(temp_dir))
+            source.client = _AlwaysFailingClient()
+            with self.assertRaisesRegex(Exception, "抓取未完成"):
+                source.fetch_papers(
+                    days=1,
+                    domains=["cs.AI"],
+                    fetch_timeout_seconds=10,
+                    scan_receipt_callback=receipts.append,
+                )
+
+        self.assertEqual(1, len(receipts))
+        domain = receipts[0]["domain_receipts"][0]
+        self.assertEqual("failed", receipts[0]["status"])
+        self.assertEqual("failed", domain["status"])
+        self.assertIn("upstream unavailable", domain["error"])
+        self.assertEqual(4, domain["queries"]["submitted"]["attempts"])
+
+    def test_scan_receipt_persistence_callback_failure_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = ArxivSource(Path(temp_dir))
+            source.client = _FakeClient([], [])
+            with self.assertRaisesRegex(Exception, "无法持久化 ArXiv 扫描收据"):
+                source.fetch_papers(
+                    days=1,
+                    domains=["cs.AI"],
+                    fetch_timeout_seconds=10,
+                    scan_receipt_callback=lambda _receipt: (_ for _ in ()).throw(
+                        OSError("database read-only")
+                    ),
+                )
 
     def test_search_agent_propagates_source_failures(self):
         agent = SearchAgent.__new__(SearchAgent)

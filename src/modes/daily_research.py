@@ -756,8 +756,20 @@ class DailyResearchPipeline:
                     )
 
             try:
+                scan_receipt_callbacks = {}
+                if store and run_id:
+                    # Receipt persistence is part of source completeness, not
+                    # an optional analytics side effect.  If it fails, arXiv
+                    # raises before any paper can be reported or its checkpoint
+                    # advanced, preserving a retryable recovery window.
+                    scan_receipt_callbacks["arxiv"] = (
+                        lambda receipt: store.record_scan_receipt(
+                            run_id, "arxiv", receipt
+                        )
+                    )
                 papers_by_source: Dict[str, List[PaperMetadata]] = search_agent.fetch_all_papers(
-                    days=effective_scan_days
+                    days=effective_scan_days,
+                    scan_receipt_callbacks=scan_receipt_callbacks,
                 )
             except ArxivFetchError as afe:
                 # ArXiv 抓取彻底失败（多次重试后仍无法获取任何论文）
