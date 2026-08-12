@@ -1,0 +1,130 @@
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from utils.webui_trigger import (  # noqa: E402
+    TriggerValidationError,
+    build_main_command,
+    build_trigger_payload,
+    enqueue_trigger,
+    execute_trigger_request,
+    read_trigger_payload,
+    trigger_status_directory,
+    validate_trigger_payload,
+)
+
+
+class _CompletedProcess:
+    def __init__(self, return_code: int):
+        self.return_code = return_code
+        self.pid = 4321
+
+    def wait(self, timeout=None):
+        return self.return_code
+
+    def poll(self):
+        return self.return_code
+
+
+class WebUITriggerTests(unittest.TestCase):
+    def test_daily_request_is_atomic_and_has_no_arguments(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            request_path = enqueue_trigger(data_dir, "daily_research")
+            self.assertTrue(request_path.is_file())
+            self.assertEqual(list(request_path.parent.glob("*.tmp")), [])
+            payload = read_trigger_payload(request_path)
+            self.assertEqual(payload["mode"], "daily_research")
+            self.assertEqual(payload["args"], {})
+            self.assertEqual(oct(request_path.stat().st_mode & 0o777), "0o600")
+
+    def test_trend_request_uses_argument_list_and_preserves_quoted_phrase(self):
+        payload = build_trigger_payload(
+            "trend_research",
+            keywords=["quantum error correction", "surface code"],
+            date_from="2025-01-01",
+            date_to="2025-12-31",
+            categories=["quant-ph", "cs.AI"],
+            sort_order="descending",
+            max_results=123,
+        )
+        command = build_main_command(payload, Path("/worker"))
+        self.assertEqual(command[:4], [sys.executable, "/worker/main.py", "--mode", "trend_research"])
+        keywords_index = command.index("--keywords")
+        self.assertEqual(command[keywords_index + 1 : keywords_index + 3], [
+            "quantum error correction",
+            "surface code",
+        ])
+        self.assertIn("--categories", command)
+        self.assertIn("quant-ph", command)
+        self.assertIn("123", command)
+
+    def test_invalid_request_is_rejected_before_a_command_can_be_built(self):
+        payload = {
+            "schema_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000001",
+            "created_at": "now",
+            "mode": "trend_research",
+            "args": {
+                "keywords": ["valid"],
+                "categories": ["quant-ph; rm -rf /"],
+                "sort_order": "ascending",
+                "max_results": 10,
+            },
+        }
+        with self.assertRaises(TriggerValidationError):
+            validate_trigger_payload(payload)
+
+    def test_failed_or_malformed_request_is_consumed_and_records_durable_status(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            request_path = enqueue_trigger(data_dir, "daily_research")
+            claimed_path = request_path.with_suffix(".running")
+            os.replace(request_path, claimed_path)
+            (root / "main.py").write_text("# worker placeholder\n", encoding="utf-8")
+
+            with patch("utils.webui_trigger.subprocess.Popen", return_value=_CompletedProcess(1)):
+                self.assertEqual(execute_trigger_request(claimed_path, project_root=root), 1)
+
+            self.assertFalse(claimed_path.exists())
+            statuses = list(trigger_status_directory(data_dir).glob("*.json"))
+            self.assertEqual(len(statuses), 1)
+            status = json.loads(statuses[0].read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "failed")
+            self.assertEqual(status["return_code"], 1)
+
+            malformed = claimed_path.with_name("malformed.running")
+            malformed.write_text("not json", encoding="utf-8")
+            self.assertEqual(execute_trigger_request(malformed, project_root=root), 1)
+            self.assertFalse(malformed.exists())
+            statuses = list(trigger_status_directory(data_dir).glob("*.json"))
+            self.assertEqual(len(statuses), 2)
+            self.assertIn("rejected", {json.loads(path.read_text())["state"] for path in statuses})
+
+    def test_pid_file_is_removed_after_worker_exits(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            request_path = enqueue_trigger(data_dir, "daily_research")
+            claimed_path = request_path.with_suffix(".running")
+            os.replace(request_path, claimed_path)
+            (root / "main.py").write_text("# worker placeholder\n", encoding="utf-8")
+            pid_file = data_dir / "run" / "webui_triggered.pid"
+
+            with patch("utils.webui_trigger.subprocess.Popen", return_value=_CompletedProcess(0)):
+                self.assertEqual(
+                    execute_trigger_request(claimed_path, project_root=root, pid_file=pid_file), 0
+                )
+            self.assertFalse(pid_file.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

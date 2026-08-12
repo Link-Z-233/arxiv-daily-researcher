@@ -25,6 +25,14 @@ class _FakeClient:
         Path(local_file).write_bytes(self.remote_database.read_bytes())
 
 
+class _ConfigDownloadClient:
+    def __init__(self, content: str):
+        self.content = content
+
+    def download_file(self, _remote_file: str, local_file: str) -> None:
+        Path(local_file).write_text(self.content, encoding="utf-8")
+
+
 def _sync_shell(project_root: Path) -> WebDAVSync:
     """Create a WebDAVSync object without importing the optional client library."""
     sync = WebDAVSync.__new__(WebDAVSync)
@@ -163,6 +171,23 @@ class WebDAVReliabilityTests(unittest.TestCase):
             self.assertFalse(sync._download_daily_research_snapshot(data_dir))
             with sqlite3.connect(local_database) as conn:
                 self.assertEqual(conn.execute("SELECT value FROM marker").fetchone()[0], "local")
+
+    def test_invalid_webdav_config_download_keeps_the_existing_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "configs" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('{"old": true}\n', encoding="utf-8")
+
+            sync = _sync_shell(root)
+            sync.client = _ConfigDownloadClient("<html>not config</html>")
+            sync._check_remote = lambda _remote: True
+            sync._remote = lambda relative: relative
+
+            result = sync.download_configs()
+            self.assertFalse(result["configs/config.json"])
+            self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
+            self.assertEqual(list(config_path.parent.glob("*.download")), [])
 
 
 if __name__ == "__main__":

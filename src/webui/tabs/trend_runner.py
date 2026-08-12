@@ -5,19 +5,23 @@ from __future__ import annotations
 import os
 import re
 import signal
+import shlex
 import subprocess
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import streamlit as st
 
+from utils.webui_trigger import enqueue_trigger
 from webui.i18n import t, _TRANSLATIONS
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _MAIN_PY = _PROJECT_ROOT / "main.py"
 _LOCK_DIR = _PROJECT_ROOT / "data" / "run"
+_LOGS_DIR = _PROJECT_ROOT / "logs"
+_IS_DOCKER_WEBUI = not _MAIN_PY.exists()
 
 # 所有可用的趋势分析技能
 ALL_TREND_SKILL_IDS = [
@@ -267,30 +271,57 @@ def render(_env_values: dict, config_values: dict) -> None:
         elif date_from > date_to:
             st.error(t("tr_err_date_range"))
         else:
-            cmd = [
-                sys.executable,
-                str(_MAIN_PY),
-                "--mode", "trend_research",
-                "--keywords", keywords_input.strip(),
-                "--date-from", str(date_from),
-                "--date-to", str(date_to),
-                "--max-results", str(st.session_state.get("trend_max_results", 500)),
-                "--sort-order", st.session_state.get("trend_sort_order", "ascending"),
-            ]
-            cats = categories_input.strip()
-            if cats:
-                for cat in cats.split():
-                    cmd += ["--categories", cat]
-
             try:
-                proc = subprocess.Popen(
-                    cmd,
-                    cwd=str(_PROJECT_ROOT),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                )
-                st.success(t("tr_started").format(pid=proc.pid))
+                keyword_list = shlex.split(keywords_input)
+                categories = shlex.split(categories_input) if categories_input.strip() else []
+            except ValueError as e:
+                st.error(t("tr_start_failed").format(err=e))
+                return
+
+            request_args = {
+                "keywords": keyword_list,
+                "date_from": str(date_from),
+                "date_to": str(date_to),
+                "categories": categories,
+                "sort_order": st.session_state.get("trend_sort_order", "ascending"),
+                "max_results": int(st.session_state.get("trend_max_results", 500)),
+            }
+            try:
+                if _IS_DOCKER_WEBUI:
+                    request_path = enqueue_trigger(
+                        _LOCK_DIR.parent, "trend_research", **request_args
+                    )
+                    st.success(t("tr_started").format(pid=request_path.stem))
+                else:
+                    command = [
+                        sys.executable,
+                        str(_MAIN_PY),
+                        "--mode",
+                        "trend_research",
+                        "--keywords",
+                        *keyword_list,
+                        "--date-from",
+                        str(date_from),
+                        "--date-to",
+                        str(date_to),
+                        "--max-results",
+                        str(request_args["max_results"]),
+                        "--sort-order",
+                        request_args["sort_order"],
+                    ]
+                    if categories:
+                        command.extend(["--categories", *categories])
+                    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+                    log_file = _LOGS_DIR / f"manual_trend_{datetime.now():%Y%m%d_%H%M%S}.log"
+                    with log_file.open("w", encoding="utf-8") as handle:
+                        proc = subprocess.Popen(
+                            command,
+                            cwd=str(_PROJECT_ROOT),
+                            stdout=handle,
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True,
+                        )
+                    st.success(t("tr_started").format(pid=proc.pid))
                 time.sleep(1)
                 st.rerun()
             except Exception as e:

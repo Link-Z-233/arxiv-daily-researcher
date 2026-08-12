@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trus
 
 COPY src/utils/config_io.py ./src/utils/
 COPY src/utils/webdav_sync.py ./src/utils/
+COPY src/utils/webui_trigger.py ./src/utils/
 COPY src/webui/ ./src/webui/
 
 COPY .env.example ./
@@ -22,7 +23,7 @@ COPY configs/ ./configs/
 RUN touch ./src/__init__.py ./src/utils/__init__.py
 
 RUN mkdir -p /root/.streamlit && \
-    printf '[server]\nheadless = true\nport = 8501\naddress = "0.0.0.0"\nenableCORS = false\nenableXsrfProtection = false\nfileWatcherType = "none"\n\n[browser]\ngatherUsageStats = false\n' > /root/.streamlit/config.toml
+    printf '[server]\nheadless = true\nport = 8501\naddress = "0.0.0.0"\nenableCORS = true\nenableXsrfProtection = true\nfileWatcherType = "none"\n\n[browser]\ngatherUsageStats = false\n' > /root/.streamlit/config.toml
 
 EXPOSE 8501
 

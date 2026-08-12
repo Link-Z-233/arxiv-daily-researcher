@@ -240,7 +240,34 @@ class WebDAVSync:
         try:
             if self._check_remote(remote_file):
                 config_path.parent.mkdir(parents=True, exist_ok=True)
-                self.client.download_file(remote_file, str(config_path))
+                with tempfile.NamedTemporaryFile(
+                    dir=config_path.parent,
+                    prefix=f".{config_path.name}.",
+                    suffix=".download",
+                    delete=False,
+                ) as handle:
+                    temporary_path = Path(handle.name)
+                try:
+                    self.client.download_file(remote_file, str(temporary_path))
+                    with temporary_path.open("r", encoding="utf-8") as handle:
+                        # Reject an interrupted/HTML error response before it
+                        # can replace the live configuration.
+                        import json5
+
+                        json5.load(handle)
+                    content = temporary_path.read_text(encoding="utf-8")
+                    from utils.config_io import _atomic_write_text
+
+                    _atomic_write_text(
+                        config_path,
+                        content,
+                        mode=0o644,
+                        preserve_existing_mode=True,
+                    )
+                    temporary_path = None
+                finally:
+                    if temporary_path is not None:
+                        temporary_path.unlink(missing_ok=True)
                 results["configs/config.json"] = True
                 logger.info("已下载 configs/config.json")
             else:

@@ -6,7 +6,9 @@ Used by: src/utils/setup_wizard.py, src/webui/config_panel.py
 
 import json
 import json5
+import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -135,6 +137,71 @@ SECTION_COMMENTS = {
 # ==================== .env Read / Write ====================
 
 
+def _restore_owner(path: Path, stat_result) -> None:
+    """Keep bind-mounted configuration writable by its original host owner."""
+    if stat_result is None:
+        return
+    try:
+        os.chown(path, stat_result.st_uid, stat_result.st_gid)
+    except (AttributeError, OSError):
+        # Non-root local users cannot chown, and Windows has no POSIX chown.
+        # The write itself remains valid in both cases.
+        pass
+
+
+def _atomic_write_text(
+    path: Path,
+    content: str,
+    *,
+    mode: int = 0o600,
+    preserve_existing_mode: bool = False,
+) -> None:
+    """Replace a configuration file without partial writes or ownership drift.
+
+    ``os.replace`` is required for atomicity, but in a root Docker container it
+    would otherwise change a bind-mounted host file to root ownership.  Preserve
+    the target owner (or parent-directory owner for a new file) before replacing
+    it so users can still edit and export their own configuration afterwards.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing_stat = path.stat()
+    except OSError:
+        existing_stat = None
+    try:
+        owner_stat = existing_stat or path.parent.stat()
+    except OSError:
+        owner_stat = None
+    desired_mode = (
+        (existing_stat.st_mode & 0o777)
+        if preserve_existing_mode and existing_stat is not None
+        else mode
+    )
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            os.chmod(temporary_path, desired_mode)
+            _restore_owner(temporary_path, owner_stat)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        os.chmod(path, desired_mode)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def read_env(path: Optional[Path] = None) -> Dict[str, str]:
     """Read .env file into a flat dict. Skips comments and blank lines."""
     if path is None:
@@ -173,7 +240,11 @@ def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
 
     # Backup existing
     if path.exists():
-        shutil.copy2(path, path.parent / ".env.bak")
+        backup_path = path.parent / ".env.bak"
+        source_stat = path.stat()
+        shutil.copy2(path, backup_path)
+        _restore_owner(backup_path, source_stat)
+        os.chmod(backup_path, 0o600)
 
     # If .env.example exists, use it as template
     if ENV_EXAMPLE_PATH.exists():
@@ -184,7 +255,7 @@ def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
         for key, value in values.items():
             if value:
                 lines.append(f"{key}={value}")
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _atomic_write_text(path, "\n".join(lines) + "\n")
         return
 
     written_keys = set()
@@ -234,7 +305,7 @@ def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
         for key, val in extra.items():
             output_lines.append(f"{key}={val}")
 
-    path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    _atomic_write_text(path, "\n".join(output_lines) + "\n")
 
 
 # ==================== config.json Read / Write ====================
@@ -276,7 +347,10 @@ def write_config_json(config: Dict[str, Any], path: Optional[Path] = None) -> No
 
     # Backup existing
     if path.exists():
-        shutil.copy2(path, path.with_suffix(".json.bak"))
+        backup_path = path.with_suffix(".json.bak")
+        source_stat = path.stat()
+        shutil.copy2(path, backup_path)
+        _restore_owner(backup_path, source_stat)
 
     lines = ["{"]
     keys = list(config.keys())
@@ -297,8 +371,12 @@ def write_config_json(config: Dict[str, Any], path: Optional[Path] = None) -> No
 
     lines.append("}")
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(
+        path,
+        "\n".join(lines) + "\n",
+        mode=0o644,
+        preserve_existing_mode=True,
+    )
 
 
 # ==================== Config Structure Builders ====================

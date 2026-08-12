@@ -2,9 +2,9 @@
 
 架构：
   本地模式：直接 subprocess.Popen 启动 main.py，日志写入 logs/manual_*.log。
-  Docker 模式：写触发文件 data/run/webui_run_trigger.flag，
+  Docker 模式：原子写入 data/run/webui_triggers/*.json 请求队列，
                主研究容器 entrypoint.sh 的 trigger_watcher 每 5 秒轮询，
-               检测到后启动 python main.py（真实 PID 写入 webui_triggered.pid）。
+               验证请求后启动 worker（真实 PID 写入 webui_triggered.pid）。
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from typing import Optional
 
 import streamlit as st
 
+from utils.webui_trigger import enqueue_trigger, trigger_directory
 from webui.i18n import t
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -28,7 +29,8 @@ _LOGS_DIR     = _PROJECT_ROOT / "logs"
 _LOCK_DIR     = _PROJECT_ROOT / "data" / "run"
 _MAIN_PY      = _PROJECT_ROOT / "main.py"
 _WEBUI_PID_FILE  = _LOCK_DIR / "webui_triggered.pid"
-_TRIGGER_FILE    = _LOCK_DIR / "webui_run_trigger.flag"
+_TRIGGER_QUEUE_DIR = trigger_directory(_LOCK_DIR.parent)
+_TRIGGER_STATUS_DIR = _TRIGGER_QUEUE_DIR / "status"
 
 _IS_DOCKER_WEBUI = not _MAIN_PY.exists()
 
@@ -153,16 +155,36 @@ def _do_stop_all() -> None:
 
 
 def _trigger_age_seconds() -> Optional[float]:
-    if not _TRIGGER_FILE.exists():
+    """Return the age of the oldest queued (not already running) request."""
+    queued = list(_TRIGGER_QUEUE_DIR.glob("*.json")) if _TRIGGER_QUEUE_DIR.exists() else []
+    if not queued:
         return None
-    return time.time() - _TRIGGER_FILE.stat().st_mtime
+    oldest = min(path.stat().st_mtime for path in queued)
+    return time.time() - oldest
 
 
-def _write_trigger_file() -> tuple[bool, str]:
+def _latest_trigger_status() -> Optional[dict]:
+    """Load the newest worker-owned trigger status for concise UI feedback."""
+    if not _TRIGGER_STATUS_DIR.exists():
+        return None
+    status_files = list(_TRIGGER_STATUS_DIR.glob("*.json"))
+    if not status_files:
+        return None
     try:
-        _LOCK_DIR.mkdir(parents=True, exist_ok=True)
-        _TRIGGER_FILE.write_text("daily_research", encoding="utf-8")
-        return True, ""
+        import json
+
+        latest = max(status_files, key=lambda path: path.stat().st_mtime)
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _enqueue_worker_trigger(mode: str, **args) -> tuple[bool, str]:
+    """Queue a validated request for the worker container without shell input."""
+    try:
+        request_path = enqueue_trigger(_LOCK_DIR.parent, mode, **args)
+        return True, request_path.stem
     except Exception as e:
         return False, str(e)
 
@@ -181,7 +203,8 @@ def _render_run_control() -> None:
     if trigger_stale:
         st.warning(f"⚠️ {t('rm_trigger_stale').format(n=int(trigger_age))}")
         if st.button(t("rm_clear_trigger_btn"), key="rm_clear_trigger"):
-            _TRIGGER_FILE.unlink(missing_ok=True)
+            for request_path in _TRIGGER_QUEUE_DIR.glob("*.json"):
+                request_path.unlink(missing_ok=True)
             st.rerun()
         return
 
@@ -210,11 +233,16 @@ def _render_run_control() -> None:
         elif trigger_pending:
             st.caption(t("rm_trigger_pending_short"))
         else:
-            _show_last_run_hint()
+            status = _latest_trigger_status()
+            if status and status.get("state") in {"failed", "rejected", "interrupted"}:
+                detail = status.get("error") or status.get("return_code") or status["state"]
+                st.warning(f"最近一次 WebUI 请求 {status['state']}: {detail}")
+            else:
+                _show_last_run_hint()
 
     if run_clicked:
         if _IS_DOCKER_WEBUI:
-            ok, err = _write_trigger_file()
+            ok, err = _enqueue_worker_trigger("daily_research")
             if ok:
                 st.toast(t("rm_trigger_sent_short"), icon="✅")
                 st.rerun()

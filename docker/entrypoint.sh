@@ -87,37 +87,44 @@ if [ "$RUN_ON_STARTUP" = "true" ]; then
 fi
 
 # ==================== WebUI Trigger File Watcher ====================
-# The Streamlit config panel (WebUI container) can request a run by writing
-# a trigger file to the shared volume.  This background loop picks it up.
-TRIGGER_FILE="/app/data/run/webui_run_trigger.flag"
-mkdir -p /app/data/run
+# The Streamlit config panel (in a separate, thin container) puts validated
+# JSON requests in this shared queue.  Do not delete requests on startup: they
+# are durable user actions and must survive a worker restart.
+TRIGGER_DIR="/app/data/run/webui_triggers"
+PID_FILE="/app/data/run/webui_triggered.pid"
+mkdir -p "$TRIGGER_DIR/status"
 
-# Clear stale trigger file from previous container lifecycle to avoid
-# unintended auto-run right after restart/redeploy.
-if [ -f "$TRIGGER_FILE" ]; then
-    echo "[trigger-watcher] Removing stale trigger file on startup: $TRIGGER_FILE"
-    rm -f "$TRIGGER_FILE"
-fi
+# A container restart kills the child process with it.  Return an atomically
+# claimed request to the queue so a SIGKILL/redeploy cannot silently lose a
+# manual user action.  A normal completed request removes its .running file.
+for CLAIMED_FILE in "$TRIGGER_DIR"/*.running; do
+    [ -e "$CLAIMED_FILE" ] || continue
+    REQUEST_FILE="${CLAIMED_FILE%.running}.json"
+    if [ ! -e "$REQUEST_FILE" ]; then
+        mv "$CLAIMED_FILE" "$REQUEST_FILE" || echo "[trigger-watcher] Failed to recover $CLAIMED_FILE"
+    fi
+done
 
 trigger_watcher() {
-    echo "[trigger-watcher] Started. Polling $TRIGGER_FILE every 5s..."
+    echo "[trigger-watcher] Started. Polling $TRIGGER_DIR every 5s..."
     while true; do
-        if [ -f "$TRIGGER_FILE" ]; then
-            # Read mode from trigger file
-            RUN_MODE=$(cat "$TRIGGER_FILE" 2>/dev/null | tr -d '[:space:]')
-            [ -z "$RUN_MODE" ] && RUN_MODE="daily_research"
-            rm -f "$TRIGGER_FILE"
-            echo "[trigger-watcher] Trigger received! mode=$RUN_MODE"
-
-            # Use manual_ prefix to distinguish WebUI-triggered runs from cron runs
-            LOG_FILE="/app/logs/manual_$(date +%Y%m%d_%H%M%S).log"
-            PID_FILE="/app/data/run/webui_triggered.pid"
-
-            # Launch python directly (no subshell) so $! is the actual Python PID
-            cd /app && python main.py --mode "$RUN_MODE" >> "$LOG_FILE" 2>&1 &
-            MAIN_PID=$!
-            echo "$MAIN_PID" > "$PID_FILE"
-            echo "[trigger-watcher] Launched PID=$MAIN_PID  log=$LOG_FILE"
+        REQUEST_FILE=$(find "$TRIGGER_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | head -n 1)
+        if [ -n "$REQUEST_FILE" ]; then
+            CLAIMED_FILE="${REQUEST_FILE%.json}.running"
+            # Atomic claim prevents a future watcher implementation or a manual
+            # operator invocation from executing the same request twice.
+            if mv "$REQUEST_FILE" "$CLAIMED_FILE" 2>/dev/null; then
+                LOG_FILE="/app/logs/manual_$(date +%Y%m%d_%H%M%S).log"
+                echo "[trigger-watcher] Claimed request: $CLAIMED_FILE"
+                # Run synchronously to preserve FIFO ordering and avoid two
+                # resource-heavy WebUI requests competing in one worker.
+                # ``set -e`` applies to this shell too.  Keep a rejected or
+                # failed manual request from terminating the watcher loop (and
+                # therefore the otherwise healthy cron container).
+                RESULT=0
+                python /app/src/utils/webui_trigger.py "$CLAIMED_FILE" --pid-file "$PID_FILE" >> "$LOG_FILE" 2>&1 || RESULT=$?
+                echo "[trigger-watcher] Request finished with exit=$RESULT"
+            fi
         fi
         sleep 5
     done

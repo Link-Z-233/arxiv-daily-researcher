@@ -1,0 +1,359 @@
+"""Validated, durable WebUI-to-worker trigger protocol.
+
+The Streamlit container deliberately contains no worker dependencies.  It
+therefore places a small JSON request in the shared data volume and the worker
+container's existing watcher executes it.  Requests are written atomically and
+validated again in the worker so malformed files cannot turn into shell input.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import uuid
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional, Sequence
+
+
+TRIGGER_SCHEMA_VERSION = 1
+TRIGGER_DIRECTORY_NAME = "webui_triggers"
+TRIGGER_STATUS_DIRECTORY_NAME = "status"
+SUPPORTED_MODES = frozenset({"daily_research", "trend_research"})
+_CATEGORY_RE = re.compile(r"^[A-Za-z0-9.-]{1,64}$")
+_MAX_REQUEST_BYTES = 32 * 1024
+_MAX_KEYWORDS = 32
+_MAX_KEYWORD_LENGTH = 500
+_MAX_CATEGORIES = 64
+_MAX_RESULTS = 5000
+
+
+class TriggerValidationError(ValueError):
+    """Raised when a WebUI trigger request is not safe to execute."""
+
+
+def trigger_directory(data_dir: Path) -> Path:
+    """Return the queue directory shared by WebUI and the worker."""
+    return Path(data_dir) / "run" / TRIGGER_DIRECTORY_NAME
+
+
+def trigger_status_directory(data_dir: Path) -> Path:
+    """Return the small, durable status directory for consumed requests."""
+    return trigger_directory(data_dir) / TRIGGER_STATUS_DIRECTORY_NAME
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Write one JSON document without exposing a partially written request."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            os.chmod(temporary_path, 0o600)
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        os.chmod(path, 0o600)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _validate_text_list(
+    value: Any,
+    *,
+    field: str,
+    max_count: int,
+    max_length: int,
+) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise TriggerValidationError(f"{field} must be a non-empty list")
+    if len(value) > max_count:
+        raise TriggerValidationError(f"{field} contains too many values")
+
+    values: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise TriggerValidationError(f"{field} entries must be strings")
+        normalized = item.strip()
+        if not normalized or len(normalized) > max_length or "\x00" in normalized:
+            raise TriggerValidationError(f"{field} contains an invalid value")
+        values.append(normalized)
+    return values
+
+
+def _validate_optional_date(value: Any, field: str) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise TriggerValidationError(f"{field} must be an ISO date")
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise TriggerValidationError(f"{field} must be an ISO date") from exc
+
+
+def _validate_request_id(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TriggerValidationError("request_id must be a UUID")
+    try:
+        return uuid.UUID(value).hex
+    except (ValueError, AttributeError) as exc:
+        raise TriggerValidationError("request_id must be a UUID") from exc
+
+
+def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return a normalized trigger payload or raise before executing anything."""
+    if not isinstance(payload, Mapping):
+        raise TriggerValidationError("trigger payload must be an object")
+    if payload.get("schema_version") != TRIGGER_SCHEMA_VERSION:
+        raise TriggerValidationError("unsupported trigger schema version")
+
+    mode = payload.get("mode")
+    if mode not in SUPPORTED_MODES:
+        raise TriggerValidationError(f"unsupported trigger mode: {mode!r}")
+
+    args = payload.get("args", {})
+    if not isinstance(args, Mapping):
+        raise TriggerValidationError("trigger args must be an object")
+
+    normalized: Dict[str, Any] = {
+        "schema_version": TRIGGER_SCHEMA_VERSION,
+        "request_id": _validate_request_id(payload.get("request_id")),
+        "created_at": str(payload.get("created_at", "")),
+        "mode": mode,
+        "args": {},
+    }
+
+    if mode == "daily_research":
+        if args:
+            raise TriggerValidationError("daily_research does not accept trigger arguments")
+        return normalized
+
+    keywords = _validate_text_list(
+        args.get("keywords"),
+        field="keywords",
+        max_count=_MAX_KEYWORDS,
+        max_length=_MAX_KEYWORD_LENGTH,
+    )
+    categories_raw = args.get("categories", [])
+    if not isinstance(categories_raw, list) or len(categories_raw) > _MAX_CATEGORIES:
+        raise TriggerValidationError("categories must be a bounded list")
+    categories: list[str] = []
+    for category in categories_raw:
+        if not isinstance(category, str) or not _CATEGORY_RE.fullmatch(category.strip()):
+            raise TriggerValidationError("categories contains an invalid category")
+        categories.append(category.strip())
+
+    sort_order = args.get("sort_order", "ascending")
+    if sort_order not in {"ascending", "descending"}:
+        raise TriggerValidationError("sort_order must be ascending or descending")
+
+    max_results = args.get("max_results")
+    if isinstance(max_results, bool) or not isinstance(max_results, int):
+        raise TriggerValidationError("max_results must be an integer")
+    if not 1 <= max_results <= _MAX_RESULTS:
+        raise TriggerValidationError(f"max_results must be between 1 and {_MAX_RESULTS}")
+
+    date_from = _validate_optional_date(args.get("date_from"), "date_from")
+    date_to = _validate_optional_date(args.get("date_to"), "date_to")
+    if date_from and date_to and date_from > date_to:
+        raise TriggerValidationError("date_from must not be after date_to")
+
+    normalized["args"] = {
+        "keywords": keywords,
+        "date_from": date_from,
+        "date_to": date_to,
+        "categories": categories,
+        "sort_order": sort_order,
+        "max_results": max_results,
+    }
+    return normalized
+
+
+def build_trigger_payload(mode: str, **args: Any) -> Dict[str, Any]:
+    """Create a normalized request payload for the Streamlit container."""
+    payload: Dict[str, Any] = {
+        "schema_version": TRIGGER_SCHEMA_VERSION,
+        "request_id": uuid.uuid4().hex,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "mode": mode,
+        "args": args,
+    }
+    return validate_trigger_payload(payload)
+
+
+def enqueue_trigger(data_dir: Path, mode: str, **args: Any) -> Path:
+    """Atomically enqueue one validated worker request and return its path."""
+    payload = build_trigger_payload(mode, **args)
+    queue_dir = trigger_directory(Path(data_dir))
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    request_path = queue_dir / f"{timestamp}_{payload['request_id']}.json"
+    _atomic_write_json(request_path, payload)
+    return request_path
+
+
+def read_trigger_payload(request_path: Path) -> Dict[str, Any]:
+    """Load and validate a queued request with a strict size limit."""
+    request_path = Path(request_path)
+    try:
+        if request_path.stat().st_size > _MAX_REQUEST_BYTES:
+            raise TriggerValidationError("trigger request exceeds size limit")
+        with request_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise TriggerValidationError("trigger request is not valid JSON") from exc
+    return validate_trigger_payload(payload)
+
+
+def build_main_command(payload: Mapping[str, Any], project_root: Path) -> list[str]:
+    """Build a list-only command; untrusted request text is never shell-expanded."""
+    request = validate_trigger_payload(payload)
+    command = [sys.executable, str(Path(project_root) / "main.py"), "--mode", request["mode"]]
+    if request["mode"] == "trend_research":
+        args = request["args"]
+        command.extend(["--keywords", *args["keywords"]])
+        if args["date_from"]:
+            command.extend(["--date-from", args["date_from"]])
+        if args["date_to"]:
+            command.extend(["--date-to", args["date_to"]])
+        if args["categories"]:
+            command.extend(["--categories", *args["categories"]])
+        command.extend(["--sort-order", args["sort_order"], "--max-results", str(args["max_results"])])
+    return command
+
+
+def _write_status(data_dir: Path, payload: Mapping[str, Any], state: str, **details: Any) -> Path:
+    status_payload: Dict[str, Any] = {
+        "request_id": payload["request_id"],
+        "mode": payload["mode"],
+        "created_at": payload.get("created_at", ""),
+        "state": state,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        **details,
+    }
+    status_path = trigger_status_directory(data_dir) / f"{payload['request_id']}.json"
+    _atomic_write_json(status_path, status_payload)
+    return status_path
+
+
+def _write_pid_file(pid_file: Path, pid: int) -> None:
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = pid_file.with_name(f".{pid_file.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary_path.write_text(f"{pid}\n", encoding="utf-8")
+        os.replace(temporary_path, pid_file)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _remove_own_pid_file(pid_file: Optional[Path], pid: Optional[int]) -> None:
+    if pid_file is None or pid is None:
+        return
+    try:
+        if pid_file.read_text(encoding="utf-8").strip() == str(pid):
+            pid_file.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def execute_trigger_request(
+    request_path: Path,
+    *,
+    project_root: Optional[Path] = None,
+    pid_file: Optional[Path] = None,
+) -> int:
+    """Execute one claimed request and persist a terminal status for the UI.
+
+    ``request_path`` is expected to have been atomically renamed from ``.json``
+    to ``.running`` by the worker watcher.  The request is removed only after a
+    terminal status has been written, so a completed action has visible audit
+    evidence without leaving queue files to be executed twice.
+    """
+    request_path = Path(request_path)
+    root = Path(project_root) if project_root is not None else Path(__file__).resolve().parents[2]
+    data_dir = request_path.parent.parent.parent
+    payload: Optional[Dict[str, Any]] = None
+    child: Optional[subprocess.Popen] = None
+
+    try:
+        payload = read_trigger_payload(request_path)
+        main_path = root / "main.py"
+        if not main_path.is_file():
+            raise RuntimeError(f"worker entrypoint is unavailable: {main_path}")
+
+        command = build_main_command(payload, root)
+        _write_status(data_dir, payload, "running", command=command)
+        child = subprocess.Popen(command, cwd=str(root))
+        if pid_file is not None:
+            _write_pid_file(Path(pid_file), child.pid)
+        return_code = child.wait()
+        state = "succeeded" if return_code == 0 else "failed"
+        _write_status(data_dir, payload, state, return_code=return_code, command=command)
+        return return_code
+    except KeyboardInterrupt:
+        if child is not None and child.poll() is None:
+            child.send_signal(signal.SIGTERM)
+            try:
+                child.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        if payload is not None:
+            _write_status(data_dir, payload, "interrupted", return_code=130)
+        return 130
+    except Exception as exc:
+        if payload is not None:
+            _write_status(data_dir, payload, "rejected", error=str(exc)[:4000])
+        else:
+            # A malformed request has no trustworthy request_id.  Keep a small
+            # status record for diagnostics, then consume it so the watcher
+            # cannot spin forever on the same invalid input.  Keep it outside
+            # the queue directory: a ``*.json`` record next to the request
+            # would itself be mistaken for another request by the watcher.
+            error_path = trigger_status_directory(data_dir) / f"rejected_{uuid.uuid4().hex}.json"
+            _atomic_write_json(
+                error_path,
+                {
+                    "state": "rejected",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "error": str(exc)[:4000],
+                },
+            )
+        print(f"[webui-trigger] Request failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        _remove_own_pid_file(Path(pid_file) if pid_file is not None else None, child.pid if child else None)
+        request_path.unlink(missing_ok=True)
+
+
+def _parse_cli(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Execute one validated WebUI trigger request")
+    parser.add_argument("request_path", type=Path, help="Claimed .running request file")
+    parser.add_argument("--pid-file", type=Path, default=None, help="Shared current worker PID file")
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = _parse_cli(argv)
+    return execute_trigger_request(args.request_path, pid_file=args.pid_file)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
