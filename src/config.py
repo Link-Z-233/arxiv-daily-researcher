@@ -10,6 +10,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+class ConfigurationLoadError(RuntimeError):
+    """An existing user configuration could not be safely loaded.
+
+    A daily scan must never silently fall back to its built-in scope after a
+    user has supplied a config file.  In particular, doing so could turn a
+    malformed ``target_domains`` section into an unintended ``quant-ph``
+    scan.  Callers should treat this as a startup failure and leave the file
+    untouched for the user to repair or restore from its backup.
+    """
+
+
 class LLMConfig(BaseModel):
     """
     语言模型配置类，定义单个LLM实例的参数。
@@ -305,14 +316,24 @@ class Settings(BaseSettings):
         """
         if config_path is None:
             config_path = self.PROJECT_ROOT / "configs" / "config.json"
+        else:
+            config_path = Path(config_path)
 
         if not config_path.exists():
             print(f"警告: 未找到配置文件 {config_path}，使用默认配置")
             return {}
 
+        # Configuration application below performs many field assignments.
+        # Keep a deep snapshot so a malformed later section cannot leave this
+        # long-lived settings singleton partly configured when a caller catches
+        # the startup error (for example, a WebUI validation view).
+        original_settings = self.model_copy(deep=True)
+
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json5.load(f)  # 使用json5支持注释
+            if not isinstance(config, dict):
+                raise ValueError("配置文件根节点必须是 JSON 对象")
 
             # 加载搜索设置
             if "search_settings" in config:
@@ -660,14 +681,26 @@ class Settings(BaseSettings):
                     ],
                 )
 
+            # Assignments on a Pydantic model are deliberately lightweight in
+            # this class.  Validate the final, fully merged setting set in
+            # strict mode before accepting it, so wrong JSON types cannot be
+            # coerced into a surprising daily scan configuration.
+            validated_settings = type(self).model_validate(
+                self.model_dump(mode="python", warnings="error"), strict=True
+            )
+            for field_name in type(self).model_fields:
+                object.__setattr__(self, field_name, getattr(validated_settings, field_name))
+
             return config
 
-        except Exception as e:
-            print(f"加载 configs/config.json 失败: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return {}
+        except Exception as exc:
+            # Restore every model field before raising.  This includes fields
+            # assigned before a later section failed validation.
+            for field_name in type(self).model_fields:
+                object.__setattr__(self, field_name, getattr(original_settings, field_name))
+            raise ConfigurationLoadError(
+                f"配置文件 {config_path} 无法安全加载；已拒绝使用默认配置继续运行: {exc}"
+            ) from exc
 
     def get_proxy_dict(self, service: str = "") -> Optional[Dict[str, str]]:
         """

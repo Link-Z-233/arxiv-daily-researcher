@@ -14,9 +14,41 @@ from utils.config_io import (  # noqa: E402
     write_config_json,
     write_env,
 )
+from config import ConfigurationLoadError, Settings  # noqa: E402
 
 
 class ConfigIOReliabilityTests(unittest.TestCase):
+    def test_existing_invalid_config_fails_closed_without_partial_settings(self):
+        """A broken user config must not silently restart with default scope."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            config_path.write_text(
+                """
+                {
+                  search_settings: {search_days: 21},
+                  target_domains: {domains: 'not-a-list'}
+                }
+                """,
+                encoding="utf-8",
+            )
+            settings = Settings()
+            original_days = settings.SEARCH_DAYS
+            original_domains = list(settings.TARGET_DOMAINS)
+
+            with self.assertRaisesRegex(ConfigurationLoadError, "拒绝使用默认配置"):
+                settings.load_from_search_config(config_path)
+
+            self.assertEqual(settings.SEARCH_DAYS, original_days)
+            self.assertEqual(settings.TARGET_DOMAINS, original_domains)
+
+    def test_non_object_config_root_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            config_path.write_text("[]", encoding="utf-8")
+
+            with self.assertRaisesRegex(ConfigurationLoadError, "根节点必须是 JSON 对象"):
+                Settings().load_from_search_config(config_path)
+
     def test_atomic_config_write_keeps_previous_content_when_replace_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "config.json"
