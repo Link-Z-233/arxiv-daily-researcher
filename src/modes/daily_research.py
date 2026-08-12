@@ -64,6 +64,12 @@ def _validate_report_paths(
     report_paths: Dict[str, Path], scored_papers_by_source: Dict[str, List[Dict[str, Any]]]
 ) -> None:
     """Ensure every enabled report artifact exists before committing history."""
+    if not settings.ENABLE_MARKDOWN_REPORT and not settings.ENABLE_HTML_REPORT:
+        raise RuntimeError(
+            "日报配置无有效输出格式：至少启用 Markdown 或 HTML 报告，"
+            "否则不会写入论文交付历史"
+        )
+
     expected_keys = set()
     for source, papers in scored_papers_by_source.items():
         if not papers:

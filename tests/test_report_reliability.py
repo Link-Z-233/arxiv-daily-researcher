@@ -202,6 +202,14 @@ class ReportReliabilityTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "空文件或不可访问"):
                     _validate_report_paths({"arxiv": empty_path}, papers)
 
+    def test_report_path_validation_rejects_a_daily_run_with_no_output_format(self):
+        paper = _scored_paper("2501.12345v1", 9, True)
+        with patch.object(settings, "ENABLE_MARKDOWN_REPORT", False), patch.object(
+            settings, "ENABLE_HTML_REPORT", False
+        ):
+            with self.assertRaisesRegex(RuntimeError, "无有效输出格式"):
+                _validate_report_paths({}, {"arxiv": [paper]})
+
     def test_notification_top_papers_only_contains_qualified_results(self):
         selected = _select_top_papers(
             {
