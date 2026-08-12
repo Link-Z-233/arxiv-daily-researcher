@@ -19,6 +19,85 @@ DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "config.json"
 ENV_EXAMPLE_PATH = PROJECT_ROOT / ".env.example"
 
+# These are the only file-location fields accepted from portable config.json
+# exports.  Keeping the rule here as well as in config.Settings means WebUI
+# saves and WebDAV restores reject an unsafe document *before* it becomes the
+# live config file.  It also keeps the thin WebUI image independent of the
+# full worker's settings imports.
+_PROJECT_RELATIVE_PATH_FIELDS = {
+    ("paths", "data_dir"),
+    ("paths", "reference_pdfs"),
+    ("paths", "reports"),
+    ("paths", "downloaded_pdfs"),
+    ("paths", "history_file"),
+    ("paths", "history_dir"),
+    ("keyword_tracker", "database", "path"),
+    ("daily_research", "db_path"),
+}
+
+
+def _resolve_project_relative_config_path(value: object, *, label: str) -> Path:
+    """Validate a portable config path without creating it or following writes."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} 必须是非空项目相对路径")
+    raw_path = Path(value.strip())
+    if raw_path.is_absolute():
+        raise ValueError(f"{label} 必须是项目相对路径，不能使用绝对路径")
+    if any(part == ".." for part in raw_path.parts):
+        raise ValueError(f"{label} 不能包含父目录遍历（..）")
+    if any(part in {"", "."} for part in raw_path.parts):
+        raise ValueError(f"{label} 包含无效路径段")
+    root = PROJECT_ROOT.resolve()
+    candidate = (root / raw_path).resolve(strict=False)
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{label} 必须位于项目目录内") from exc
+    return candidate
+
+
+def validate_config_document(config: object) -> Dict[str, Any]:
+    """Validate the safety-critical shape of a portable config.json document.
+
+    This intentionally preserves unknown forward-compatible keys.  It checks
+    only the structure that could change filesystem boundaries or cause a
+    seemingly valid configuration to save a schedule the worker cannot run.
+    Runtime type validation remains authoritative in ``Settings`` at worker
+    startup and fails closed there too.
+    """
+    if not isinstance(config, dict):
+        raise ValueError("config.json 根节点必须是 JSON 对象")
+
+    for *section_path, field_name in _PROJECT_RELATIVE_PATH_FIELDS:
+        current: object = config
+        valid_parent = True
+        for section in section_path:
+            if not isinstance(current, dict):
+                valid_parent = False
+                break
+            if section not in current:
+                valid_parent = False
+                break
+            current = current[section]
+        if not valid_parent:
+            continue
+        if not isinstance(current, dict):
+            label = ".".join((*section_path, field_name))
+            raise ValueError(f"{label} 所在配置段必须是对象")
+        if field_name in current:
+            label = ".".join((*section_path, field_name))
+            _resolve_project_relative_config_path(current[field_name], label=label)
+
+    webdav = config.get("webdav")
+    if webdav is not None:
+        if not isinstance(webdav, dict):
+            raise ValueError("webdav 配置段必须是对象")
+        if webdav.get("sync_mode") == "scheduled":
+            from utils.webdav_sync import validate_cron_schedule
+
+            validate_cron_schedule(str(webdav.get("cron_schedule", "")))
+    return config
+
 # ==================== Data Source Options ====================
 
 ALL_DATA_SOURCES = [
@@ -313,14 +392,14 @@ def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
 
 
 def read_config_json(path: Optional[Path] = None) -> Dict[str, Any]:
-    """Read config.json using json5 (supports comments)."""
+    """Read and validate config.json using json5 (supports comments)."""
     if path is None:
         path = DEFAULT_CONFIG_PATH
     path = Path(path)
     if not path.exists():
         return {}
     with open(path, "r", encoding="utf-8") as f:
-        return json5.load(f)
+        return validate_config_document(json5.load(f))
 
 
 def _indent_value(value_str: str, indent_level: int = 2) -> str:
@@ -345,6 +424,10 @@ def write_config_json(config: Dict[str, Any], path: Optional[Path] = None) -> No
     if path is None:
         path = DEFAULT_CONFIG_PATH
     path = Path(path)
+
+    # Validate before creating a backup.  An unsafe imported/edited document
+    # must leave the current live config and its backup untouched.
+    validate_config_document(config)
 
     # Keep the UI from saving a schedule that the worker cannot interpret.
     # Import lazily: config_io is also deliberately usable in the thin WebUI

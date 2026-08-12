@@ -21,6 +21,37 @@ class ConfigurationLoadError(RuntimeError):
     """
 
 
+def resolve_project_relative_path(project_root: Path, value: object, *, label: str) -> Path:
+    """Resolve one configured path while keeping it inside the project tree.
+
+    Configuration files are intentionally portable and may be exported from
+    the WebUI.  They are not an authority to redirect an unattended worker to
+    arbitrary host paths, so absolute paths, parent traversal and symlinked
+    ancestors outside ``project_root`` are rejected before directory creation.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} 必须是非空项目相对路径")
+    raw_path = Path(value.strip())
+    if raw_path.is_absolute():
+        raise ValueError(f"{label} 必须是项目相对路径，不能使用绝对路径")
+    if any(part == ".." for part in raw_path.parts):
+        raise ValueError(f"{label} 不能包含父目录遍历（..）")
+    if any(part in {"", "."} for part in raw_path.parts):
+        raise ValueError(f"{label} 包含无效路径段")
+
+    root = Path(project_root).resolve()
+    candidate = root / raw_path
+    # ``strict=False`` still resolves any existing ancestor symlink.  That is
+    # exactly what is needed before the subsequent ensure_directories() call
+    # could create a child through a link that points outside the repository.
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{label} 必须位于项目目录内") from exc
+    return resolved
+
+
 class LLMConfig(BaseModel):
     """
     语言模型配置类，定义单个LLM实例的参数。
@@ -475,19 +506,39 @@ class Settings(BaseSettings):
             if "paths" in config:
                 paths = config["paths"]
                 if "data_dir" in paths:
-                    self.DATA_DIR = self.PROJECT_ROOT / paths["data_dir"]
+                    self.DATA_DIR = resolve_project_relative_path(
+                        self.PROJECT_ROOT, paths["data_dir"], label="paths.data_dir"
+                    )
                     self.DAILY_RESEARCH_DB_PATH = (
                         self.DATA_DIR / "daily_research" / "daily_research.db"
                     )
                 if "reference_pdfs" in paths:
-                    self.REF_PDF_DIR = self.PROJECT_ROOT / paths["reference_pdfs"]
+                    self.REF_PDF_DIR = resolve_project_relative_path(
+                        self.PROJECT_ROOT,
+                        paths["reference_pdfs"],
+                        label="paths.reference_pdfs",
+                    )
                 if "reports" in paths:
-                    self.REPORTS_DIR = self.PROJECT_ROOT / paths["reports"]
+                    self.REPORTS_DIR = resolve_project_relative_path(
+                        self.PROJECT_ROOT, paths["reports"], label="paths.reports"
+                    )
                     self.RESEARCH_REPORTS_DIR = self.REPORTS_DIR / "trend_research"
                 if "downloaded_pdfs" in paths:
-                    self.DOWNLOAD_DIR = self.PROJECT_ROOT / paths["downloaded_pdfs"]
+                    self.DOWNLOAD_DIR = resolve_project_relative_path(
+                        self.PROJECT_ROOT,
+                        paths["downloaded_pdfs"],
+                        label="paths.downloaded_pdfs",
+                    )
                 if "history_file" in paths:
-                    self.HISTORY_FILE = self.PROJECT_ROOT / paths["history_file"]
+                    self.HISTORY_FILE = resolve_project_relative_path(
+                        self.PROJECT_ROOT,
+                        paths["history_file"],
+                        label="paths.history_file",
+                    )
+                if "history_dir" in paths:
+                    self.HISTORY_DIR = resolve_project_relative_path(
+                        self.PROJECT_ROOT, paths["history_dir"], label="paths.history_dir"
+                    )
 
             # 加载关键词追踪配置
             if "keyword_tracker" in config:
@@ -496,7 +547,11 @@ class Settings(BaseSettings):
 
                 if "database" in kt:
                     db_path = kt["database"].get("path", "data/keywords/keywords.db")
-                    self.KEYWORD_DB_PATH = self.PROJECT_ROOT / db_path
+                    self.KEYWORD_DB_PATH = resolve_project_relative_path(
+                        self.PROJECT_ROOT,
+                        db_path,
+                        label="keyword_tracker.database.path",
+                    )
 
                 if "normalization" in kt:
                     norm = kt["normalization"]
@@ -586,7 +641,11 @@ class Settings(BaseSettings):
                     "persistence_enabled", self.DAILY_RESEARCH_PERSISTENCE_ENABLED
                 )
                 if "db_path" in daily_cfg:
-                    self.DAILY_RESEARCH_DB_PATH = self.PROJECT_ROOT / daily_cfg["db_path"]
+                    self.DAILY_RESEARCH_DB_PATH = resolve_project_relative_path(
+                        self.PROJECT_ROOT,
+                        daily_cfg["db_path"],
+                        label="daily_research.db_path",
+                    )
 
             # 加载 PDF 解析配置
             if "pdf_parser" in config:

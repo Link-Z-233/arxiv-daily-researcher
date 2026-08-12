@@ -11,10 +11,16 @@ from utils.config_io import (  # noqa: E402
     _atomic_write_text,
     build_config_dict,
     flatten_config_dict,
+    read_config_json,
+    validate_config_document,
     write_config_json,
     write_env,
 )
-from config import ConfigurationLoadError, Settings  # noqa: E402
+from config import (  # noqa: E402
+    ConfigurationLoadError,
+    Settings,
+    resolve_project_relative_path,
+)
 
 
 class ConfigIOReliabilityTests(unittest.TestCase):
@@ -48,6 +54,68 @@ class ConfigIOReliabilityTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ConfigurationLoadError, "根节点必须是 JSON 对象"):
                 Settings().load_from_search_config(config_path)
+
+    def test_runtime_config_rejects_absolute_and_parent_traversal_paths(self):
+        for configured_path in ("/tmp/outside.db", "../../outside.db", "data/../outside.db"):
+            with self.subTest(configured_path=configured_path), tempfile.TemporaryDirectory() as temp_dir:
+                config_path = Path(temp_dir) / "config.json"
+                config_path.write_text(
+                    '{daily_research: {db_path: ' + repr(configured_path) + "}}",
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ConfigurationLoadError, "项目相对路径|父目录遍历"):
+                    Settings().load_from_search_config(config_path)
+
+    def test_runtime_config_honors_history_dir_and_keeps_all_paths_in_project(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config.json"
+            config_path.write_text(
+                """
+                {
+                  paths: {data_dir: 'runtime-data', history_dir: 'runtime-data/history'},
+                  keyword_tracker: {database: {path: 'runtime-data/keywords/store.db'}},
+                  daily_research: {db_path: 'runtime-data/daily/custom.db'}
+                }
+                """,
+                encoding="utf-8",
+            )
+            settings = Settings(PROJECT_ROOT=root)
+
+            settings.load_from_search_config(config_path)
+
+            self.assertEqual(settings.DATA_DIR, root / "runtime-data")
+            self.assertEqual(settings.HISTORY_DIR, root / "runtime-data" / "history")
+            self.assertEqual(settings.KEYWORD_DB_PATH, root / "runtime-data" / "keywords" / "store.db")
+            self.assertEqual(settings.DAILY_RESEARCH_DB_PATH, root / "runtime-data" / "daily" / "custom.db")
+
+    def test_project_relative_path_resolver_rejects_an_existing_escape_symlink(self):
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as outside_dir:
+            root = Path(temp_dir)
+            (root / "linked").symlink_to(Path(outside_dir), target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "项目目录内"):
+                resolve_project_relative_path(root, "linked/state.db", label="test.path")
+
+    def test_config_io_rejects_unsafe_paths_before_backup_or_write(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            config_path.write_text('{"old": true}\n', encoding="utf-8")
+            unsafe = {"daily_research": {"db_path": "../outside.db"}}
+
+            with self.assertRaisesRegex(ValueError, "父目录遍历"):
+                write_config_json(unsafe, config_path)
+
+            self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
+            self.assertFalse(config_path.with_suffix(".json.bak").exists())
+
+    def test_config_io_read_and_document_validation_fail_closed_for_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            config_path.write_text('{paths: {reports: "/tmp/reports"}}', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "项目相对路径"):
+                read_config_json(config_path)
+            with self.assertRaisesRegex(ValueError, "父目录遍历"):
+                validate_config_document({"paths": {"reports": "../reports"}})
 
     def test_atomic_config_write_keeps_previous_content_when_replace_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:

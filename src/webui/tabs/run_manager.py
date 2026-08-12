@@ -269,14 +269,21 @@ def _daily_db_path_from_config(config_values: dict) -> Path:
 
     The run manager must not silently inspect the default database when the
     user has configured a different local persistence path in Advanced.
-    Absolute paths are accepted because the existing configuration already
-    permits them; malformed values fall back only for display diagnostics.
+    Portable configs deliberately constrain paths to the project tree.  For a
+    malformed value keep this diagnostics-only view conservative and fall back
+    to the default instead of reading an arbitrary host database.
     """
     configured = config_values.get("daily_research_db_path")
     if not isinstance(configured, str) or not configured.strip():
         return _DEFAULT_DAILY_DB_PATH
-    path = Path(configured.strip())
-    return path if path.is_absolute() else _PROJECT_ROOT / path
+    try:
+        from utils.config_io import _resolve_project_relative_config_path
+
+        return _resolve_project_relative_config_path(
+            configured, label="daily_research.db_path"
+        )
+    except ValueError:
+        return _DEFAULT_DAILY_DB_PATH
 
 
 def _receipt_query_summary(query: object) -> str:

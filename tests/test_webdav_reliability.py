@@ -304,6 +304,27 @@ class WebDAVReliabilityTests(unittest.TestCase):
             self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
             self.assertEqual(list(config_path.parent.glob("*.download")), [])
 
+    def test_unsafe_webdav_config_download_keeps_the_existing_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "configs" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('{"old": true}\n', encoding="utf-8")
+            remote_content = '{paths: {reports: "../outside"}}'
+            remote_file = root / "unsafe-config-response"
+            remote_file.write_text(remote_content, encoding="utf-8")
+
+            sync = _sync_shell(root)
+            sync._base_url = "https://dav.example.test"
+            sync._http = _FakeDownloadSession(remote_file)
+            sync._check_remote = lambda _remote: True
+            sync._remote = lambda relative: relative
+
+            result = sync.download_configs()
+
+            self.assertFalse(result["configs/config.json"])
+            self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
+
     def test_controlled_directory_download_never_uses_client_pull(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -957,10 +957,13 @@ class WebDAVSync:
                     )
                     with temporary_path.open("r", encoding="utf-8") as handle:
                         # Reject an interrupted/HTML error response before it
-                        # can replace the live configuration.
+                        # can replace the live configuration.  Parsing alone
+                        # is insufficient: a portable config cannot redirect
+                        # the local worker's filesystem paths outside /app.
                         import json5
+                        from utils.config_io import validate_config_document
 
-                        json5.load(handle)
+                        validate_config_document(json5.load(handle))
                     content = temporary_path.read_text(encoding="utf-8")
                     from utils.config_io import _atomic_write_text
 

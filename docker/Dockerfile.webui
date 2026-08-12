@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trus
 
 COPY src/utils/config_io.py ./src/utils/
 COPY src/utils/run_lock.py ./src/utils/
+COPY src/utils/daily_research_store.py ./src/utils/
+COPY src/utils/safe_url.py ./src/utils/
 COPY src/utils/webdav_sync.py ./src/utils/
 COPY src/utils/webui_trigger.py ./src/utils/
 COPY src/webui/ ./src/webui/
