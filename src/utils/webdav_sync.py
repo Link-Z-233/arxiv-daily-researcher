@@ -11,11 +11,14 @@ import re
 import sqlite3
 import tempfile
 import time
+import unicodedata
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
-from urllib.parse import quote, unquote, urlsplit, urlunsplit
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
+from xml.etree import ElementTree
 
 try:  # ``fcntl`` is unavailable on native Windows but WebDAV upload still works there.
     import fcntl
@@ -31,6 +34,34 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS = 30
+# Remote WebDAV endpoints are user-configured, but a compromised server or an
+# incorrectly pointed endpoint must not turn a restore into unbounded local
+# disk consumption.  The values are deliberately generous for normal history
+# and report archives while still providing a deterministic safety boundary.
+MAX_WEBDAV_PROPFIND_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_WEBDAV_FILE_DOWNLOAD_BYTES = 512 * 1024 * 1024
+MAX_WEBDAV_TOTAL_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
+MAX_WEBDAV_DIRECTORY_DEPTH = 32
+MAX_WEBDAV_DIRECTORY_ENTRIES = 100_000
+_WEBDAV_NAMESPACE = "DAV:"
+_WINDOWS_RESERVED_FILENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+
+
+@dataclass(frozen=True)
+class _WebDAVDirectoryEntry:
+    """One validated, direct child returned by a WebDAV PROPFIND response."""
+
+    remote_path: str
+    name: str
+    is_collection: bool
+    content_length: Optional[int]
 
 
 def _decode_webdav_path_segment(segment: str) -> str:
@@ -393,6 +424,375 @@ class WebDAVSync:
         encoded_path = "/".join(quote(part, safe="@:+,;=()[]") for part in path.split("/"))
         return f"{self._base_url}/{encoded_path}"
 
+    @staticmethod
+    def _safe_download_filename(value: object) -> str:
+        """Return one portable local filename, rejecting traversal spellings.
+
+        PROPFIND ``href`` values are remote input.  Even if a WebDAV library
+        considers a name valid, it must never become an absolute path, a parent
+        traversal, a separator, or a Windows device name when this project is
+        restored on another host.
+        """
+        if not isinstance(value, str):
+            raise ValueError("WebDAV 远端文件名必须是字符串")
+        name = _decode_webdav_path_segment(value)
+        if (
+            not name
+            or name in {".", ".."}
+            or "/" in name
+            or "\\" in name
+            or any(character in '<>:"|?*' for character in name)
+            or name != name.rstrip(". ")
+            or name.rstrip(". ").upper() in _WINDOWS_RESERVED_FILENAMES
+            or any(ord(character) < 0x20 for character in name)
+        ):
+            raise ValueError(f"WebDAV 返回了不安全的文件名: {value!r}")
+        return name
+
+    def _href_to_remote_path(self, href: object, parent_remote: str) -> str:
+        """Resolve a DAV href and map it back below the configured endpoint.
+
+        Servers commonly return an absolute-path href containing the endpoint
+        prefix (for example ``/dav/root/project/data``), while others return a
+        same-origin absolute URI or a relative child name.  Resolve all three
+        forms against the directory we asked for, then require the result to
+        remain on the exact configured HTTP origin and below its base path.
+        """
+        if not isinstance(href, str) or not href.strip():
+            raise ValueError("WebDAV PROPFIND 返回了空 href")
+        raw_href = href.strip()
+        raw_parsed = urlsplit(raw_href)
+        if raw_parsed.query or raw_parsed.fragment or raw_parsed.username or raw_parsed.password:
+            raise ValueError(f"WebDAV PROPFIND 返回了不安全 href: {href!r}")
+
+        request_url = self._url(parent_remote).rstrip("/") + "/"
+        resolved_url = urljoin(request_url, raw_href)
+        resolved = urlsplit(resolved_url)
+        base = urlsplit(self._base_url)
+        try:
+            same_origin = (
+                resolved.scheme.casefold() == base.scheme.casefold()
+                and resolved.hostname is not None
+                and base.hostname is not None
+                and resolved.hostname.casefold() == base.hostname.casefold()
+                and resolved.port == base.port
+            )
+        except ValueError as exc:
+            raise ValueError(f"WebDAV PROPFIND 返回了无效 href: {href!r}") from exc
+        if (
+            not same_origin
+            or resolved.query
+            or resolved.fragment
+            or resolved.username is not None
+            or resolved.password is not None
+        ):
+            raise ValueError(f"WebDAV PROPFIND 返回了端点外 href: {href!r}")
+
+        base_path = normalize_webdav_remote_path(base.path)
+        resolved_path = normalize_webdav_remote_path(resolved.path)
+        if not base_path:
+            return resolved_path
+        if resolved_path == base_path:
+            return ""
+        prefix = base_path + "/"
+        if not resolved_path.startswith(prefix):
+            raise ValueError(f"WebDAV PROPFIND 返回了端点路径外 href: {href!r}")
+        return resolved_path[len(prefix) :]
+
+    def _remote_child_entry(self, parent_remote: str, href: object) -> tuple[str, str]:
+        """Ensure an href is a direct child of the directory that was listed."""
+        parent = normalize_webdav_remote_path(parent_remote)
+        remote_path = self._href_to_remote_path(href, parent)
+        if not parent:
+            parts = remote_path.split("/") if remote_path else []
+        else:
+            prefix = parent + "/"
+            if not remote_path.startswith(prefix):
+                raise ValueError(
+                    f"WebDAV PROPFIND 返回了目录外的条目: {href!r}（目录 {parent!r}）"
+                )
+            parts = remote_path[len(prefix) :].split("/")
+        if len(parts) != 1:
+            raise ValueError(
+                f"WebDAV PROPFIND 返回了非直接子条目: {href!r}（目录 {parent!r}）"
+            )
+        name = WebDAVSync._safe_download_filename(parts[0])
+        return remote_path, name
+
+    @staticmethod
+    def _propfind_content_length(response_element: ElementTree.Element) -> Optional[int]:
+        """Read a declared DAV content length, rejecting malformed values."""
+        raw_length = response_element.findtext(
+            f".//{{{_WEBDAV_NAMESPACE}}}getcontentlength"
+        )
+        if raw_length is None or not raw_length.strip():
+            return None
+        try:
+            value = int(raw_length.strip())
+        except ValueError as exc:
+            raise ValueError(f"WebDAV 返回了无效文件长度: {raw_length!r}") from exc
+        if value < 0:
+            raise ValueError(f"WebDAV 返回了负文件长度: {raw_length!r}")
+        return value
+
+    def _list_remote_directory(self, remote_dir: str) -> List[_WebDAVDirectoryEntry]:
+        """List a directory with a bounded Depth-1 PROPFIND response.
+
+        ``webdavclient3.pull`` recursively joins remote filenames to a local
+        root.  This controlled listing keeps the remote-to-local mapping in
+        this module and rejects a malicious response before anything is
+        written below (or outside) the configured data directory.
+        """
+        normalized_dir = normalize_webdav_remote_path(remote_dir)
+        response = None
+        try:
+            response = self._http.request(
+                "PROPFIND",
+                self._url(normalized_dir),
+                headers={"Depth": "1"},
+                timeout=DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=False,
+                stream=True,
+            )
+            if response.status_code != 207:
+                raise RuntimeError(
+                    f"WebDAV PROPFIND 目录枚举失败 {normalized_dir!r}: HTTP {response.status_code}"
+                )
+            chunks: List[bytes] = []
+            total_bytes = 0
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total_bytes += len(chunk)
+                if total_bytes > MAX_WEBDAV_PROPFIND_RESPONSE_BYTES:
+                    raise RuntimeError(
+                        f"WebDAV PROPFIND 响应超过 {MAX_WEBDAV_PROPFIND_RESPONSE_BYTES} 字节限制"
+                    )
+                chunks.append(chunk)
+            try:
+                root = ElementTree.fromstring(b"".join(chunks))
+            except ElementTree.ParseError as exc:
+                raise RuntimeError("WebDAV PROPFIND 返回了无效 XML") from exc
+
+            entries: List[_WebDAVDirectoryEntry] = []
+            # A remote server may distinguish names that collide on a Windows
+            # or case-insensitive/macOS filesystem.  Reject rather than let a
+            # restore overwrite an earlier directory entry unpredictably.
+            seen_local_names = set()
+            self_entry_seen = False
+            for response_element in root.findall(f"{{{_WEBDAV_NAMESPACE}}}response"):
+                href = response_element.findtext(f"{{{_WEBDAV_NAMESPACE}}}href")
+                remote_path = self._href_to_remote_path(href, normalized_dir)
+                collection = response_element.find(
+                    f".//{{{_WEBDAV_NAMESPACE}}}collection"
+                ) is not None
+                if remote_path == normalized_dir:
+                    if self_entry_seen:
+                        raise ValueError("WebDAV PROPFIND 返回了重复目录自身条目")
+                    self_entry_seen = True
+                    if not collection:
+                        raise ValueError("WebDAV PROPFIND 目标不是目录")
+                    continue
+
+                child_path, name = self._remote_child_entry(normalized_dir, href)
+                local_name_key = unicodedata.normalize("NFC", name).casefold()
+                if local_name_key in seen_local_names:
+                    raise ValueError(f"WebDAV PROPFIND 返回了重复目录项: {name!r}")
+                seen_local_names.add(local_name_key)
+                entries.append(
+                    _WebDAVDirectoryEntry(
+                        remote_path=child_path,
+                        name=name,
+                        is_collection=collection,
+                        content_length=self._propfind_content_length(response_element),
+                    )
+                )
+                if len(entries) > MAX_WEBDAV_DIRECTORY_ENTRIES:
+                    raise RuntimeError(
+                        f"WebDAV 目录条目超过 {MAX_WEBDAV_DIRECTORY_ENTRIES} 项限制"
+                    )
+            if not self_entry_seen:
+                raise RuntimeError("WebDAV PROPFIND 响应缺少目标目录自身条目")
+            return entries
+        finally:
+            if response is not None:
+                response.close()
+
+    @staticmethod
+    def _safe_download_destination(local_dir: Path, child_name: str) -> Path:
+        """Return a checked immediate child of ``local_dir`` for a remote item."""
+        root = local_dir.resolve()
+        candidate = root / WebDAVSync._safe_download_filename(child_name)
+        if candidate.is_symlink():
+            raise ValueError(f"WebDAV 本地恢复路径不能覆盖符号链接: {child_name!r}")
+        destination = candidate.resolve()
+        if destination.parent != root:
+            raise ValueError(f"WebDAV 本地恢复路径越界: {child_name!r}")
+        return destination
+
+    def _download_remote_file_to_path(
+        self,
+        remote_file: str,
+        destination: Path,
+        *,
+        maximum_bytes: int,
+        declared_length: Optional[int] = None,
+    ) -> int:
+        """Download one known remote file through the bounded HTTP session.
+
+        The WebDAV library's convenience downloader follows its own request
+        policy and writes directly to the caller's pathname.  Direct streaming
+        keeps redirects disabled and enforces a byte limit before an unfinished
+        server response can consume an unbounded amount of local disk.
+        """
+        if maximum_bytes < 0:
+            raise ValueError("WebDAV 下载大小限制不能为负数")
+        if declared_length is not None and declared_length > maximum_bytes:
+            raise RuntimeError(
+                f"WebDAV 文件 {remote_file!r} 超过 {maximum_bytes} 字节下载限制"
+            )
+
+        response = None
+        try:
+            response = self._http.request(
+                "GET",
+                self._url(remote_file),
+                timeout=DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=False,
+                stream=True,
+            )
+            if not 200 <= response.status_code < 300:
+                raise RuntimeError(
+                    f"WebDAV 文件下载失败 {remote_file!r}: HTTP {response.status_code}"
+                )
+            raw_header_length = response.headers.get("Content-Length")
+            if raw_header_length:
+                try:
+                    header_length = int(raw_header_length)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"WebDAV 文件 {remote_file!r} 返回了无效 Content-Length"
+                    ) from exc
+                if header_length < 0 or header_length > maximum_bytes:
+                    raise RuntimeError(
+                        f"WebDAV 文件 {remote_file!r} 超过 {maximum_bytes} 字节下载限制"
+                    )
+                if declared_length is not None and header_length != declared_length:
+                    raise RuntimeError(
+                        f"WebDAV 文件 {remote_file!r} 长度与 PROPFIND 声明不一致"
+                    )
+
+            total_bytes = 0
+            with destination.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    if total_bytes > maximum_bytes:
+                        raise RuntimeError(
+                            f"WebDAV 文件 {remote_file!r} 下载后超过 {maximum_bytes} 字节限制"
+                        )
+                    handle.write(chunk)
+            if declared_length is not None and total_bytes != declared_length:
+                raise RuntimeError(
+                    f"WebDAV 文件 {remote_file!r} 长度与 PROPFIND 声明不一致"
+                )
+            return total_bytes
+        finally:
+            if response is not None:
+                response.close()
+
+    def _download_remote_file_atomic(
+        self,
+        remote_file: str,
+        local_file: Path,
+        declared_length: Optional[int],
+        remaining_total_bytes: int,
+    ) -> int:
+        """Download one listed file via a bounded temporary file and replace it."""
+        if declared_length is not None and declared_length > MAX_WEBDAV_FILE_DOWNLOAD_BYTES:
+            raise RuntimeError(
+                f"WebDAV 文件 {remote_file!r} 超过单文件 {MAX_WEBDAV_FILE_DOWNLOAD_BYTES} 字节限制"
+            )
+        if declared_length is not None and declared_length > remaining_total_bytes:
+            raise RuntimeError("WebDAV 下载内容超过本次总大小限制")
+
+        local_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=local_file.parent,
+                prefix=f".{local_file.name}.",
+                suffix=".download",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+            size = self._download_remote_file_to_path(
+                remote_file,
+                temporary_path,
+                maximum_bytes=min(MAX_WEBDAV_FILE_DOWNLOAD_BYTES, remaining_total_bytes),
+                declared_length=declared_length,
+            )
+            os.replace(temporary_path, local_file)
+            temporary_path = None
+            return size
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+    def _download_directory_safely(
+        self,
+        remote_dir: str,
+        local_dir: Path,
+        *,
+        maximum_total_bytes: int = MAX_WEBDAV_TOTAL_DOWNLOAD_BYTES,
+    ) -> int:
+        """Recursively restore one approved remote directory without ``pull``.
+
+        Every remote name is validated before a local path exists.  A failed
+        restore leaves already-existing files intact; files that completed
+        before a later failure are individually valid, atomically installed
+        snapshots rather than partially streamed output.
+        """
+        local_dir.mkdir(parents=True, exist_ok=True)
+        if local_dir.is_symlink():
+            raise ValueError(f"WebDAV 本地恢复根目录不能是符号链接: {local_dir}")
+        if maximum_total_bytes < 0:
+            raise ValueError("WebDAV 下载总大小限制不能为负数")
+        local_root = local_dir.resolve()
+        pending = [(normalize_webdav_remote_path(remote_dir), local_root, 0)]
+        downloaded_bytes = 0
+        seen_remote_dirs = set()
+        entry_count = 0
+
+        while pending:
+            current_remote, current_local, depth = pending.pop()
+            if current_remote in seen_remote_dirs:
+                raise RuntimeError(f"WebDAV 目录树包含循环: {current_remote!r}")
+            seen_remote_dirs.add(current_remote)
+            if depth > MAX_WEBDAV_DIRECTORY_DEPTH:
+                raise RuntimeError(
+                    f"WebDAV 目录深度超过 {MAX_WEBDAV_DIRECTORY_DEPTH} 层限制"
+                )
+            for entry in self._list_remote_directory(current_remote):
+                entry_count += 1
+                if entry_count > MAX_WEBDAV_DIRECTORY_ENTRIES:
+                    raise RuntimeError(
+                        f"WebDAV 目录树条目超过 {MAX_WEBDAV_DIRECTORY_ENTRIES} 项限制"
+                    )
+                local_path = self._safe_download_destination(current_local, entry.name)
+                if entry.is_collection:
+                    local_path.mkdir(parents=False, exist_ok=True)
+                    pending.append((entry.remote_path, local_path, depth + 1))
+                    continue
+                downloaded_bytes += self._download_remote_file_atomic(
+                    entry.remote_path,
+                    local_path,
+                    entry.content_length,
+                    maximum_total_bytes - downloaded_bytes,
+                )
+        return downloaded_bytes
+
     def _check_remote(self, remote_path: str) -> bool:
         """
         使用 PROPFIND (Depth 0) 检查远程资源是否存在。
@@ -550,7 +950,11 @@ class WebDAVSync:
                 ) as handle:
                     temporary_path = Path(handle.name)
                 try:
-                    self.client.download_file(remote_file, str(temporary_path))
+                    self._download_remote_file_to_path(
+                        remote_file,
+                        temporary_path,
+                        maximum_bytes=MAX_WEBDAV_FILE_DOWNLOAD_BYTES,
+                    )
                     with temporary_path.open("r", encoding="utf-8") as handle:
                         # Reject an interrupted/HTML error response before it
                         # can replace the live configuration.
@@ -590,7 +994,10 @@ class WebDAVSync:
         """
         从 WebDAV 下载数据文件到本地。
 
-        使用 pull() 增量下载，不会删除本地已有文件。
+        逐项受控下载，不会删除本地已有文件。
+
+        不使用第三方客户端的 ``pull()``：远端 WebDAV 服务返回的目录项
+        必须先经过路径、深度、数量和大小校验，才会映射到本地目录。
 
         返回:
             Dict[str, bool]: 各目录下载结果
@@ -611,11 +1018,9 @@ class WebDAVSync:
             local_dir = data_dir / subdir
             try:
                 if self._check_remote(remote_dir.rstrip("/")):
-                    local_dir.mkdir(parents=True, exist_ok=True)
-                    # 使用 pull() 做增量同步，不删除本地已有文件
-                    self.client.pull(remote_dir, str(local_dir))
+                    downloaded_bytes = self._download_directory_safely(remote_dir.rstrip("/"), local_dir)
                     results[f"data/{subdir}/"] = True
-                    logger.info(f"已下载 data/{subdir}/")
+                    logger.info(f"已下载 data/{subdir}/ ({downloaded_bytes} 字节)")
                 else:
                     logger.info(f"远程 data/{subdir}/ 不存在，跳过")
                     results[f"data/{subdir}/"] = True  # 远程不存在不算失败
@@ -845,7 +1250,11 @@ class WebDAVSync:
                 ) as handle:
                     temporary_path = Path(handle.name)
 
-                self.client.download_file(remote_file, str(temporary_path))
+                self._download_remote_file_to_path(
+                    remote_file,
+                    temporary_path,
+                    maximum_bytes=MAX_WEBDAV_FILE_DOWNLOAD_BYTES,
+                )
                 self._validate_sqlite_database(temporary_path)
 
                 if database_path.exists():

@@ -73,6 +73,47 @@ class _WebDavLibraryClient:
         self.session = type("Session", (), {"proxies": {}})()
 
 
+class _StreamingResponse:
+    def __init__(self, status_code: int, content: bytes, headers=None):
+        self.status_code = status_code
+        self._content = content
+        self.headers = headers or {}
+        self.closed = False
+
+    def iter_content(self, chunk_size=1):
+        del chunk_size
+        yield self._content
+
+    def close(self):
+        self.closed = True
+
+
+class _RequestSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def request(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.responses.pop(0)
+
+
+class _FakeDownloadSession:
+    def __init__(self, remote_file: Path):
+        self.remote_file = remote_file
+        self.calls = []
+
+    def request(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        content = self.remote_file.read_bytes()
+        return _StreamingResponse(200, content, {"Content-Length": str(len(content))})
+
+
+class _NeverPullClient:
+    def pull(self, *_args, **_kwargs):
+        raise AssertionError("untrusted WebDAV pull() must not be used")
+
+
 class WebDAVReliabilityTests(unittest.TestCase):
     @staticmethod
     def _settings(**overrides):
@@ -90,6 +131,41 @@ class WebDAVReliabilityTests(unittest.TestCase):
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         return DailyResearchStore(Path(temp_dir.name) / "daily.db")
+
+    @staticmethod
+    def _dav_directory_xml(remote_path: str, entries) -> bytes:
+        """Build a minimal DAV Depth-1 response for controlled-download tests."""
+        response_entries = [
+            f"""
+            <d:response>
+              <d:href>/{remote_path}/</d:href>
+              <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+            </d:response>
+            """
+        ]
+        for name, is_collection, length in entries:
+            resource_type = "<d:resourcetype><d:collection/></d:resourcetype>" if is_collection else "<d:resourcetype/>"
+            length_element = "" if length is None else f"<d:getcontentlength>{length}</d:getcontentlength>"
+            trailing = "/" if is_collection else ""
+            response_entries.append(
+                f"""
+                <d:response>
+                  <d:href>/{remote_path}/{name}{trailing}</d:href>
+                  <d:propstat><d:prop>{resource_type}{length_element}</d:prop></d:propstat>
+                </d:response>
+                """
+            )
+        return (
+            '<d:multistatus xmlns:d="DAV:">' + "".join(response_entries) + "</d:multistatus>"
+        ).encode("utf-8")
+
+    @staticmethod
+    def _directory_sync_shell(root: Path, responses) -> WebDAVSync:
+        sync = _sync_shell(root)
+        sync._base_url = "https://dav.example.test"
+        sync._http = _RequestSession(responses)
+        sync.client = _NeverPullClient()
+        return sync
 
     def test_report_finalization_atomically_queues_maintenance_task(self):
         store = self._store()
@@ -172,6 +248,8 @@ class WebDAVReliabilityTests(unittest.TestCase):
 
             sync = _sync_shell(root)
             sync.client = _FakeClient(remote_database)
+            sync._base_url = "https://dav.example.test"
+            sync._http = _FakeDownloadSession(remote_database)
             sync._check_remote = lambda _remote: True
             sync._remote = lambda relative: relative
 
@@ -197,6 +275,8 @@ class WebDAVReliabilityTests(unittest.TestCase):
 
             sync = _sync_shell(root)
             sync.client = _FakeClient(remote_database)
+            sync._base_url = "https://dav.example.test"
+            sync._http = _FakeDownloadSession(remote_database)
             sync._check_remote = lambda _remote: True
             sync._remote = lambda relative: relative
 
@@ -213,6 +293,9 @@ class WebDAVReliabilityTests(unittest.TestCase):
 
             sync = _sync_shell(root)
             sync.client = _ConfigDownloadClient("<html>not config</html>")
+            sync._base_url = "https://dav.example.test"
+            sync._http = _FakeDownloadSession(root / "invalid-config-response")
+            (root / "invalid-config-response").write_text("<html>not config</html>", encoding="utf-8")
             sync._check_remote = lambda _remote: True
             sync._remote = lambda relative: relative
 
@@ -220,6 +303,88 @@ class WebDAVReliabilityTests(unittest.TestCase):
             self.assertFalse(result["configs/config.json"])
             self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
             self.assertEqual(list(config_path.parent.glob("*.download")), [])
+
+    def test_controlled_directory_download_never_uses_client_pull(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            listing = self._dav_directory_xml("data/history", [("seen.json", False, 2)])
+            sync = self._directory_sync_shell(
+                root,
+                [
+                    _StreamingResponse(207, listing),
+                    _StreamingResponse(200, b"{}", {"Content-Length": "2"}),
+                ],
+            )
+
+            downloaded = sync._download_directory_safely("data/history", root / "history")
+
+            self.assertEqual(downloaded, 2)
+            self.assertEqual((root / "history" / "seen.json").read_bytes(), b"{}")
+            self.assertEqual(sync._http.calls[0][0][0], "PROPFIND")
+            self.assertEqual(sync._http.calls[1][0][0], "GET")
+
+    def test_controlled_directory_download_rejects_traversal_before_writing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            listing = self._dav_directory_xml("data/history", [("%2e%2e", False, 4)])
+            sync = self._directory_sync_shell(root, [_StreamingResponse(207, listing)])
+            local_dir = root / "history"
+
+            with self.assertRaisesRegex(ValueError, "不安全|目录外"):
+                sync._download_directory_safely("data/history", local_dir)
+
+            self.assertFalse((root / "outside.txt").exists())
+            self.assertEqual(list(local_dir.iterdir()), [])
+
+    def test_controlled_directory_download_rejects_cross_platform_filename_collisions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            listing = self._dav_directory_xml(
+                "data/history",
+                [("State.json", False, 1), ("state.json", False, 1)],
+            )
+            sync = self._directory_sync_shell(root, [_StreamingResponse(207, listing)])
+
+            with self.assertRaisesRegex(ValueError, "重复目录项"):
+                sync._download_directory_safely("data/history", root / "history")
+
+    def test_controlled_directory_download_rejects_server_length_mismatch_without_replacing_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            local_dir = root / "history"
+            local_dir.mkdir()
+            target = local_dir / "state.json"
+            target.write_text("old", encoding="utf-8")
+            listing = self._dav_directory_xml("data/history", [("state.json", False, 5)])
+            sync = self._directory_sync_shell(
+                root,
+                [
+                    _StreamingResponse(207, listing),
+                    _StreamingResponse(200, b"new", {"Content-Length": "3"}),
+                ],
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "长度与 PROPFIND 声明不一致"):
+                sync._download_directory_safely("data/history", local_dir)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "old")
+            self.assertEqual(list(local_dir.glob("*.download")), [])
+
+    def test_controlled_directory_download_rejects_symlink_destination(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            local_dir = root / "history"
+            local_dir.mkdir()
+            outside = root / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
+            (local_dir / "state.json").symlink_to(outside)
+            listing = self._dav_directory_xml("data/history", [("state.json", False, 2)])
+            sync = self._directory_sync_shell(root, [_StreamingResponse(207, listing)])
+
+            with self.assertRaisesRegex(ValueError, "符号链接"):
+                sync._download_directory_safely("data/history", local_dir)
+
+            self.assertEqual(outside.read_text(encoding="utf-8"), "outside")
 
     def test_remote_root_and_base_url_reject_traversal_credentials_and_query_syntax(self):
         self.assertEqual(
