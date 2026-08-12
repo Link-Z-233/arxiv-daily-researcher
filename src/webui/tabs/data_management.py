@@ -300,8 +300,17 @@ def _do_sync(direction: str):
         )
 
         include_reports = st.session_state.get("webdav_sync_reports", False)
+        include_configs = st.session_state.get("webdav_sync_configs", True)
+        include_history = st.session_state.get("webdav_sync_history", True)
+        include_keywords = st.session_state.get("webdav_sync_keywords", True)
         with st.spinner(t("dm_webdav_syncing")):
-            result = client.sync_all(direction=direction, include_reports=include_reports)
+            result = client.sync_all(
+                direction=direction,
+                include_reports=include_reports,
+                include_configs=include_configs,
+                include_history=include_history,
+                include_keywords=include_keywords,
+            )
 
         if result["success"] == result["total"]:
             st.success(

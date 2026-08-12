@@ -6,10 +6,19 @@ WebDAV 同步模块
 """
 
 import logging
+import os
+import sqlite3
+import tempfile
 import time
-from pathlib import Path
-from typing import Dict, Optional
+from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+try:  # ``fcntl`` is unavailable on native Windows but WebDAV upload still works there.
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only on non-POSIX platforms
+    fcntl = None
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -66,6 +75,20 @@ class WebDAVSync:
             self._http.proxies = {"http": proxy_url, "https": proxy_url}
         self._http.auth = HTTPBasicAuth(username, password)
         self._base_url = url.rstrip("/")
+
+    def _data_dir(self) -> Path:
+        """Return the configured data directory when the worker config is available.
+
+        The intentionally thin WebUI image does not ship ``config.py``.  It can
+        still synchronize the standard mounted ``/app/data`` directory through
+        the fallback, while the worker honors a custom ``paths.data_dir``.
+        """
+        try:
+            from config import settings
+
+            return Path(settings.DATA_DIR)
+        except (ImportError, ModuleNotFoundError):
+            return self._project_root / "data"
 
     def _remote(self, rel_path: str) -> str:
         """将相对路径拼接到 remote_root 下，返回完整远程路径。"""
@@ -144,7 +167,12 @@ class WebDAVSync:
 
         return results
 
-    def upload_data(self, include_reports: bool = False) -> Dict[str, bool]:
+    def upload_data(
+        self,
+        include_reports: bool = False,
+        include_history: bool = True,
+        include_keywords: bool = True,
+    ) -> Dict[str, bool]:
         """
         上传数据文件到 WebDAV。
 
@@ -158,27 +186,33 @@ class WebDAVSync:
             Dict[str, bool]: 各目录上传结果
         """
         results = {}
-        data_dir = self._project_root / "data"
+        data_dir = self._data_dir()
 
-        # 上传 history 目录
+        # 上传 history 目录。日报 SQLite 交付账本属于同一历史状态，
+        # 会通过 _upload_daily_research_snapshot 一起上传。
         history_dir = data_dir / "history"
-        if history_dir.exists() and any(history_dir.iterdir()):
+        if include_history and history_dir.exists() and any(history_dir.iterdir()):
             results["data/history/"] = self._upload_directory(
                 history_dir, self._remote("data/history") + "/"
             )
-        else:
+        elif include_history:
             logger.info("data/history/ 为空或不存在，跳过")
             results["data/history/"] = True  # 空目录不算失败
 
         # 上传 keywords 目录
         keywords_dir = data_dir / "keywords"
-        if keywords_dir.exists() and any(keywords_dir.iterdir()):
+        if include_keywords and keywords_dir.exists() and any(keywords_dir.iterdir()):
             results["data/keywords/"] = self._upload_directory(
                 keywords_dir, self._remote("data/keywords") + "/"
             )
-        else:
+        elif include_keywords:
             logger.info("data/keywords/ 为空或不存在，跳过")
             results["data/keywords/"] = True
+
+        if include_history:
+            results["data/daily_research/daily_research.db"] = (
+                self._upload_daily_research_snapshot(data_dir)
+            )
 
         # 可选：上传报告
         if include_reports:
@@ -218,7 +252,12 @@ class WebDAVSync:
 
         return results
 
-    def download_data(self, include_reports: bool = False) -> Dict[str, bool]:
+    def download_data(
+        self,
+        include_reports: bool = False,
+        include_history: bool = True,
+        include_keywords: bool = True,
+    ) -> Dict[str, bool]:
         """
         从 WebDAV 下载数据文件到本地。
 
@@ -228,9 +267,13 @@ class WebDAVSync:
             Dict[str, bool]: 各目录下载结果
         """
         results = {}
-        data_dir = self._project_root / "data"
+        data_dir = self._data_dir()
 
-        dirs_to_download = ["history", "keywords"]
+        dirs_to_download = []
+        if include_history:
+            dirs_to_download.append("history")
+        if include_keywords:
+            dirs_to_download.append("keywords")
         if include_reports:
             dirs_to_download.append("reports")
 
@@ -251,15 +294,30 @@ class WebDAVSync:
                 results[f"data/{subdir}/"] = False
                 logger.error(f"下载 data/{subdir}/ 失败: {e}")
 
+        if include_history:
+            results["data/daily_research/daily_research.db"] = (
+                self._download_daily_research_snapshot(data_dir)
+            )
+
         return results
 
-    def sync_all(self, direction: str = "upload", include_reports: bool = False) -> Dict:
+    def sync_all(
+        self,
+        direction: str = "upload",
+        include_reports: bool = False,
+        include_configs: bool = True,
+        include_history: bool = True,
+        include_keywords: bool = True,
+    ) -> Dict:
         """
         执行完整同步。
 
         参数:
             direction: "upload" 或 "download"
             include_reports: 是否包含报告
+            include_configs: 是否同步 config.json
+            include_history: 是否同步历史和 daily_research SQLite 状态
+            include_keywords: 是否同步关键词数据
 
         返回:
             dict: 同步结果摘要
@@ -268,11 +326,27 @@ class WebDAVSync:
         results = {}
 
         if direction == "upload":
-            results.update(self.upload_configs())
-            results.update(self.upload_data(include_reports=include_reports))
+            if include_configs:
+                results.update(self.upload_configs())
+            results.update(
+                self.upload_data(
+                    include_reports=include_reports,
+                    include_history=include_history,
+                    include_keywords=include_keywords,
+                )
+            )
         elif direction == "download":
-            results.update(self.download_configs())
-            results.update(self.download_data(include_reports=include_reports))
+            if include_configs:
+                results.update(self.download_configs())
+            results.update(
+                self.download_data(
+                    include_reports=include_reports,
+                    include_history=include_history,
+                    include_keywords=include_keywords,
+                )
+            )
+        else:
+            raise ValueError(f"不支持的 WebDAV 同步方向: {direction}")
 
         elapsed = time.time() - start
         success_count = sum(1 for v in results.values() if v)
@@ -292,6 +366,182 @@ class WebDAVSync:
             f"耗时 {elapsed:.1f}s"
         )
         return summary
+
+    def _upload_daily_research_snapshot(self, data_dir: Path) -> bool:
+        """Upload a consistent SQLite backup instead of copying WAL files.
+
+        The daily delivery ledger contains the canonical version de-duplication,
+        analysis state and notification outbox.  Copying a live WAL database
+        directly can produce an unusable restore, so SQLite's backup API writes
+        a point-in-time standalone snapshot first.
+        """
+        database_path = data_dir / "daily_research" / "daily_research.db"
+        if not database_path.exists():
+            logger.info("data/daily_research/daily_research.db 不存在，跳过")
+            return True
+
+        temporary_path = None
+        source_conn = None
+        snapshot_conn = None
+        try:
+            database_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=database_path.parent,
+                prefix=".daily_research.",
+                suffix=".sqlite",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+
+            source_conn = sqlite3.connect(database_path)
+            snapshot_conn = sqlite3.connect(temporary_path)
+            source_conn.backup(snapshot_conn)
+            snapshot_conn.close()
+            snapshot_conn = None
+            source_conn.close()
+            source_conn = None
+
+            remote_file = self._remote("data/daily_research/daily_research.db")
+            self._ensure_remote_dir(self._remote("data/daily_research") + "/")
+            self.client.upload_file(remote_file, str(temporary_path))
+            logger.info("已上传一致性 SQLite 快照: data/daily_research/daily_research.db")
+            return True
+        except Exception as exc:
+            logger.error("上传 daily_research SQLite 快照失败: %s", exc)
+            return False
+        finally:
+            if snapshot_conn is not None:
+                snapshot_conn.close()
+            if source_conn is not None:
+                source_conn.close()
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("无法清理 SQLite 快照临时文件: %s", temporary_path)
+
+    @contextmanager
+    def _daily_research_restore_lock(self, data_dir: Path):
+        """Prevent a manual restore from replacing a database used by a run.
+
+        ``run_lock`` already holds this flock for the lifetime of a daily run.
+        Taking the same lock here makes a restore either wait-free and safe, or
+        fail clearly without touching the local database.
+        """
+        lock_path = data_dir / "run" / "daily_research.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("a+")
+        try:
+            if fcntl is None:
+                raise RuntimeError("当前平台无法安全检查每日研究锁，不能恢复 daily_research 数据库")
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError("每日研究任务正在运行，不能恢复 daily_research 数据库") from exc
+            yield
+        finally:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_file.close()
+
+    @staticmethod
+    def _validate_sqlite_database(database_path: Path) -> None:
+        """Raise when a downloaded SQLite snapshot is incomplete or corrupt."""
+        uri = f"file:{database_path}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as conn:
+            result = conn.execute("PRAGMA quick_check").fetchone()
+        if result is None or result[0] != "ok":
+            detail = result[0] if result else "no quick_check result"
+            raise RuntimeError(f"SQLite 完整性校验失败: {detail}")
+
+    @staticmethod
+    def _write_sqlite_backup(source_path: Path, target_path: Path) -> None:
+        """Write a standalone SQLite snapshot atomically via the backup API."""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = None
+        source_conn = None
+        snapshot_conn = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=target_path.parent,
+                prefix=f".{target_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+            source_conn = sqlite3.connect(source_path)
+            snapshot_conn = sqlite3.connect(temporary_path)
+            source_conn.backup(snapshot_conn)
+            snapshot_conn.close()
+            snapshot_conn = None
+            source_conn.close()
+            source_conn = None
+            os.replace(temporary_path, target_path)
+            temporary_path = None
+        finally:
+            if snapshot_conn is not None:
+                snapshot_conn.close()
+            if source_conn is not None:
+                source_conn.close()
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+    def _download_daily_research_snapshot(self, data_dir: Path) -> bool:
+        """Safely restore the durable daily ledger from a WebDAV snapshot.
+
+        The snapshot is downloaded to a temporary file, checked by SQLite, and
+        atomically installed only while the daily-run lock is free.  The prior
+        local database is preserved as ``*.before_webdav_restore`` so a manual
+        recovery cannot silently discard the newer local state.
+        """
+        remote_file = self._remote("data/daily_research/daily_research.db")
+        database_path = data_dir / "daily_research" / "daily_research.db"
+        backup_path = database_path.with_name(database_path.name + ".before_webdav_restore")
+        temporary_path = None
+        try:
+            if not self._check_remote(remote_file):
+                logger.info("远程 daily_research SQLite 快照不存在，跳过")
+                return True
+
+            with self._daily_research_restore_lock(data_dir):
+                database_path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(
+                    dir=database_path.parent,
+                    prefix=".daily_research.download.",
+                    suffix=".sqlite",
+                    delete=False,
+                ) as handle:
+                    temporary_path = Path(handle.name)
+
+                self.client.download_file(remote_file, str(temporary_path))
+                self._validate_sqlite_database(temporary_path)
+
+                if database_path.exists():
+                    self._write_sqlite_backup(database_path, backup_path)
+                os.replace(temporary_path, database_path)
+                temporary_path = None
+
+                # A WAL belonging to the old database can otherwise be replayed
+                # against the restored main database on its next open.
+                for sidecar in (
+                    database_path.with_name(database_path.name + "-wal"),
+                    database_path.with_name(database_path.name + "-shm"),
+                ):
+                    sidecar.unlink(missing_ok=True)
+
+            logger.info("已安全恢复 daily_research SQLite 快照")
+            return True
+        except Exception as exc:
+            logger.error("恢复 daily_research SQLite 快照失败: %s", exc)
+            return False
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("无法清理 SQLite 下载临时文件: %s", temporary_path)
 
     def _ensure_remote_dir(self, remote_dir: str):
         """确保远程目录存在，不存在则递归创建。"""
@@ -383,7 +633,7 @@ def create_sync_client(
         return None
 
 
-def sync_after_report(logger_instance=None):
+def sync_after_report(logger_instance=None) -> Optional[Dict[str, Any]]:
     """
     报告生成后的同步钩子。
     仅在 sync_mode 为 'after_report' 时执行。
@@ -392,27 +642,107 @@ def sync_after_report(logger_instance=None):
         from config import settings
 
         if not getattr(settings, "WEBDAV_ENABLED", False):
-            return
+            return None
 
         sync_mode = getattr(settings, "WEBDAV_SYNC_MODE", "manual")
         if sync_mode != "after_report":
-            return
+            return None
 
         log = logger_instance or logger
 
         client = create_sync_client()
         if not client:
-            return
+            raise RuntimeError("WebDAV 已启用但 URL、用户名或密码不完整")
 
         include_reports = getattr(settings, "WEBDAV_SYNC_REPORTS", False)
+        include_configs = getattr(settings, "WEBDAV_SYNC_CONFIGS", True)
+        include_history = getattr(settings, "WEBDAV_SYNC_HISTORY", True)
+        include_keywords = getattr(settings, "WEBDAV_SYNC_KEYWORDS", True)
         log.info("[WebDAV] 报告后自动同步开始...")
-        result = client.sync_all(direction="upload", include_reports=include_reports)
+        result = client.sync_all(
+            direction="upload",
+            include_reports=include_reports,
+            include_configs=include_configs,
+            include_history=include_history,
+            include_keywords=include_keywords,
+        )
+        failed = [path for path, succeeded in result["results"].items() if not succeeded]
+        if failed:
+            raise RuntimeError("WebDAV 同步不完整: " + ", ".join(failed))
         log.info(
             f"[WebDAV] 同步完成: {result['success']}/{result['total']} 成功，"
             f"耗时 {result['elapsed_seconds']}s"
         )
+        return result
     except Exception as e:
         if logger_instance:
             logger_instance.warning(f"[WebDAV] 报告后同步失败: {e}")
         else:
             logger.warning(f"[WebDAV] 报告后同步失败: {e}")
+        raise
+
+
+def after_report_sync_maintenance_entry(run_id: str) -> Optional[Dict[str, Any]]:
+    """Build the durable task that must be committed with report delivery."""
+    from config import settings
+
+    if not getattr(settings, "WEBDAV_ENABLED", False):
+        return None
+    if getattr(settings, "WEBDAV_SYNC_MODE", "manual") != "after_report":
+        return None
+    return {
+        "task_key": f"webdav_after_report:{run_id}",
+        "payload": {"run_id": run_id, "task_type": "webdav_after_report"},
+    }
+
+
+def enqueue_after_report_sync(store, run_id: str) -> bool:
+    """Compatibility helper for callers that are not in report finalization."""
+    entry = after_report_sync_maintenance_entry(run_id)
+    if entry is None:
+        return False
+    return store.enqueue_maintenance_task(entry["task_key"], entry["payload"])
+
+
+def deliver_pending_after_report_syncs(store, logger_instance=None, limit: int = 10) -> Dict[str, int]:
+    """Run due WebDAV upload tasks without affecting daily paper delivery state."""
+    from config import settings
+
+    log = logger_instance or logger
+    # A task was created only when this mode was enabled.  If the user later
+    # disables WebDAV or switches modes, leave it pending rather than treating
+    # an intentional no-op as a successful upload.
+    if not getattr(settings, "WEBDAV_ENABLED", False) or getattr(
+        settings, "WEBDAV_SYNC_MODE", "manual"
+    ) != "after_report":
+        return {"claimed": 0, "completed": 0, "deferred": 0}
+
+    rows = store.claim_due_maintenance_tasks(prefix="webdav_after_report:", limit=limit)
+    summary = {"claimed": len(rows), "completed": 0, "deferred": 0}
+    max_attempts = max(1, int(getattr(settings, "RETRY_MAX_ATTEMPTS", 3)))
+    min_wait = max(1, int(getattr(settings, "RETRY_MIN_WAIT", 2)))
+    max_wait = max(min_wait, int(getattr(settings, "RETRY_MAX_WAIT", 30)))
+
+    for row in rows:
+        task_key = row["task_key"]
+        try:
+            sync_after_report(log)
+        except Exception as exc:
+            # Keep retrying across future daily invocations.  The per-attempt
+            # delay is capped, so a transient outage never strands the report
+            # indefinitely or blocks the next paper scan.
+            retry_exponent = min(max(0, row["attempt_count"] - 1), max_attempts - 1)
+            retry_after = min(min_wait * (2**retry_exponent), max_wait)
+            store.reschedule_maintenance_task(task_key, str(exc), retry_after)
+            log.error(
+                "[WebDAV] 同步任务失败，已保留待补发 (%s, %ss 后重试): %s",
+                task_key,
+                retry_after,
+                exc,
+            )
+            summary["deferred"] += 1
+        else:
+            store.mark_maintenance_task_completed(task_key)
+            summary["completed"] += 1
+
+    return summary

@@ -130,6 +130,26 @@ class DailyResearchStore:
                 "ON notification_outbox(status, next_attempt_at)"
             )
 
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS maintenance_outbox (
+                    task_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT NOT NULL,
+                    claimed_at TEXT,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_maintenance_outbox_pending "
+                "ON maintenance_outbox(status, next_attempt_at)"
+            )
+
     @staticmethod
     def _migrate_paper_identity(conn):
         """Add identity columns to databases created by the first persistence patch."""
@@ -235,17 +255,20 @@ class DailyResearchStore:
         report_paths: Dict[str, Any],
         delivered_papers_by_source: Dict[str, list[Dict[str, Any]]],
         notification_entries: Optional[list[Dict[str, Any]]] = None,
+        maintenance_entries: Optional[list[Dict[str, Any]]] = None,
     ) -> None:
-        """Atomically record a completed report and its notification outbox rows.
+        """Atomically record report delivery and all follow-up outbox rows.
 
         A report is considered delivered only after every included paper has
         completed its required analysis.  The same transaction records paper
-        delivery, completes the run and queues one notification per channel.
-        This removes the crash window where a paper was hidden from future scans
-        but its daily notification had not yet been persisted.
+        delivery, completes the run, queues one notification per channel, and
+        queues maintenance work such as the post-report WebDAV upload.  This
+        removes crash windows where a paper was hidden from future scans but a
+        required follow-up task had not yet been persisted.
         """
         now = datetime.now().isoformat()
         entries = notification_entries or []
+        maintenance = maintenance_entries or []
         normalized_paths = {key: str(value) for key, value in report_paths.items()}
 
         with self._lock, self._connect() as conn:
@@ -357,6 +380,26 @@ class DailyResearchStore:
                         now,
                         now,
                     ),
+                )
+
+            for entry in maintenance:
+                try:
+                    task_key = entry["task_key"]
+                    payload = entry["payload"]
+                except KeyError as exc:
+                    raise ValueError(f"无效维护 outbox 条目: {entry!r}") from exc
+                if not isinstance(task_key, str) or not task_key.strip():
+                    raise ValueError(f"维护 outbox task_key 无效: {task_key!r}")
+                conn.execute(
+                    """
+                    INSERT INTO maintenance_outbox(
+                        task_key, payload_json, status, attempt_count,
+                        next_attempt_at, created_at
+                    )
+                    VALUES (?, ?, 'pending', 0, ?, ?)
+                    ON CONFLICT(task_key) DO NOTHING
+                    """,
+                    (task_key, json.dumps(payload, ensure_ascii=False), now, now),
                 )
 
             conn.execute(
@@ -548,6 +591,111 @@ class DailyResearchStore:
                     (event_type,),
                 ).fetchone()
             return int(row["count"])
+
+    # ------------------------------------------------------------------
+    # Durable post-report maintenance tasks (currently WebDAV upload)
+    # ------------------------------------------------------------------
+
+    def enqueue_maintenance_task(self, task_key: str, payload: Dict[str, Any]) -> bool:
+        """Persist an idempotent post-report task for restart-safe execution."""
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO maintenance_outbox(
+                    task_key, payload_json, status, attempt_count,
+                    next_attempt_at, created_at
+                )
+                VALUES (?, ?, 'pending', 0, ?, ?)
+                ON CONFLICT(task_key) DO NOTHING
+                """,
+                (task_key, json.dumps(payload, ensure_ascii=False), now, now),
+            )
+            return cursor.rowcount == 1
+
+    def claim_due_maintenance_tasks(
+        self, prefix: Optional[str] = None, limit: int = 20, stale_claim_seconds: int = 900
+    ) -> list[sqlite3.Row]:
+        """Claim due maintenance tasks; stale in-progress claims are recovered."""
+        now_dt = datetime.now()
+        now = now_dt.isoformat()
+        stale_before = (now_dt - timedelta(seconds=max(1, stale_claim_seconds))).isoformat()
+        max_rows = max(1, int(limit))
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE maintenance_outbox
+                SET status = 'pending', claimed_at = NULL, next_attempt_at = ?
+                WHERE status = 'running' AND claimed_at IS NOT NULL AND claimed_at <= ?
+                """,
+                (now, stale_before),
+            )
+            clauses = ["status = 'pending'", "next_attempt_at <= ?"]
+            params: list[Any] = [now]
+            if prefix is not None:
+                clauses.append("task_key LIKE ?")
+                params.append(f"{prefix}%")
+            params.append(max_rows)
+            query = (
+                "SELECT task_key FROM maintenance_outbox WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY created_at ASC, task_key ASC LIMIT ?"
+            )
+            task_keys = [row["task_key"] for row in conn.execute(query, params).fetchall()]
+            claimed = []
+            for task_key in task_keys:
+                cursor = conn.execute(
+                    """
+                    UPDATE maintenance_outbox
+                    SET status = 'running', claimed_at = ?, attempt_count = attempt_count + 1
+                    WHERE task_key = ? AND status = 'pending'
+                    """,
+                    (now, task_key),
+                )
+                if cursor.rowcount:
+                    claimed.append(
+                        conn.execute(
+                            "SELECT * FROM maintenance_outbox WHERE task_key = ?", (task_key,)
+                        ).fetchone()
+                    )
+            return claimed
+
+    def mark_maintenance_task_completed(self, task_key: str) -> None:
+        """Mark a claimed maintenance task complete."""
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE maintenance_outbox
+                SET status = 'completed', completed_at = ?, claimed_at = NULL, last_error = NULL
+                WHERE task_key = ?
+                """,
+                (now, task_key),
+            )
+
+    def reschedule_maintenance_task(
+        self, task_key: str, error: str, retry_after_seconds: int
+    ) -> None:
+        """Preserve a failed maintenance task for a later attempt."""
+        next_attempt = (
+            datetime.now() + timedelta(seconds=max(1, retry_after_seconds))
+        ).isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE maintenance_outbox
+                SET status = 'pending', claimed_at = NULL, next_attempt_at = ?, last_error = ?
+                WHERE task_key = ?
+                """,
+                (next_attempt, error[:4000], task_key),
+            )
+
+    def get_maintenance_task(self, task_key: str) -> Optional[sqlite3.Row]:
+        """Return maintenance task state for diagnostics/tests."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM maintenance_outbox WHERE task_key = ?", (task_key,)
+            ).fetchone()
 
     def get_paper_record(self, source: str, paper_id: str) -> Optional[sqlite3.Row]:
         with self._connect() as conn:

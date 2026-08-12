@@ -34,6 +34,10 @@ from sources import SearchAgent, PaperMetadata, ArxivFetchError
 from report.daily import Reporter
 from notifications import NotifierAgent, RunResult
 from utils.daily_research_store import DailyResearchStore
+from utils.webdav_sync import (
+    after_report_sync_maintenance_entry,
+    deliver_pending_after_report_syncs,
+)
 
 logger = setup_logger("DailyResearch")
 
@@ -480,6 +484,20 @@ class DailyResearchPipeline:
                 store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
                 run_id = store.start_run(0)
                 logger.info(f"论文级持久化已启用: {settings.DAILY_RESEARCH_DB_PATH}")
+
+                # WebDAV is non-critical post-report maintenance.  Retry old
+                # uploads before the long scan without letting a remote outage
+                # affect this run's paper identity or delivery state.
+                try:
+                    sync_summary = deliver_pending_after_report_syncs(store, logger)
+                    if sync_summary["claimed"]:
+                        logger.info(
+                            "已补发待处理 WebDAV 同步: 完成 %s，延后 %s",
+                            sync_summary["completed"],
+                            sync_summary["deferred"],
+                        )
+                except Exception as exc:
+                    logger.warning("待补发 WebDAV 同步检查失败，将继续生成日报: %s", exc)
 
             # Notification retries are independent from the current paper scan.
             # Do this before processing so an old failed webhook is not delayed
@@ -963,6 +981,7 @@ class DailyResearchPipeline:
                         # reopen already analyzed papers.  A normal provider
                         # delivery failure still has its per-channel outbox row.
                         logger.error("无法建立通知 outbox 条目，日报仍将完成: %s", exc)
+                maintenance_entry = after_report_sync_maintenance_entry(run_id)
                 store.finalize_report_delivery(
                     run_id,
                     report_paths,
@@ -970,6 +989,7 @@ class DailyResearchPipeline:
                         scored_papers_by_source, analyses_by_source
                     ),
                     notification_entries,
+                    [maintenance_entry] if maintenance_entry is not None else [],
                 )
                 report_delivery_committed = True
                 try:
@@ -984,6 +1004,20 @@ class DailyResearchPipeline:
                     # committed the authoritative delivery state above, and is
                     # checked on the next scan to prevent duplicate reports.
                     logger.error("兼容历史文件同步失败，SQLite 仍会防止重复日报: %s", exc)
+
+                # Report delivery has already committed.  A WebDAV failure now
+                # only reschedules its own outbox row and can never make this
+                # paper version appear as new on a later day.
+                try:
+                    sync_summary = deliver_pending_after_report_syncs(store, logger)
+                    if sync_summary["claimed"]:
+                        logger.info(
+                            "报告后 WebDAV 同步: 完成 %s，待补发 %s",
+                            sync_summary["completed"],
+                            sync_summary["deferred"],
+                        )
+                except Exception as exc:
+                    logger.error("报告后 WebDAV 同步调度异常，已保留待补发状态: %s", exc)
             else:
                 _mark_completed_papers(
                     search_agent, store, run_id, scored_papers_by_source, analyses_by_source
