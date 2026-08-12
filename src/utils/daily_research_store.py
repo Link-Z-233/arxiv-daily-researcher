@@ -21,6 +21,17 @@ if TYPE_CHECKING:
 class DailyResearchStore:
     """Small SQLite store for daily research runs and paper state."""
 
+    # These values come from optional, best-effort enrichment services.  They
+    # must not disappear merely because a later retry happens while the
+    # enrichment service is rate-limited or temporarily unavailable.  Core
+    # bibliographic metadata deliberately remains fresh on every scan.
+    _OPTIONAL_ENRICHMENT_FIELDS = (
+        "semantic_scholar_tldr",
+        "arxiv_id",
+        "arxiv_url",
+        "pdf_url",
+    )
+
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -786,10 +797,44 @@ class DailyResearchStore:
                 (source, canonical_id),
             ).fetchall()
 
+    @classmethod
+    def _restore_optional_enrichment(
+        cls, paper: "PaperMetadata", persisted_paper_json: Optional[str]
+    ) -> None:
+        """Fill absent best-effort enrichment fields from a prior attempt.
+
+        Semantic Scholar is intentionally non-blocking for a daily run.  A
+        transient 429/network failure on a retry must therefore not erase a
+        TLDR or arXiv PDF URL that was already obtained and persisted for the
+        exact same paper identity.  Invalid legacy JSON is ignored so it
+        cannot turn a recovery attempt into a failed report.
+        """
+        if not persisted_paper_json:
+            return
+        try:
+            persisted = json.loads(persisted_paper_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+        if not isinstance(persisted, dict):
+            return
+
+        for field in cls._OPTIONAL_ENRICHMENT_FIELDS:
+            current_value = getattr(paper, field, None)
+            persisted_value = persisted.get(field)
+            if not current_value and persisted_value:
+                setattr(paper, field, persisted_value)
+
     def upsert_paper_seen(self, run_id: str, source: str, paper: "PaperMetadata"):
         now = datetime.now().isoformat()
-        paper_json = json.dumps(paper.to_dict(), ensure_ascii=False)
         with self._lock, self._connect() as conn:
+            existing = conn.execute(
+                "SELECT paper_json FROM daily_papers WHERE source = ? AND paper_id = ?",
+                (source, paper.paper_id),
+            ).fetchone()
+            if existing is not None:
+                self._restore_optional_enrichment(paper, existing["paper_json"])
+
+            paper_json = json.dumps(paper.to_dict(), ensure_ascii=False)
             conn.execute(
                 """
                 INSERT INTO daily_papers(
@@ -980,6 +1025,12 @@ class DailyResearchStore:
             "not_required",
         ):
             return None
+
+        # Callers can hydrate a score directly (without having first called
+        # upsert_paper_seen in this process), so restore the optional fields
+        # here as well.  This keeps report rendering and deep-analysis retry
+        # decisions stable across process restarts.
+        self._restore_optional_enrichment(paper, record["paper_json"])
 
         from agents.analysis_agent import WeightedScoreResponse
 

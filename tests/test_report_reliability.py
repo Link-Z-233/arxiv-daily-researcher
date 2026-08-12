@@ -106,6 +106,24 @@ class ReportReliabilityTests(unittest.TestCase):
             self.assertEqual(content.count("paper-id: 2501.99999v1"), 1)
             self.assertIn("其他论文列表", content)
 
+    def test_html_report_renders_semantic_scholar_tldr(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reporter = Reporter()
+            reporter.report_base_dir = Path(temp_dir)
+            paper = _scored_paper("2501.12345v1", 9, True)
+            paper["paper_metadata"].semantic_scholar_tldr = "External <TLDR>"
+
+            with patch.object(settings, "ENABLE_MARKDOWN_REPORT", False), patch.object(
+                settings, "ENABLE_HTML_REPORT", True
+            ):
+                paths = reporter.generate_reports_by_source(
+                    {"arxiv": [paper]}, {"keyword": 1.0}
+                )
+
+            content = paths["arxiv_html"].read_text(encoding="utf-8")
+            self.assertIn("Semantic Scholar TL;DR:", content)
+            self.assertIn("External &lt;TLDR&gt;", content)
+
     def test_report_path_validation_rejects_missing_or_empty_enabled_outputs(self):
         paper = _scored_paper("2501.12345v1", 9, True)
         papers = {"arxiv": [paper]}

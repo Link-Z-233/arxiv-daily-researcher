@@ -211,7 +211,7 @@ class TldrSemanticScholarRenderer(BaseModuleRenderer):
 
         if paper_meta and hasattr(paper_meta, 'semantic_scholar_tldr'):
             tldr = paper_meta.semantic_scholar_tldr
-        elif 'semantic_scholar_tldr' in data:
+        if not tldr:
             tldr = data.get('semantic_scholar_tldr')
 
         if not tldr:

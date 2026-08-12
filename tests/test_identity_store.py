@@ -155,6 +155,49 @@ class IdentityStoreTests(unittest.TestCase):
             hydrated = store.hydrate_analysis(store.get_paper_record("arxiv", paper.paper_id))
             self.assertEqual(hydrated, {"summary": "analysis"})
 
+    def test_retry_preserves_optional_semantic_scholar_enrichment(self):
+        """A transient S2 failure must not erase a TLDR from a retried paper."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            first_run = store.start_run(1)
+            first = PaperMetadata(
+                paper_id="10.9999/test.enriched",
+                title="Journal paper",
+                authors=["Author"],
+                abstract="abstract",
+                published_date=datetime.now(timezone.utc),
+                url="https://doi.org/10.9999/test.enriched",
+                source="prl",
+                doi="10.9999/test.enriched",
+                semantic_scholar_tldr="Persisted Semantic Scholar TLDR",
+                arxiv_id="2501.12345v1",
+                arxiv_url="https://arxiv.org/abs/2501.12345v1",
+                pdf_url="https://arxiv.org/pdf/2501.12345v1.pdf",
+            )
+            store.upsert_paper_seen(first_run, "prl", first)
+
+            # This models a restart where OpenAlex succeeds but Semantic
+            # Scholar is temporarily unavailable and returns no enrichment.
+            retry = PaperMetadata(
+                paper_id=first.paper_id,
+                title=first.title,
+                authors=first.authors,
+                abstract=first.abstract,
+                published_date=first.published_date,
+                url=first.url,
+                source="prl",
+                doi=first.doi,
+            )
+            retry_run = store.start_run(1)
+            store.upsert_paper_seen(retry_run, "prl", retry)
+
+            self.assertEqual(retry.semantic_scholar_tldr, first.semantic_scholar_tldr)
+            self.assertEqual(retry.arxiv_id, first.arxiv_id)
+            self.assertEqual(retry.pdf_url, first.pdf_url)
+            record = store.get_paper_record("prl", retry.paper_id)
+            persisted = json.loads(record["paper_json"])
+            self.assertEqual(persisted["semantic_scholar_tldr"], first.semantic_scholar_tldr)
+
     def test_finalization_atomically_records_delivery_outbox_and_revision_date(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "daily.db")

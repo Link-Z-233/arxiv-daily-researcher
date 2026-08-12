@@ -653,6 +653,16 @@ class Reporter:
                 )
 
             # TLDR
+            semantic_scholar_tldr = (
+                getattr(paper_meta, "semantic_scholar_tldr", None)
+                if paper_meta is not None
+                else paper.get("semantic_scholar_tldr", "")
+            )
+            if semantic_scholar_tldr:
+                parts.append(
+                    '<div class="tldr"><strong>Semantic Scholar TL;DR:</strong> '
+                    f"{self._hm(semantic_scholar_tldr)}</div>"
+                )
             if sr.tldr and sr.tldr != "评分失败，无法生成摘要":
                 parts.append(f'<div class="tldr"><strong>TL;DR:</strong> {self._hm(sr.tldr)}</div>')
 
