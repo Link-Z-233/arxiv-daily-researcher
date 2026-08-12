@@ -163,6 +163,16 @@ class Reporter:
             display_name = self.get_source_display_name(source)
             analyses = analyses_by_source.get(source, [])
             has_deep_analysis = len(analyses) > 0
+            all_paper_count = len(papers)
+            qualified_count = sum(
+                1 for paper in papers if paper["score_response"].is_qualified
+            )
+            report_papers = (
+                papers
+                if settings.INCLUDE_ALL_IN_REPORT
+                else [paper for paper in papers if paper["score_response"].is_qualified]
+            )
+            qualified_only = not settings.INCLUDE_ALL_IN_REPORT
 
             # Markdown 报告（如果启用）
             if settings.ENABLE_MARKDOWN_REPORT:
@@ -176,7 +186,10 @@ class Reporter:
                         filepath=filepath,
                         source=source,
                         display_name=display_name,
-                        papers=papers,
+                        papers=report_papers,
+                        all_paper_count=all_paper_count,
+                        qualified_count=qualified_count,
+                        qualified_only=qualified_only,
                         keywords_dict=keywords_dict,
                         analyses=analyses,
                         has_deep_analysis=has_deep_analysis,
@@ -203,7 +216,10 @@ class Reporter:
                         filepath=html_filepath,
                         source=source,
                         display_name=display_name,
-                        papers=papers,
+                        papers=report_papers,
+                        all_paper_count=all_paper_count,
+                        qualified_count=qualified_count,
+                        qualified_only=qualified_only,
                         keywords_dict=keywords_dict,
                         analyses=analyses,
                         has_deep_analysis=has_deep_analysis,
@@ -227,6 +243,9 @@ class Reporter:
         keywords_dict: Dict[str, float],
         analyses: List[Dict[str, Any]],
         has_deep_analysis: bool,
+        all_paper_count: Optional[int] = None,
+        qualified_count: Optional[int] = None,
+        qualified_only: bool = False,
         token_usage: Optional[Dict[str, Any]] = None,
     ) -> Path:
         """生成单个数据源的报告"""
@@ -234,8 +253,10 @@ class Reporter:
         today = datetime.now().strftime("%Y-%m-%d")
 
         # 计算统计信息
-        total_papers = len(papers)
-        qualified_count = sum(1 for p in papers if p["score_response"].is_qualified)
+        total_papers = all_paper_count if all_paper_count is not None else len(papers)
+        if qualified_count is None:
+            qualified_count = sum(1 for p in papers if p["score_response"].is_qualified)
+        displayed_count = len(papers)
         analyzed_count = len(analyses)
 
         total_weight = sum(keywords_dict.values())
@@ -257,6 +278,11 @@ class Reporter:
         lines.append("")
         lines.append(f"> 生成时间: {timestamp}")
         lines.append(f"> 数据源: {display_name}")
+        if qualified_only:
+            lines.append(
+                f"> 显示范围: 仅及格论文（{displayed_count}/{total_papers} 篇）；"
+                "其余论文已完成评分并归档，不会在后续日报重复出现。"
+            )
         lines.append("")
 
         # 数据源说明
@@ -272,7 +298,12 @@ class Reporter:
         if layout.get("show_stats_section", True):
             lines.extend(
                 self._generate_stats_section(
-                    total_papers, qualified_count, analyzed_count, has_deep_analysis
+                    total_papers,
+                    qualified_count,
+                    analyzed_count,
+                    has_deep_analysis,
+                    displayed_count=displayed_count,
+                    qualified_only=qualified_only,
                 )
             )
 
@@ -290,6 +321,12 @@ class Reporter:
                     paper, keywords_dict, analyses, idx, is_qualified_section=True
                 )
                 lines.extend(paper_lines)
+
+        if not sorted_papers and qualified_only:
+            lines.append("## 📋 推荐结果")
+            lines.append("")
+            lines.append("本次没有达到通过分数的论文；全部候选论文均已完成评分与归档。")
+            lines.append("")
 
         # ========== 所有论文详细信息 ==========
         remaining_papers = (
@@ -387,7 +424,13 @@ class Reporter:
         return lines
 
     def _generate_stats_section(
-        self, total_papers: int, qualified_count: int, analyzed_count: int, has_deep_analysis: bool
+        self,
+        total_papers: int,
+        qualified_count: int,
+        analyzed_count: int,
+        has_deep_analysis: bool,
+        displayed_count: Optional[int] = None,
+        qualified_only: bool = False,
     ) -> List[str]:
         """生成统计汇总部分"""
         lines = []
@@ -402,6 +445,8 @@ class Reporter:
             lines.append(f"- **及格论文**: {qualified_count} 篇")
         if has_deep_analysis:
             lines.append(f"- **深度分析**: {analyzed_count} 篇")
+        if qualified_only:
+            lines.append(f"- **报告展示**: {displayed_count or 0} 篇（仅及格论文）")
         lines.append("")
         lines.append("---")
         lines.append("")
@@ -534,6 +579,9 @@ class Reporter:
         keywords_dict: Dict[str, float],
         analyses: List[Dict[str, Any]],
         has_deep_analysis: bool,
+        all_paper_count: Optional[int] = None,
+        qualified_count: Optional[int] = None,
+        qualified_only: bool = False,
         token_usage: Optional[Dict[str, Any]] = None,
     ) -> Path:
         """生成 HTML 格式报告"""
@@ -543,8 +591,10 @@ class Reporter:
         today = datetime.now().strftime("%Y-%m-%d")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        total_papers = len(papers)
-        qualified_count = sum(1 for p in papers if p["score_response"].is_qualified)
+        total_papers = all_paper_count if all_paper_count is not None else len(papers)
+        if qualified_count is None:
+            qualified_count = sum(1 for p in papers if p["score_response"].is_qualified)
+        displayed_count = len(papers)
         analyzed_count = len(analyses)
 
         total_weight = sum(keywords_dict.values())
@@ -588,6 +638,11 @@ class Reporter:
         parts.append(
             f'<p class="meta">Generated: {h(timestamp)} | Passing score: {passing_score:.1f}</p>'
         )
+        if qualified_only:
+            parts.append(
+                '<p class="meta">Showing qualified papers only: '
+                f"{displayed_count}/{total_papers}. Other papers were scored and archived to avoid repeats.</p>"
+            )
 
         # 统计栏
         parts.append('<div class="stats-bar">')
@@ -609,6 +664,10 @@ class Reporter:
 
         # 论文卡片
         parts.append("<h2>Papers</h2>")
+        if not sorted_papers and qualified_only:
+            parts.append(
+                '<p class="meta">No papers met the passing score. All candidates were still scored and archived.</p>'
+            )
         for idx, paper in enumerate(sorted_papers, 1):
             sr = paper["score_response"]
             is_qual = sr.is_qualified

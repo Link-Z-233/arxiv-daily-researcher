@@ -124,6 +124,47 @@ class ReportReliabilityTests(unittest.TestCase):
             self.assertIn("Semantic Scholar TL;DR:", content)
             self.assertIn("External &lt;TLDR&gt;", content)
 
+    def test_qualified_only_reports_hide_failed_papers_but_keep_full_counts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reporter = Reporter()
+            reporter.report_base_dir = Path(temp_dir)
+            qualified = _scored_paper("2501.12345v1", 9, True)
+            unqualified = _scored_paper("2501.99999v1", 1, False)
+
+            with patch.object(settings, "INCLUDE_ALL_IN_REPORT", False), patch.object(
+                settings, "ENABLE_MARKDOWN_REPORT", True
+            ), patch.object(settings, "ENABLE_HTML_REPORT", True):
+                paths = reporter.generate_reports_by_source(
+                    {"arxiv": [qualified, unqualified]}, {"keyword": 1.0}
+                )
+
+            markdown = paths["arxiv"].read_text(encoding="utf-8")
+            html = paths["arxiv_html"].read_text(encoding="utf-8")
+            self.assertIn("Title 2501.12345v1", markdown)
+            self.assertNotIn("Title 2501.99999v1", markdown)
+            self.assertIn("仅及格论文（1/2 篇）", markdown)
+            self.assertIn("总抓取**: 2 篇", markdown)
+            self.assertIn("Title 2501.12345v1", html)
+            self.assertNotIn("Title 2501.99999v1", html)
+            self.assertIn("Showing qualified papers only: 1/2", html)
+
+    def test_qualified_only_reports_are_emitted_when_nothing_passes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reporter = Reporter()
+            reporter.report_base_dir = Path(temp_dir)
+            unqualified = _scored_paper("2501.99999v1", 1, False)
+
+            with patch.object(settings, "INCLUDE_ALL_IN_REPORT", False), patch.object(
+                settings, "ENABLE_MARKDOWN_REPORT", True
+            ), patch.object(settings, "ENABLE_HTML_REPORT", False):
+                paths = reporter.generate_reports_by_source(
+                    {"arxiv": [unqualified]}, {"keyword": 1.0}
+                )
+
+            content = paths["arxiv"].read_text(encoding="utf-8")
+            self.assertIn("本次没有达到通过分数的论文", content)
+            self.assertNotIn("Title 2501.99999v1", content)
+
     def test_report_path_validation_rejects_missing_or_empty_enabled_outputs(self):
         paper = _scored_paper("2501.12345v1", 9, True)
         papers = {"arxiv": [paper]}
