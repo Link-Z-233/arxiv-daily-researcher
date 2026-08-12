@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from pathlib import Path
+from typing import Optional
 
 # 尝试从配置中导入settings，以获取绝对路径
 # 如果导入失败（比如单独测试这个文件时），则回退到当前目录
@@ -25,6 +26,14 @@ def _get_log_config():
         return "time", 30
 
 
+def _add_console_handler(logger: logging.Logger, formatter: logging.Formatter) -> None:
+    """Attach stdout logging before attempting optional file logging."""
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+    logger.addHandler(console_handler)
+
+
 def setup_logger(name: str = "ArxivResearcher"):
     """
     配置并返回一个具有控制台和文件输出的Logger实例。
@@ -43,62 +52,56 @@ def setup_logger(name: str = "ArxivResearcher"):
           - "size": 按大小轮转，单个文件最大5MB，保留3个备份
         - 日志格式包含时间、级别、模块名和消息内容
     """
-    # 1. 确保日志目录存在
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 2. 定义日志文件路径
-    log_file_path = LOG_DIR / "system.log"
-
-    # 3. 创建Logger对象
+    # 1. 创建Logger对象
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
+    logger.propagate = False
 
     # 防止重复添加Handler（Jupyter或多次调用时稀有问题）
     if logger.handlers:
         return logger
 
-    # 4. 定义日志格式
+    # 2. 定义日志格式
     # 格式：[时间] [日志级别] [模块名] - 消息
     formatter = logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)-15s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # 5. Handler: 控制台 (StreamHandler)
-    # 指向标准输出（stdout）
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.INFO)
-    logger.addHandler(console_handler)
+    # 3. 控制台日志必须始终可用；文件日志只是附加能力。
+    _add_console_handler(logger, formatter)
 
-    # 6. Handler: 文件（支持按时间或按大小轮转）
+    # 4. 文件日志（支持按时间或按大小轮转）。容器以 root 写入
+    # 挂载目录后，宿主用户可能无法再打开 system.log；这不能导致
+    # 日报流程在模块导入阶段直接失败。
     rotation_type, keep_days = _get_log_config()
-
-    if rotation_type == "time":
-        # 按天轮转，保留 keep_days 天的日志
-        file_handler = TimedRotatingFileHandler(
-            log_file_path,
-            when="midnight",
-            backupCount=keep_days,
-            encoding="utf-8",
-        )
-        file_handler.suffix = "%Y-%m-%d"
-    else:
-        # 按大小轮转：单个日志最大5MB，最多保留3个备份
-        file_handler = RotatingFileHandler(
-            log_file_path,
-            maxBytes=5 * 1024 * 1024,
-            backupCount=3,
-            encoding="utf-8",
-        )
-
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.INFO)
-    logger.addHandler(file_handler)
+    log_file_path = LOG_DIR / "system.log"
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        if rotation_type == "time":
+            file_handler = TimedRotatingFileHandler(
+                log_file_path,
+                when="midnight",
+                backupCount=keep_days,
+                encoding="utf-8",
+            )
+            file_handler.suffix = "%Y-%m-%d"
+        else:
+            file_handler = RotatingFileHandler(
+                log_file_path,
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.INFO)
+        logger.addHandler(file_handler)
+    except OSError as exc:
+        logger.warning("无法写入系统日志 %s，已降级为仅控制台日志: %s", log_file_path, exc)
 
     return logger
 
 
-def setup_run_log(mode: str = "daily_research") -> Path:
+def setup_run_log(mode: str = "daily_research") -> Optional[Path]:
     """
     创建一次运行专用的日志文件，并为根 logger 添加对应的 FileHandler。
 
@@ -107,10 +110,8 @@ def setup_run_log(mode: str = "daily_research") -> Path:
       - trend_research  → logs/trend_YYYYMMDD_HHMMSS.log
 
     返回:
-        Path: 日志文件路径
+        日志文件路径；不可写时返回 None。
     """
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-
     prefix_map = {
         "daily_research": "daily",
         "trend_research": "trend",
@@ -124,14 +125,21 @@ def setup_run_log(mode: str = "daily_research") -> Path:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    handler = logging.FileHandler(log_file, encoding="utf-8")
-    handler.setFormatter(formatter)
-    handler.setLevel(logging.INFO)
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler.setFormatter(formatter)
+        handler.setLevel(logging.INFO)
 
-    # 添加到根 logger，这样所有子 logger 的输出都会写入此文件
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    root.addHandler(handler)
+        # 添加到根 logger，这样所有子 logger 的输出都会写入此文件
+        root = logging.getLogger()
+        root.setLevel(logging.INFO)
+        root.addHandler(handler)
+    except OSError as exc:
+        logging.getLogger("Main").warning(
+            "无法创建本次运行日志 %s，已继续执行并仅输出到控制台: %s", log_file, exc
+        )
+        return None
 
     # 抑制第三方库的噪音日志，只保留警告及以上
     for noisy in ("httpx", "httpcore", "arxiv", "openai", "urllib3"):
