@@ -88,6 +88,9 @@ class DailyResearchStore:
                     scored_at TEXT,
                     translated_at TEXT,
                     analyzed_at TEXT,
+                    score_input_fingerprint TEXT,
+                    translation_input_fingerprint TEXT,
+                    analysis_input_fingerprint TEXT,
                     completed_at TEXT,
                     last_error TEXT,
                     PRIMARY KEY (source, paper_id)
@@ -96,6 +99,7 @@ class DailyResearchStore:
             )
             self._migrate_paper_identity(conn)
             self._migrate_stage_state(conn)
+            self._migrate_stage_fingerprints(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_papers_run ON daily_papers(run_id)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_papers_completed ON daily_papers(completed_at)"
@@ -120,10 +124,12 @@ class DailyResearchStore:
                 )
                 """
             )
+            self._migrate_delivery_identity(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_paper_deliveries_identity "
                 "ON paper_deliveries(source, canonical_id, version)"
             )
+            self._migrate_delivery_exact_version_constraint(conn)
 
             # An outbox makes notification delivery independent from paper completion.
             # A notification can be retried without allowing the paper back into a
@@ -264,6 +270,86 @@ class DailyResearchStore:
         conn.execute(
             "UPDATE daily_papers SET analysis_status = 'succeeded' "
             "WHERE analysis_json IS NOT NULL AND analysis_status = 'pending'"
+        )
+
+    @staticmethod
+    def _migrate_stage_fingerprints(conn):
+        """Add stage input keys used to invalidate stale incomplete LLM work."""
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        additions = {
+            "score_input_fingerprint": "TEXT",
+            "translation_input_fingerprint": "TEXT",
+            "analysis_input_fingerprint": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE daily_papers ADD COLUMN {name} {definition}")
+
+    @staticmethod
+    def _migrate_delivery_identity(conn):
+        """Backfill identity fields for delivery ledgers created by older releases."""
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(paper_deliveries)").fetchall()
+        }
+        additions = {
+            "canonical_id": "TEXT NOT NULL DEFAULT ''",
+            "version": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE paper_deliveries ADD COLUMN {name} {definition}")
+
+        from sources.base_source import paper_identity
+
+        rows = conn.execute(
+            "SELECT delivery_id, source, paper_id, canonical_id, version FROM paper_deliveries"
+        ).fetchall()
+        for row in rows:
+            canonical_id, version = paper_identity(row["source"], row["paper_id"])
+            desired_version = version if version is not None else 0
+            if row["canonical_id"] != canonical_id or row["version"] != desired_version:
+                conn.execute(
+                    "UPDATE paper_deliveries SET canonical_id = ?, version = ? WHERE delivery_id = ?",
+                    (canonical_id, desired_version, row["delivery_id"]),
+                )
+
+    @staticmethod
+    def _migrate_delivery_exact_version_constraint(conn):
+        """Enforce one completed delivery for each exact source/version.
+
+        Old databases used a run-scoped unique constraint, which permitted an
+        accidental second report for the same exact paper if a future caller
+        bypassed the normal pre-filter.  A unique index is compatible with the
+        existing table and is safer than a table rebuild.  In the unlikely
+        event an old DB already contains duplicates, retain its earliest
+        delivery as the authoritative one before creating the index.
+        """
+        duplicates = conn.execute(
+            """
+            SELECT source, canonical_id, version, MIN(delivery_id) AS keep_delivery_id
+            FROM paper_deliveries
+            GROUP BY source, canonical_id, version
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        for row in duplicates:
+            conn.execute(
+                "DELETE FROM paper_deliveries "
+                "WHERE source = ? AND canonical_id = ? AND version = ? AND delivery_id != ?",
+                (
+                    row["source"],
+                    row["canonical_id"],
+                    row["version"],
+                    row["keep_delivery_id"],
+                ),
+            )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_deliveries_exact_version "
+            "ON paper_deliveries(source, canonical_id, version)"
         )
 
     def start_run(self, total_papers: int) -> str:
@@ -535,6 +621,23 @@ class DailyResearchStore:
                             (source, paper_id),
                         )
 
+                    existing_delivery = conn.execute(
+                        """
+                        SELECT run_id FROM paper_deliveries
+                        WHERE source = ? AND canonical_id = ? AND version = ?
+                        """,
+                        (
+                            source,
+                            paper.canonical_id or paper.paper_id,
+                            paper.version or 0,
+                        ),
+                    ).fetchone()
+                    if existing_delivery is not None and existing_delivery["run_id"] != run_id:
+                        raise RuntimeError(
+                            "该论文版本已由另一日报交付，拒绝重复提交: "
+                            f"{source}:{paper.canonical_id or paper.paper_id}v{paper.version or 0}"
+                        )
+
                     conn.execute(
                         """
                         INSERT INTO paper_deliveries(
@@ -542,8 +645,7 @@ class DailyResearchStore:
                             report_path, delivered_at
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(run_id, source, paper_id) DO UPDATE SET
-                            report_path = excluded.report_path
+                        ON CONFLICT(source, canonical_id, version) DO NOTHING
                         """,
                         (
                             run_id,
@@ -915,14 +1017,18 @@ class DailyResearchStore:
 
     def is_paper_delivered(self, source: str, paper_id: str) -> bool:
         """Return whether this exact paper version has entered a completed daily report."""
+        from sources.base_source import paper_identity
+
+        canonical_id, version = paper_identity(source, paper_id)
+        normalized_version = version if version is not None else 0
         with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT 1 FROM paper_deliveries
-                WHERE source = ? AND paper_id = ?
+                WHERE source = ? AND canonical_id = ? AND version = ?
                 LIMIT 1
                 """,
-                (source, paper_id),
+                (source, canonical_id, normalized_version),
             ).fetchone()
             if row is not None:
                 return True
@@ -1022,30 +1128,111 @@ class DailyResearchStore:
             if not current_value and persisted_value:
                 setattr(paper, field, persisted_value)
 
-    def upsert_paper_seen(self, run_id: str, source: str, paper: "PaperMetadata"):
+    def upsert_paper_seen(
+        self,
+        run_id: str,
+        source: str,
+        paper: "PaperMetadata",
+        stage_fingerprints: Optional[Dict[str, str]] = None,
+    ):
+        """Persist fresh metadata and invalidate stale incomplete stage output.
+
+        Delivered rows are immutable ledger entries and are filtered before
+        this method in normal runs.  For incomplete rows, a changed score
+        input invalidates score/translation/analysis; a changed translation
+        input invalidates only translation; and a changed analysis input
+        invalidates only deep analysis.  This lets restarts reuse work only
+        when it was produced for the same paper/configuration/model inputs.
+        """
         now = datetime.now().isoformat()
+        fingerprints = stage_fingerprints or {}
+        score_fingerprint = fingerprints.get("score")
+        translation_fingerprint = fingerprints.get("translation")
+        analysis_fingerprint = fingerprints.get("analysis")
         with self._lock, self._connect() as conn:
             existing = conn.execute(
-                "SELECT paper_json FROM daily_papers WHERE source = ? AND paper_id = ?",
+                "SELECT * FROM daily_papers WHERE source = ? AND paper_id = ?",
                 (source, paper.paper_id),
             ).fetchone()
             if existing is not None:
                 self._restore_optional_enrichment(paper, existing["paper_json"])
 
             paper_json = json.dumps(paper.to_dict(), ensure_ascii=False)
+            if existing is not None and existing["completed_at"] is None:
+                score_changed = (
+                    score_fingerprint is not None
+                    and existing["score_input_fingerprint"] != score_fingerprint
+                )
+                translation_changed = (
+                    translation_fingerprint is not None
+                    and existing["translation_input_fingerprint"] != translation_fingerprint
+                )
+                analysis_changed = (
+                    analysis_fingerprint is not None
+                    and existing["analysis_input_fingerprint"] != analysis_fingerprint
+                )
+                if score_changed:
+                    conn.execute(
+                        """
+                        UPDATE daily_papers
+                        SET score_json = NULL, abstract_cn = NULL, analysis_json = NULL,
+                            scored_at = NULL, translated_at = NULL, analyzed_at = NULL,
+                            score_status = 'pending', translation_status = 'pending',
+                            analysis_status = 'pending', last_error = NULL
+                        WHERE source = ? AND paper_id = ?
+                        """,
+                        (source, paper.paper_id),
+                    )
+                else:
+                    if translation_changed:
+                        conn.execute(
+                            """
+                            UPDATE daily_papers
+                            SET abstract_cn = NULL, translated_at = NULL,
+                                translation_status = 'pending', last_error = NULL
+                            WHERE source = ? AND paper_id = ?
+                            """,
+                            (source, paper.paper_id),
+                        )
+                    # Deep analysis consumes the translated/abstract content
+                    # indirectly through the reporting configuration.  A
+                    # changed translation stage must therefore not leave a
+                    # stale deep-analysis cache attached to a new report.
+                    if translation_changed or analysis_changed:
+                        conn.execute(
+                            """
+                            UPDATE daily_papers
+                            SET analysis_json = NULL, analyzed_at = NULL,
+                                analysis_status = 'pending', last_error = NULL
+                            WHERE source = ? AND paper_id = ?
+                            """,
+                            (source, paper.paper_id),
+                        )
+
             conn.execute(
                 """
                 INSERT INTO daily_papers(
                     source, paper_id, canonical_id, version,
-                    first_seen_at, last_seen_at, run_id, paper_json
+                    first_seen_at, last_seen_at, run_id, paper_json,
+                    score_input_fingerprint, translation_input_fingerprint,
+                    analysis_input_fingerprint
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source, paper_id) DO UPDATE SET
                     canonical_id = excluded.canonical_id,
                     version = excluded.version,
                     last_seen_at = excluded.last_seen_at,
                     run_id = excluded.run_id,
-                    paper_json = excluded.paper_json
+                    paper_json = excluded.paper_json,
+                    score_input_fingerprint = COALESCE(
+                        excluded.score_input_fingerprint, daily_papers.score_input_fingerprint
+                    ),
+                    translation_input_fingerprint = COALESCE(
+                        excluded.translation_input_fingerprint, daily_papers.translation_input_fingerprint
+                    ),
+                    analysis_input_fingerprint = COALESCE(
+                        excluded.analysis_input_fingerprint, daily_papers.analysis_input_fingerprint
+                    )
                 """,
                 (
                     source,
@@ -1056,14 +1243,26 @@ class DailyResearchStore:
                     now,
                     run_id,
                     paper_json,
+                    score_fingerprint,
+                    translation_fingerprint,
+                    analysis_fingerprint,
                 ),
             )
 
-    def update_scored_paper(self, run_id: str, source: str, scored: Dict[str, Any]):
+    def update_scored_paper(
+        self,
+        run_id: str,
+        source: str,
+        scored: Dict[str, Any],
+        stage_fingerprints: Optional[Dict[str, str]] = None,
+    ):
         """Persist a complete score result for backward-compatible callers."""
         now = datetime.now().isoformat()
         paper = scored["paper_metadata"]
         score_response = scored["score_response"]
+        fingerprints = stage_fingerprints or {}
+        translation_done = bool(str(scored.get("abstract_cn", "")).strip())
+        translation_status = "succeeded" if translation_done else "pending"
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
@@ -1071,9 +1270,11 @@ class DailyResearchStore:
                     source, paper_id, canonical_id, version,
                     first_seen_at, last_seen_at, run_id, paper_json,
                     score_json, abstract_cn, scored_at, translated_at,
-                    score_status, translation_status, last_error
+                    score_status, translation_status,
+                    score_input_fingerprint, translation_input_fingerprint,
+                    analysis_input_fingerprint, last_error
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(source, paper_id) DO UPDATE SET
                     canonical_id = excluded.canonical_id,
                     version = excluded.version,
@@ -1086,6 +1287,15 @@ class DailyResearchStore:
                     translated_at = excluded.translated_at,
                     score_status = excluded.score_status,
                     translation_status = excluded.translation_status,
+                    score_input_fingerprint = COALESCE(
+                        excluded.score_input_fingerprint, daily_papers.score_input_fingerprint
+                    ),
+                    translation_input_fingerprint = COALESCE(
+                        excluded.translation_input_fingerprint, daily_papers.translation_input_fingerprint
+                    ),
+                    analysis_input_fingerprint = COALESCE(
+                        excluded.analysis_input_fingerprint, daily_papers.analysis_input_fingerprint
+                    ),
                     last_error = NULL
                 """,
                 (
@@ -1102,12 +1312,19 @@ class DailyResearchStore:
                     now,
                     now if scored.get("abstract_cn") else None,
                     "succeeded",
-                    "succeeded" if scored.get("abstract_cn") else "pending",
+                    translation_status,
+                    fingerprints.get("score"),
+                    fingerprints.get("translation"),
+                    fingerprints.get("analysis"),
                 ),
             )
 
     def update_score(
-        self, run_id: str, source: str, scored: Dict[str, Any]
+        self,
+        run_id: str,
+        source: str,
+        scored: Dict[str, Any],
+        score_input_fingerprint: Optional[str] = None,
     ) -> None:
         """Persist score/TLDR before attempting translation."""
         now = datetime.now().isoformat()
@@ -1118,7 +1335,9 @@ class DailyResearchStore:
                 """
                 UPDATE daily_papers
                 SET run_id = ?, paper_json = ?, score_json = ?, scored_at = ?,
-                    score_status = 'succeeded', last_error = NULL
+                    score_status = 'succeeded',
+                    score_input_fingerprint = COALESCE(?, score_input_fingerprint),
+                    last_error = NULL
                 WHERE source = ? AND paper_id = ?
                 """,
                 (
@@ -1126,12 +1345,20 @@ class DailyResearchStore:
                     json.dumps(paper.to_dict(), ensure_ascii=False),
                     score_response.model_dump_json(),
                     now,
+                    score_input_fingerprint,
                     source,
                     scored["paper_id"],
                 ),
             )
 
-    def update_translation(self, run_id: str, source: str, paper_id: str, translation: str):
+    def update_translation(
+        self,
+        run_id: str,
+        source: str,
+        paper_id: str,
+        translation: str,
+        translation_input_fingerprint: Optional[str] = None,
+    ):
         """Persist a successful non-empty abstract translation."""
         if not translation or not translation.strip():
             raise ValueError("translation must be non-empty")
@@ -1141,45 +1368,92 @@ class DailyResearchStore:
                 """
                 UPDATE daily_papers
                 SET run_id = ?, abstract_cn = ?, translated_at = ?,
-                    translation_status = 'succeeded', last_error = NULL
+                    translation_status = 'succeeded',
+                    translation_input_fingerprint = COALESCE(
+                        ?, translation_input_fingerprint
+                    ),
+                    last_error = NULL
                 WHERE source = ? AND paper_id = ?
                 """,
-                (run_id, translation.strip(), now, source, paper_id),
+                (
+                    run_id,
+                    translation.strip(),
+                    now,
+                    translation_input_fingerprint,
+                    source,
+                    paper_id,
+                ),
             )
 
-    def mark_translation_not_required(self, run_id: str, source: str, paper_id: str):
+    def mark_translation_not_required(
+        self,
+        run_id: str,
+        source: str,
+        paper_id: str,
+        translation_input_fingerprint: Optional[str] = None,
+    ):
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 UPDATE daily_papers
-                SET run_id = ?, translation_status = 'not_required', last_error = NULL
+                SET run_id = ?, translation_status = 'not_required',
+                    translation_input_fingerprint = COALESCE(
+                        ?, translation_input_fingerprint
+                    ),
+                    last_error = NULL
                 WHERE source = ? AND paper_id = ?
                 """,
-                (run_id, source, paper_id),
+                (run_id, translation_input_fingerprint, source, paper_id),
             )
 
-    def update_analysis(self, run_id: str, source: str, paper_id: str, analysis: "Stage2Response"):
+    def update_analysis(
+        self,
+        run_id: str,
+        source: str,
+        paper_id: str,
+        analysis: "Stage2Response",
+        analysis_input_fingerprint: Optional[str] = None,
+    ):
         now = datetime.now().isoformat()
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 UPDATE daily_papers
                 SET run_id = ?, analysis_json = ?, analyzed_at = ?,
-                    analysis_status = 'succeeded', last_error = NULL
+                    analysis_status = 'succeeded',
+                    analysis_input_fingerprint = COALESCE(?, analysis_input_fingerprint),
+                    last_error = NULL
                 WHERE source = ? AND paper_id = ?
                 """,
-                (run_id, self._analysis_json(analysis), now, source, paper_id),
+                (
+                    run_id,
+                    self._analysis_json(analysis),
+                    now,
+                    analysis_input_fingerprint,
+                    source,
+                    paper_id,
+                ),
             )
 
-    def mark_analysis_not_required(self, run_id: str, source: str, paper_id: str):
+    def mark_analysis_not_required(
+        self,
+        run_id: str,
+        source: str,
+        paper_id: str,
+        analysis_input_fingerprint: Optional[str] = None,
+    ):
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 UPDATE daily_papers
-                SET run_id = ?, analysis_status = 'not_required', last_error = NULL
+                SET run_id = ?, analysis_status = 'not_required',
+                    analysis_input_fingerprint = COALESCE(
+                        ?, analysis_input_fingerprint
+                    ),
+                    last_error = NULL
                 WHERE source = ? AND paper_id = ?
                 """,
-                (run_id, source, paper_id),
+                (run_id, analysis_input_fingerprint, source, paper_id),
             )
 
     def update_error(

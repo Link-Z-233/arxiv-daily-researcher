@@ -231,6 +231,119 @@ class IdentityStoreTests(unittest.TestCase):
             hydrated = store.hydrate_analysis(store.get_paper_record("arxiv", paper.paper_id))
             self.assertEqual(hydrated, {"summary": "analysis"})
 
+    def test_changed_score_input_invalidates_all_incomplete_downstream_stages(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            paper = _paper("2501.12345v1")
+            first_run = store.start_run(1)
+            old_keys = {"score": "score-old", "translation": "translation-old", "analysis": "analysis-old"}
+            store.upsert_paper_seen(first_run, "arxiv", paper, old_keys)
+            score = WeightedScoreResponse(
+                total_score=4,
+                keyword_scores={"quantum": 4},
+                author_bonus=0,
+                expert_authors_found=[],
+                passing_score=3,
+                is_qualified=True,
+                reasoning="relevant",
+                tldr="A concise TLDR",
+                extracted_keywords=["quantum"],
+            )
+            store.update_score(first_run, "arxiv", {"paper_metadata": paper, "paper_id": paper.paper_id, "score_response": score}, "score-old")
+            store.update_translation(first_run, "arxiv", paper.paper_id, "中文摘要", "translation-old")
+            store.update_analysis(first_run, "arxiv", paper.paper_id, {"summary": "analysis"}, "analysis-old")
+
+            retry_run = store.start_run(1)
+            new_keys = {"score": "score-new", "translation": "translation-new", "analysis": "analysis-new"}
+            store.upsert_paper_seen(retry_run, "arxiv", paper, new_keys)
+            record = store.get_paper_record("arxiv", paper.paper_id)
+
+            self.assertEqual(record["score_status"], "pending")
+            self.assertEqual(record["translation_status"], "pending")
+            self.assertEqual(record["analysis_status"], "pending")
+            self.assertIsNone(record["score_json"])
+            self.assertIsNone(record["abstract_cn"])
+            self.assertIsNone(record["analysis_json"])
+            self.assertEqual(record["score_input_fingerprint"], "score-new")
+
+    def test_changed_translation_or_analysis_input_invalidates_only_that_stage(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            paper = _paper("2501.12345v1")
+            first_run = store.start_run(1)
+            old_keys = {"score": "score-stable", "translation": "translation-old", "analysis": "analysis-old"}
+            store.upsert_paper_seen(first_run, "arxiv", paper, old_keys)
+            score = WeightedScoreResponse(
+                total_score=4,
+                keyword_scores={"quantum": 4},
+                author_bonus=0,
+                expert_authors_found=[],
+                passing_score=3,
+                is_qualified=True,
+                reasoning="relevant",
+                tldr="A concise TLDR",
+                extracted_keywords=["quantum"],
+            )
+            store.update_score(first_run, "arxiv", {"paper_metadata": paper, "paper_id": paper.paper_id, "score_response": score}, "score-stable")
+            store.update_translation(first_run, "arxiv", paper.paper_id, "中文摘要", "translation-old")
+            store.update_analysis(first_run, "arxiv", paper.paper_id, {"summary": "analysis"}, "analysis-old")
+
+            retry_run = store.start_run(1)
+            changed_translation = {"score": "score-stable", "translation": "translation-new", "analysis": "analysis-old"}
+            store.upsert_paper_seen(retry_run, "arxiv", paper, changed_translation)
+            record = store.get_paper_record("arxiv", paper.paper_id)
+            self.assertEqual(record["score_status"], "succeeded")
+            self.assertEqual(record["translation_status"], "pending")
+            self.assertEqual(record["analysis_status"], "pending")
+            self.assertIsNotNone(record["score_json"])
+            self.assertIsNone(record["abstract_cn"])
+            self.assertIsNone(record["analysis_json"])
+
+            changed_analysis = {"score": "score-stable", "translation": "translation-new", "analysis": "analysis-new"}
+            store.upsert_paper_seen(retry_run, "arxiv", paper, changed_analysis)
+            record = store.get_paper_record("arxiv", paper.paper_id)
+            self.assertEqual(record["score_status"], "succeeded")
+            self.assertEqual(record["translation_status"], "pending")
+            self.assertEqual(record["analysis_status"], "pending")
+            self.assertIsNone(record["analysis_json"])
+
+    def test_exact_delivery_ledger_constraint_blocks_a_second_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            paper = _paper("2501.12345v1")
+            run_one = store.start_run(1)
+            store.upsert_paper_seen(run_one, "arxiv", paper)
+            score = WeightedScoreResponse(
+                total_score=4,
+                keyword_scores={"quantum": 4},
+                author_bonus=0,
+                expert_authors_found=[],
+                passing_score=3,
+                is_qualified=True,
+                reasoning="relevant",
+                tldr="A concise TLDR",
+                extracted_keywords=["quantum"],
+            )
+            store.update_score(run_one, "arxiv", {"paper_metadata": paper, "paper_id": paper.paper_id, "score_response": score})
+            store.update_translation(run_one, "arxiv", paper.paper_id, "中文摘要")
+            delivered = {"arxiv": [{"paper_metadata": paper, "paper_id": paper.paper_id, "requires_analysis": False}]}
+            store.finalize_report_delivery(run_one, {"arxiv": Path(temp_dir) / "one.md"}, delivered)
+
+            run_two = store.start_run(1)
+            with self.assertRaisesRegex(RuntimeError, "拒绝重复提交"):
+                store.finalize_report_delivery(
+                    run_two, {"arxiv": Path(temp_dir) / "two.md"}, delivered
+                )
+            with store._connect() as conn:
+                rows = conn.execute(
+                    "SELECT run_id, report_path FROM paper_deliveries "
+                    "WHERE source = ? AND canonical_id = ? AND version = ?",
+                    ("arxiv", paper.canonical_id, paper.version),
+                ).fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["run_id"], run_one)
+            self.assertEqual(rows[0]["report_path"], str(Path(temp_dir) / "one.md"))
+
     def test_retry_preserves_optional_semantic_scholar_enrichment(self):
         """A transient S2 failure must not erase a TLDR from a retried paper."""
         with tempfile.TemporaryDirectory() as temp_dir:

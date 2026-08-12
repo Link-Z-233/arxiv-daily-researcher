@@ -34,6 +34,8 @@ from sources import SearchAgent, PaperMetadata, ArxivFetchError
 from report.daily import Reporter
 from notifications import NotifierAgent, RunResult
 from utils.daily_research_store import DailyResearchStore
+from utils.daily_research_errors import PaperStageError, paper_stage_error
+from utils.daily_research_fingerprints import build_stage_input_fingerprints
 from utils.webdav_sync import (
     after_report_sync_maintenance_entry,
     deliver_pending_after_report_syncs,
@@ -135,12 +137,15 @@ def _score_single_paper(
     线程安全：translation_cache 通过 cache_lock 保护。
     """
     if score_response is None:
-        score_response = analysis_agent.score_paper_with_keywords(
-            title=paper.title,
-            authors=paper.authors,
-            abstract=paper.abstract,
-            keywords_dict=all_keywords,
-        )
+        try:
+            score_response = analysis_agent.score_paper_with_keywords(
+                title=paper.title,
+                authors=paper.authors,
+                abstract=paper.abstract,
+                keywords_dict=all_keywords,
+            )
+        except Exception as exc:
+            raise paper_stage_error("score", exc) from exc
 
     if abstract_cn is None:
         abstract_cn = ""
@@ -154,9 +159,12 @@ def _score_single_paper(
             abstract_cn = cached
             logger.debug(f"使用缓存的翻译: {paper.title[:30]}...")
         else:
-            abstract_cn = analysis_agent.translate_abstract(paper.abstract)
+            try:
+                abstract_cn = analysis_agent.translate_abstract(paper.abstract)
+            except Exception as exc:
+                raise paper_stage_error("translation", exc) from exc
             if not abstract_cn or not abstract_cn.strip():
-                raise RuntimeError("摘要翻译返回空结果")
+                raise PaperStageError("translation", "摘要翻译返回空结果")
             with cache_lock:
                 translation_cache[abstract_hash] = abstract_cn
             logger.debug(f"翻译并缓存: {paper.title[:30]}...")
@@ -183,6 +191,11 @@ def _score_single_paper(
             logger.warning(f"关键词记录失败 ({paper.paper_id[:30]}...): {e}")
 
     return scored
+
+
+def _score_or_translate_stage_error(stage: str, exc: BaseException) -> PaperStageError:
+    """Classify only the local stage that raised, never its message text."""
+    return paper_stage_error(stage, exc)
 
 
 def _deep_analyze_single_paper(paper_info, analysis_agent):
@@ -230,7 +243,11 @@ def _deep_analyze_single_paper(paper_info, analysis_agent):
             )
             time.sleep(wait_seconds)
 
-    raise RuntimeError(f"深度分析在 {max_attempts} 次尝试后仍失败: {last_error}") from last_error
+    raise PaperStageError(
+        "analysis",
+        f"深度分析在 {max_attempts} 次尝试后仍失败: {last_error}",
+        cause=last_error,
+    ) from last_error
 
 
 def _score_or_hydrate_paper(
@@ -249,7 +266,16 @@ def _score_or_hydrate_paper(
     existing_record = None
     if store:
         existing_record = store.get_paper_record(source, paper.paper_id)
+        # Restore durable optional enrichment before calculating cache keys.
+        # In particular, an earlier retry may have retained an arXiv PDF URL
+        # while a new source response was temporarily missing it.
         store.upsert_paper_seen(run_id, source, paper)
+        fingerprints = build_stage_input_fingerprints(
+            paper,
+            all_keywords,
+            getattr(analysis_agent, "deep_template", {}),
+        )
+        store.upsert_paper_seen(run_id, source, paper, fingerprints)
         record = store.get_paper_record(source, paper.paper_id)
         hydrated = store.hydrate_scored_paper(paper, record, require_translation=False)
         if hydrated:
@@ -257,12 +283,15 @@ def _score_or_hydrate_paper(
             score_is_new = False
             logger.debug(f"复用已持久化评分: {paper.title[:30]}...")
         else:
-            score_response = analysis_agent.score_paper_with_keywords(
-                title=paper.title,
-                authors=paper.authors,
-                abstract=paper.abstract,
-                keywords_dict=all_keywords,
-            )
+            try:
+                score_response = analysis_agent.score_paper_with_keywords(
+                    title=paper.title,
+                    authors=paper.authors,
+                    abstract=paper.abstract,
+                    keywords_dict=all_keywords,
+                )
+            except Exception as exc:
+                raise _score_or_translate_stage_error("score", exc) from exc
             scored = _score_single_paper(
                 paper,
                 source,
@@ -275,7 +304,12 @@ def _score_or_hydrate_paper(
                 abstract_cn="",
                 translate=False,
             )
-            store.update_score(run_id, source, scored)
+            store.update_score(
+                run_id,
+                source,
+                scored,
+                score_input_fingerprint=fingerprints.get("score"),
+            )
             score_is_new = True
 
         record = store.get_paper_record(source, paper.paper_id)
@@ -288,12 +322,21 @@ def _score_or_hydrate_paper(
             if cached:
                 abstract_cn = cached
             else:
-                abstract_cn = analysis_agent.translate_abstract(paper.abstract)
+                try:
+                    abstract_cn = analysis_agent.translate_abstract(paper.abstract)
+                except Exception as exc:
+                    raise _score_or_translate_stage_error("translation", exc) from exc
                 if not abstract_cn or not abstract_cn.strip():
-                    raise RuntimeError("摘要翻译返回空结果")
+                    raise PaperStageError("translation", "摘要翻译返回空结果")
                 with cache_lock:
                     translation_cache[abstract_hash] = abstract_cn
-            store.update_translation(run_id, source, paper.paper_id, abstract_cn)
+            store.update_translation(
+                run_id,
+                source,
+                paper.paper_id,
+                abstract_cn,
+                translation_input_fingerprint=fingerprints.get("translation"),
+            )
             scored["abstract_cn"] = abstract_cn
         elif not translation_required:
             store.mark_translation_not_required(run_id, source, paper.paper_id)
@@ -307,6 +350,7 @@ def _score_or_hydrate_paper(
             store.get_previous_version_record(source, paper),
             previous_version_info,
         )
+        scored["stage_fingerprints"] = fingerprints
         return scored
 
     scored = _score_single_paper(
@@ -725,7 +769,7 @@ class DailyResearchPipeline:
                                     paper = futures[future]
                                     logger.error(f"论文评分异常 ({paper.title[:30]}...): {e}")
                                     if store:
-                                        stage = "translation" if "翻译" in str(e) else "score"
+                                        stage = e.stage if isinstance(e, PaperStageError) else "score"
                                         store.update_error(
                                             run_id, source, paper.paper_id, str(e), stage=stage
                                         )
@@ -757,7 +801,7 @@ class DailyResearchPipeline:
                             except Exception as e:
                                 logger.error(f"论文评分异常 ({paper.title[:30]}...): {e}")
                                 if store:
-                                    stage = "translation" if "翻译" in str(e) else "score"
+                                    stage = e.stage if isinstance(e, PaperStageError) else "score"
                                     store.update_error(
                                         run_id, source, paper.paper_id, str(e), stage=stage
                                     )
@@ -875,6 +919,9 @@ class DailyResearchPipeline:
                                                     source,
                                                     result["paper_id"],
                                                     result["analysis"],
+                                                    analysis_input_fingerprint=(
+                                                        paper_info.get("stage_fingerprints", {}).get("analysis")
+                                                    ),
                                                 )
                                             pm = result.get("paper_meta")
                                             if pm and pm.arxiv_id:
@@ -906,7 +953,9 @@ class DailyResearchPipeline:
                                                 source,
                                                 paper_info["paper_id"],
                                                 str(e),
-                                                stage="analysis",
+                                                stage=(
+                                                    e.stage if isinstance(e, PaperStageError) else "analysis"
+                                                ),
                                             )
                                         analysis_errors.append(
                                             (source, paper_info["paper_id"], str(e))
@@ -935,6 +984,9 @@ class DailyResearchPipeline:
                                             source,
                                             result["paper_id"],
                                             result["analysis"],
+                                            analysis_input_fingerprint=(
+                                                paper_info.get("stage_fingerprints", {}).get("analysis")
+                                            ),
                                         )
                                     pm = result.get("paper_meta")
                                     if pm and pm.arxiv_id:
@@ -953,7 +1005,9 @@ class DailyResearchPipeline:
                                             source,
                                             paper_info["paper_id"],
                                             str(e),
-                                            stage="analysis",
+                                            stage=(
+                                                e.stage if isinstance(e, PaperStageError) else "analysis"
+                                            ),
                                         )
                                     analysis_errors.append((source, paper_info["paper_id"], str(e)))
                                     pbar.write(f"  ✗ 失败: {paper_info['title'][:55]}...")
