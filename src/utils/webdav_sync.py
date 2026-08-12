@@ -7,6 +7,7 @@ WebDAV 同步模块
 
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -24,6 +25,183 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 logger = logging.getLogger(__name__)
+
+
+# The WebUI currently writes ordinary five-field crontab expressions.  Keep
+# the matcher here instead of adding a dependency just to wake a tiny worker
+# once per minute.  It deliberately accepts the useful, standard subset of
+# Vixie cron (lists, ranges, and steps) and rejects malformed expressions
+# rather than silently running at an unexpected time.
+_CRON_NICKNAMES = {
+    "@yearly": "0 0 1 1 *",
+    "@annually": "0 0 1 1 *",
+    "@monthly": "0 0 1 * *",
+    "@weekly": "0 0 * * 0",
+    "@daily": "0 0 * * *",
+    "@midnight": "0 0 * * *",
+    "@hourly": "0 * * * *",
+}
+_CRON_MONTH_NAMES = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_CRON_WEEKDAY_NAMES = {
+    "sun": 0,
+    "mon": 1,
+    "tue": 2,
+    "wed": 3,
+    "thu": 4,
+    "fri": 5,
+    "sat": 6,
+}
+
+
+def _cron_value(
+    raw_value: str,
+    minimum: int,
+    maximum: int,
+    names: Optional[Dict[str, int]],
+) -> int:
+    """Parse one cron value and keep errors actionable for configuration users."""
+    normalized = raw_value.lower()
+    if names and normalized in names:
+        value = names[normalized]
+    elif re.fullmatch(r"\d+", normalized):
+        value = int(normalized)
+    else:
+        raise ValueError(f"无效 cron 字段值: {raw_value!r}")
+
+    if not minimum <= value <= maximum:
+        raise ValueError(f"cron 字段值超出范围 {minimum}-{maximum}: {raw_value!r}")
+    return value
+
+
+def _cron_field_matches(
+    expression: str,
+    value: int,
+    minimum: int,
+    maximum: int,
+    names: Optional[Dict[str, int]] = None,
+) -> bool:
+    """Return whether one standard cron field matches ``value``.
+
+    A field is small (at most 60 possible values), so expanding ranges is both
+    clearer and less error-prone than relying on fragile arithmetic shortcuts.
+    """
+    if not expression or expression.strip() != expression:
+        raise ValueError("cron 字段不能为空或包含首尾空格")
+
+    matched_values: set[int] = set()
+    for component in expression.lower().split(","):
+        if not component:
+            raise ValueError(f"无效 cron 列表: {expression!r}")
+
+        if component.count("/") > 1:
+            raise ValueError(f"无效 cron 步长: {component!r}")
+        if "/" in component:
+            base, raw_step = component.split("/", 1)
+            if not re.fullmatch(r"\d+", raw_step) or int(raw_step) <= 0:
+                raise ValueError(f"无效 cron 步长: {component!r}")
+            step = int(raw_step)
+        else:
+            base = component
+            step = 1
+
+        if base == "*":
+            start, end = minimum, maximum
+        elif "-" in base:
+            if base.count("-") != 1:
+                raise ValueError(f"无效 cron 范围: {component!r}")
+            raw_start, raw_end = base.split("-", 1)
+            start = _cron_value(raw_start, minimum, maximum, names)
+            end = _cron_value(raw_end, minimum, maximum, names)
+            if start > end:
+                raise ValueError(f"cron 范围起点不能大于终点: {component!r}")
+        else:
+            if step != 1:
+                raise ValueError(f"cron 步长必须用于 * 或范围: {component!r}")
+            start = end = _cron_value(base, minimum, maximum, names)
+
+        matched_values.update(range(start, end + 1, step))
+
+    # In a crontab Sunday may be written as either 0 or 7.  Preserve both
+    # spellings without making ranges such as 0-7 behave strangely.
+    return value in matched_values or (
+        minimum == 0 and maximum == 7 and value == 0 and 7 in matched_values
+    )
+
+
+def cron_schedule_matches(schedule: str, now: Optional[datetime] = None) -> bool:
+    """Return whether a five-field cron schedule matches the local minute.
+
+    The Docker cron daemon and this helper both use the container's local time
+    (controlled by ``TZ``).  Day-of-month/day-of-week follows crontab's OR
+    semantics when both fields are restricted.
+    """
+    if not isinstance(schedule, str):
+        raise ValueError("cron 表达式必须是字符串")
+
+    minute, hour, day_of_month, month, day_of_week = _parse_cron_schedule(schedule)
+    current = now or datetime.now()
+    if not _cron_field_matches(minute, current.minute, 0, 59):
+        return False
+    if not _cron_field_matches(hour, current.hour, 0, 23):
+        return False
+    if not _cron_field_matches(month, current.month, 1, 12, _CRON_MONTH_NAMES):
+        return False
+
+    dom_matches = _cron_field_matches(day_of_month, current.day, 1, 31)
+    # datetime.weekday() is Monday=0; cron is Sunday=0 (or 7).
+    cron_weekday = (current.weekday() + 1) % 7
+    dow_matches = _cron_field_matches(
+        day_of_week, cron_weekday, 0, 7, _CRON_WEEKDAY_NAMES
+    )
+    dom_is_wildcard = day_of_month == "*"
+    dow_is_wildcard = day_of_week == "*"
+    if dom_is_wildcard and dow_is_wildcard:
+        return True
+    if dom_is_wildcard:
+        return dow_matches
+    if dow_is_wildcard:
+        return dom_matches
+    return dom_matches or dow_matches
+
+
+def _parse_cron_schedule(schedule: str) -> tuple[str, str, str, str, str]:
+    """Normalize and fully validate one five-field cron expression."""
+    if not isinstance(schedule, str):
+        raise ValueError("cron 表达式必须是字符串")
+
+    normalized = _CRON_NICKNAMES.get(schedule.strip().lower(), schedule.strip())
+    fields = normalized.split()
+    if len(fields) != 5:
+        raise ValueError("cron 表达式必须包含 5 个字段（分 时 日 月 周）")
+
+    minute, hour, day_of_month, month, day_of_week = fields
+    # _cron_field_matches expands every list component before returning.  The
+    # arbitrary values only trigger validation; they are not used for matching.
+    _cron_field_matches(minute, 0, 0, 59)
+    _cron_field_matches(hour, 0, 0, 23)
+    _cron_field_matches(day_of_month, 1, 1, 31)
+    _cron_field_matches(month, 1, 1, 12, _CRON_MONTH_NAMES)
+    _cron_field_matches(day_of_week, 0, 0, 7, _CRON_WEEKDAY_NAMES)
+    return minute, hour, day_of_month, month, day_of_week
+
+
+def validate_cron_schedule(schedule: str) -> str:
+    """Validate a standard WebDAV schedule and return its normalized spelling."""
+    _parse_cron_schedule(schedule)
+    return _CRON_NICKNAMES.get(schedule.strip().lower(), schedule.strip())
 
 
 class WebDAVSync:
@@ -675,38 +853,64 @@ def sync_after_report(logger_instance=None) -> Optional[Dict[str, Any]]:
         if sync_mode != "after_report":
             return None
 
-        log = logger_instance or logger
-
-        client = create_sync_client()
-        if not client:
-            raise RuntimeError("WebDAV 已启用但 URL、用户名或密码不完整")
-
-        include_reports = getattr(settings, "WEBDAV_SYNC_REPORTS", False)
-        include_configs = getattr(settings, "WEBDAV_SYNC_CONFIGS", True)
-        include_history = getattr(settings, "WEBDAV_SYNC_HISTORY", True)
-        include_keywords = getattr(settings, "WEBDAV_SYNC_KEYWORDS", True)
-        log.info("[WebDAV] 报告后自动同步开始...")
-        result = client.sync_all(
-            direction="upload",
-            include_reports=include_reports,
-            include_configs=include_configs,
-            include_history=include_history,
-            include_keywords=include_keywords,
-        )
-        failed = [path for path, succeeded in result["results"].items() if not succeeded]
-        if failed:
-            raise RuntimeError("WebDAV 同步不完整: " + ", ".join(failed))
-        log.info(
-            f"[WebDAV] 同步完成: {result['success']}/{result['total']} 成功，"
-            f"耗时 {result['elapsed_seconds']}s"
-        )
-        return result
+        return _sync_with_current_settings(logger_instance, reason="报告后")
     except Exception as e:
         if logger_instance:
             logger_instance.warning(f"[WebDAV] 报告后同步失败: {e}")
         else:
             logger.warning(f"[WebDAV] 报告后同步失败: {e}")
         raise
+
+
+def _sync_with_current_settings(logger_instance=None, *, reason: str) -> Dict[str, Any]:
+    """Upload the selected WebDAV scope and fail on a partial result.
+
+    This common path deliberately does not decide *when* to run.  The daily
+    report hook, the scheduled cron hook and manual UI sync all have different
+    delivery semantics, while a partial remote copy is an error for each of
+    them.
+    """
+    from config import settings
+
+    log = logger_instance or logger
+    client = create_sync_client()
+    if not client:
+        raise RuntimeError("WebDAV 已启用但 URL、用户名或密码不完整")
+
+    include_reports = getattr(settings, "WEBDAV_SYNC_REPORTS", False)
+    include_configs = getattr(settings, "WEBDAV_SYNC_CONFIGS", True)
+    include_history = getattr(settings, "WEBDAV_SYNC_HISTORY", True)
+    include_keywords = getattr(settings, "WEBDAV_SYNC_KEYWORDS", True)
+    log.info("[WebDAV] %s同步开始...", reason)
+    result = client.sync_all(
+        direction="upload",
+        include_reports=include_reports,
+        include_configs=include_configs,
+        include_history=include_history,
+        include_keywords=include_keywords,
+    )
+    failed = [path for path, succeeded in result["results"].items() if not succeeded]
+    if failed:
+        raise RuntimeError("WebDAV 同步不完整: " + ", ".join(failed))
+    log.info(
+        "[WebDAV] %s同步完成: %s/%s 成功，耗时 %ss",
+        reason,
+        result["success"],
+        result["total"],
+        result["elapsed_seconds"],
+    )
+    return result
+
+
+def sync_scheduled(logger_instance=None) -> Optional[Dict[str, Any]]:
+    """Run the configured scheduled upload without invoking paper processing."""
+    from config import settings
+
+    if not getattr(settings, "WEBDAV_ENABLED", False):
+        return None
+    if getattr(settings, "WEBDAV_SYNC_MODE", "manual") != "scheduled":
+        return None
+    return _sync_with_current_settings(logger_instance, reason="定时")
 
 
 def after_report_sync_maintenance_entry(run_id: str) -> Optional[Dict[str, Any]]:

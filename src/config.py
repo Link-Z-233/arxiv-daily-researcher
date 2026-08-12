@@ -535,6 +535,16 @@ class Settings(BaseSettings):
                 self.WEBDAV_REMOTE_PATH = wd_cfg.get("remote_path", "/arxiv-daily-researcher/")
                 self.WEBDAV_SYNC_MODE = wd_cfg.get("sync_mode", "after_report")
                 self.WEBDAV_CRON_SCHEDULE = wd_cfg.get("cron_schedule", "0 23 * * *")
+                if self.WEBDAV_SYNC_MODE not in {"manual", "scheduled", "after_report"}:
+                    raise ValueError(
+                        "webdav.sync_mode 必须是 manual、scheduled 或 after_report"
+                    )
+                if self.WEBDAV_SYNC_MODE == "scheduled":
+                    from utils.webdav_sync import validate_cron_schedule
+
+                    self.WEBDAV_CRON_SCHEDULE = validate_cron_schedule(
+                        self.WEBDAV_CRON_SCHEDULE
+                    )
                 self.WEBDAV_SYNC_CONFIGS = wd_cfg.get("sync_configs", True)
                 self.WEBDAV_SYNC_HISTORY = wd_cfg.get("sync_history", True)
                 self.WEBDAV_SYNC_KEYWORDS = wd_cfg.get("sync_keywords", True)

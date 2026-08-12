@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,8 +14,11 @@ from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from utils.webdav_sync import (  # noqa: E402
     WebDAVSync,
     after_report_sync_maintenance_entry,
+    cron_schedule_matches,
     deliver_pending_after_report_syncs,
+    validate_cron_schedule,
 )
+from utils.webdav_scheduler import run_scheduled_webdav_sync  # noqa: E402
 
 
 class _FakeClient:
@@ -188,6 +192,113 @@ class WebDAVReliabilityTests(unittest.TestCase):
             self.assertFalse(result["configs/config.json"])
             self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
             self.assertEqual(list(config_path.parent.glob("*.download")), [])
+
+    def test_scheduled_cron_matching_supports_ranges_steps_names_and_cron_day_rules(self):
+        self.assertTrue(
+            cron_schedule_matches("*/15 8-18 * jan,jun mon-fri", datetime(2026, 6, 1, 9, 15))
+        )
+        self.assertFalse(
+            cron_schedule_matches("*/15 8-18 * jan,jun mon-fri", datetime(2026, 6, 1, 9, 14))
+        )
+        self.assertTrue(cron_schedule_matches("0 8 2 * mon", datetime(2026, 6, 1, 8, 0)))
+        self.assertTrue(cron_schedule_matches("0 8 2 * mon", datetime(2026, 6, 2, 8, 0)))
+        self.assertEqual(validate_cron_schedule("@hourly"), "0 * * * *")
+        with self.assertRaisesRegex(ValueError, "5 个字段"):
+            validate_cron_schedule("0 8 * *")
+        with self.assertRaisesRegex(ValueError, "超出范围"):
+            validate_cron_schedule("61 8 * * *")
+
+    def test_scheduled_sync_is_idempotent_and_retries_without_daily_report_state(self):
+        store = self._store()
+        settings = self._settings(
+            WEBDAV_SYNC_MODE="scheduled",
+            WEBDAV_CRON_SCHEDULE="0 23 * * *",
+        )
+        now = datetime(2026, 8, 12, 23, 0)
+        calls = []
+
+        def offline(_log):
+            calls.append("offline")
+            raise RuntimeError("remote offline")
+
+        first = run_scheduled_webdav_sync(
+            now,
+            store=store,
+            settings_override=settings,
+            sync_callable=offline,
+        )
+        self.assertEqual(first["matched"], True)
+        self.assertEqual(first["queued"], True)
+        self.assertEqual(first["claimed"], 1)
+        self.assertEqual(first["deferred"], 1)
+        task_key = "webdav_scheduled:202608122300"
+        failed_task = store.get_maintenance_task(task_key)
+        self.assertEqual(failed_task["status"], "pending")
+        self.assertEqual(failed_task["attempt_count"], 1)
+
+        # A duplicate cron invocation in the same minute cannot queue or call
+        # WebDAV again before the persisted retry delay is due.
+        duplicate = run_scheduled_webdav_sync(
+            now,
+            store=store,
+            settings_override=settings,
+            sync_callable=offline,
+        )
+        self.assertEqual(duplicate["queued"], False)
+        self.assertEqual(duplicate["claimed"], 0)
+        self.assertEqual(calls, ["offline"])
+
+        with store._connect() as conn:
+            conn.execute(
+                "UPDATE maintenance_outbox SET next_attempt_at = ? WHERE task_key = ?",
+                ("2000-01-01T00:00:00", task_key),
+            )
+
+        succeeded = run_scheduled_webdav_sync(
+            datetime(2026, 8, 12, 23, 1),
+            store=store,
+            settings_override=settings,
+            sync_callable=lambda _log: {"results": {"snapshot": True}},
+        )
+        self.assertEqual(succeeded["matched"], False)
+        self.assertEqual(succeeded["claimed"], 1)
+        self.assertEqual(succeeded["completed"], 1)
+        self.assertEqual(store.get_maintenance_task(task_key)["status"], "completed")
+
+    def test_scheduled_sync_does_not_enqueue_when_mode_is_not_scheduled(self):
+        store = self._store()
+        settings = self._settings(WEBDAV_SYNC_MODE="after_report")
+        result = run_scheduled_webdav_sync(
+            datetime(2026, 8, 12, 23, 0),
+            store=store,
+            settings_override=settings,
+            sync_callable=lambda _log: self.fail("should not sync"),
+        )
+        self.assertEqual(result, {
+            "enabled": False,
+            "matched": False,
+            "queued": False,
+            "claimed": 0,
+            "completed": 0,
+            "deferred": 0,
+        })
+
+    def test_scheduled_sync_keeps_existing_tasks_pending_after_mode_change(self):
+        store = self._store()
+        store.enqueue_maintenance_task(
+            "webdav_scheduled:202608122300", {"task_type": "webdav_scheduled"}
+        )
+        settings = self._settings(WEBDAV_SYNC_MODE="manual")
+        result = run_scheduled_webdav_sync(
+            datetime(2026, 8, 12, 23, 1),
+            store=store,
+            settings_override=settings,
+            sync_callable=lambda _log: self.fail("should not sync"),
+        )
+        self.assertEqual(result["claimed"], 0)
+        self.assertEqual(
+            store.get_maintenance_task("webdav_scheduled:202608122300")["status"], "pending"
+        )
 
 
 if __name__ == "__main__":

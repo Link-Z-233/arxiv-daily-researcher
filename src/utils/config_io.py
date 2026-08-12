@@ -345,6 +345,17 @@ def write_config_json(config: Dict[str, Any], path: Optional[Path] = None) -> No
         path = DEFAULT_CONFIG_PATH
     path = Path(path)
 
+    # Keep the UI from saving a schedule that the worker cannot interpret.
+    # Import lazily: config_io is also deliberately usable in the thin WebUI
+    # image, where importing the full worker settings module is undesirable.
+    webdav = config.get("webdav")
+    if isinstance(webdav, dict) and webdav.get("sync_mode") == "scheduled":
+        from utils.webdav_sync import validate_cron_schedule
+
+        webdav["cron_schedule"] = validate_cron_schedule(
+            str(webdav.get("cron_schedule", ""))
+        )
+
     # Backup existing
     if path.exists():
         backup_path = path.with_suffix(".json.bak")
