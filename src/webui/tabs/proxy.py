@@ -96,6 +96,12 @@ def render(_env_values: dict, config_values: dict):
             help=t("proxy_notifications_help"),
         )
         st.toggle(
+            t("proxy_webdav_label"),
+            value=flat.get("proxy_webdav", True),
+            key="proxy_webdav",
+            help=t("proxy_webdav_help"),
+        )
+        st.toggle(
             t("proxy_update_check_label"),
             value=flat.get("proxy_update_check", False),
             key="proxy_update_check",
@@ -123,5 +129,6 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "proxy_semantic_scholar": st.session_state.get("proxy_semantic_scholar", False),
         "proxy_llm_api": st.session_state.get("proxy_llm_api", False),
         "proxy_notifications": st.session_state.get("proxy_notifications", False),
+        "proxy_webdav": st.session_state.get("proxy_webdav", True),
         "proxy_update_check": st.session_state.get("proxy_update_check", False),
     }

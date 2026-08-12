@@ -206,6 +206,9 @@ class Settings(BaseSettings):
     PROXY_SEMANTIC_SCHOLAR: bool = False  # Semantic Scholar API 是否使用代理
     PROXY_LLM_API: bool = False  # LLM API 是否使用代理
     PROXY_NOTIFICATIONS: bool = False  # 通知 Webhook 是否使用代理
+    # Keep the historic global-proxy behavior for WebDAV unless the user
+    # explicitly turns its new per-service toggle off.
+    PROXY_WEBDAV: bool = True  # WebDAV 同步是否使用代理
     PROXY_UPDATE_CHECK: bool = False  # 检查更新是否使用代理
 
     # ==================== WebDAV 同步配置 ====================
@@ -611,6 +614,7 @@ class Settings(BaseSettings):
                 self.PROXY_SEMANTIC_SCHOLAR = scope.get("semantic_scholar", False)
                 self.PROXY_LLM_API = scope.get("llm_api", False)
                 self.PROXY_NOTIFICATIONS = scope.get("notifications", False)
+                self.PROXY_WEBDAV = scope.get("webdav", True)
                 self.PROXY_UPDATE_CHECK = scope.get("update_check", False)
 
             # 加载 WebDAV 同步配置（仅同步设置，凭据从 .env 加载）
@@ -687,6 +691,7 @@ class Settings(BaseSettings):
             "semantic_scholar": self.PROXY_SEMANTIC_SCHOLAR,
             "llm_api": self.PROXY_LLM_API,
             "notifications": self.PROXY_NOTIFICATIONS,
+            "webdav": self.PROXY_WEBDAV,
             "update_check": self.PROXY_UPDATE_CHECK,
         }
 

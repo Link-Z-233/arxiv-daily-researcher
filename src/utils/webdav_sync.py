@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 try:  # ``fcntl`` is unavailable on native Windows but WebDAV upload still works there.
     import fcntl
@@ -24,7 +25,103 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX platforms
 import requests
 from requests.auth import HTTPBasicAuth
 
+from utils.safe_url import safe_configured_http_url
+
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS = 30
+
+
+def _decode_webdav_path_segment(segment: str) -> str:
+    """Decode a user-facing path segment before checking traversal semantics."""
+    value = segment
+    # A single decode catches normal ``%2e%2e``.  Repeating a small bounded
+    # number of times also catches accidental/double-encoded traversal without
+    # turning path validation into an unbounded parser.
+    for _ in range(4):
+        decoded = unquote(value)
+        if decoded == value:
+            break
+        value = decoded
+    return value
+
+
+def normalize_webdav_remote_path(value: object) -> str:
+    """Normalize a relative WebDAV root and reject traversal/URL syntax.
+
+    WebDAV paths are subsequently handed to a third-party client library.  A
+    user normally enters a simple directory such as ``/arxiv-researcher/``;
+    treating ``..``, encoded separators or query syntax as ordinary text would
+    let that library target a surprising remote location.  The empty value is
+    retained as a compatibility spelling for the server's configured root.
+    """
+    if not isinstance(value, str):
+        raise ValueError("WebDAV 远程路径必须是字符串")
+    raw_path = value.strip()
+    if not raw_path or raw_path == "/":
+        return ""
+    if any(ord(character) < 0x20 for character in raw_path):
+        raise ValueError("WebDAV 远程路径不能包含控制字符")
+    if "\\" in raw_path or "?" in raw_path or "#" in raw_path:
+        raise ValueError("WebDAV 远程路径不能包含反斜杠、查询参数或片段")
+
+    normalized_parts = []
+    for raw_part in raw_path.strip("/").split("/"):
+        if not raw_part:
+            continue
+        part = _decode_webdav_path_segment(raw_part)
+        if (
+            not part
+            or part in {".", ".."}
+            or "/" in part
+            or "\\" in part
+            or any(ord(character) < 0x20 for character in part)
+        ):
+            raise ValueError(f"WebDAV 远程路径包含不安全的目录段: {raw_part!r}")
+        normalized_parts.append(part)
+    return "/".join(normalized_parts)
+
+
+def normalize_webdav_base_url(value: object) -> str:
+    """Validate and normalize a WebDAV HTTP(S) endpoint without credentials."""
+    url = safe_configured_http_url(value, allow_query=False)
+    if not url:
+        raise ValueError("WebDAV URL 必须是无内嵌凭据的有效 HTTP(S) 地址")
+    parsed = urlsplit(url)
+    path = normalize_webdav_remote_path(parsed.path)
+    # ``webdavclient3`` expects hostname + optional base path and appends its
+    # own remote path.  Preserve a configured DAV endpoint path, but never an
+    # ambiguous trailing slash, query or fragment.
+    normalized_path = (
+        "/" + "/".join(quote(part, safe="@:+,;=()[]") for part in path.split("/"))
+        if path
+        else ""
+    )
+    return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
+
+
+def normalize_webdav_username(value: object) -> str:
+    """Validate a Basic-auth username without changing its meaningful bytes."""
+    if not isinstance(value, str):
+        raise ValueError("WebDAV 用户名必须是字符串")
+    username = value.strip()
+    if (
+        not username
+        or ":" in username
+        or any(ord(character) < 0x20 for character in username)
+    ):
+        raise ValueError("WebDAV 用户名不能为空且不能包含冒号或控制字符")
+    return username
+
+
+def validate_webdav_password(value: object) -> str:
+    """Keep Basic-auth password input out of header-injection territory."""
+    if not isinstance(value, str):
+        raise ValueError("WebDAV 密码必须是字符串")
+    if any(ord(character) < 0x20 for character in value):
+        raise ValueError("WebDAV 密码不能包含控制字符")
+    return value
 
 
 # The WebUI currently writes ordinary five-field crontab expressions.  Keep
@@ -230,29 +327,40 @@ class WebDAVSync:
                 "WebDAV 同步需要 webdavclient3 库。请运行: pip install webdavclient3"
             )
 
+        # Validate before constructing the third-party client.  It otherwise
+        # accepts traversal-like paths and endpoints with embedded credentials.
+        hostname = normalize_webdav_base_url(url)
+        username = normalize_webdav_username(username)
+        password = validate_webdav_password(password)
+        self.remote_root = normalize_webdav_remote_path(remote_path)
+
         # webdav_hostname 必须去除末尾斜杠，避免 webdavclient3 拼接出 // 导致 403 错误
-        hostname = url.rstrip("/")
         options = {
             "webdav_hostname": hostname,
             "webdav_login": username,
             "webdav_password": password,
+            "webdav_timeout": DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS,
             # 坚果云等服务器不支持 HEAD 请求，必须禁用 check
             # 后续所有存在性检查改用 _check_remote()（基于 PROPFIND）
             "disable_check": True,
         }
-        if proxy_url:
-            options["proxy_hostname"] = proxy_url
-
         self.client = Client(options)
-        self.remote_root = remote_path.strip("/")  # e.g. "arxiv-daily-researcher"
         self._project_root = Path(__file__).resolve().parent.parent.parent
 
         # 用于直接 HTTP 请求的 session（绕过 webdavclient3 的 HEAD check）
         self._http = requests.Session()
         if proxy_url:
-            self._http.proxies = {"http": proxy_url, "https": proxy_url}
+            proxy_mapping = {"http": proxy_url, "https": proxy_url}
+            self._http.proxies.update(proxy_mapping)
+            # webdavclient3 owns a separate requests.Session for PUT/GET/MKCOL.
+            # Its advertised ``proxy_hostname`` option is ignored by the
+            # supported 3.x client, so set the real session proxy explicitly.
+            client_session = getattr(self.client, "session", None)
+            if client_session is None or not hasattr(client_session, "proxies"):
+                raise RuntimeError("WebDAV 客户端不支持配置网络代理")
+            client_session.proxies.update(proxy_mapping)
         self._http.auth = HTTPBasicAuth(username, password)
-        self._base_url = url.rstrip("/")
+        self._base_url = hostname
 
     def _data_dir(self) -> Path:
         """Return the configured data directory when the worker config is available.
@@ -270,15 +378,20 @@ class WebDAVSync:
 
     def _remote(self, rel_path: str) -> str:
         """将相对路径拼接到 remote_root 下，返回完整远程路径。"""
-        rel = rel_path.strip("/")
+        rel = normalize_webdav_remote_path(rel_path)
         if self.remote_root:
             return f"{self.remote_root}/{rel}" if rel else self.remote_root
         return rel
 
     def _url(self, remote_path: str) -> str:
         """构建完整的 WebDAV URL。"""
-        path = remote_path.strip("/")
-        return f"{self._base_url}/{path}" if path else self._base_url
+        path = normalize_webdav_remote_path(remote_path)
+        if not path:
+            return self._base_url
+        # Quote each already-validated segment rather than letting path data
+        # reinterpret a query/fragment or a slash at URL construction time.
+        encoded_path = "/".join(quote(part, safe="@:+,;=()[]") for part in path.split("/"))
+        return f"{self._base_url}/{encoded_path}"
 
     def _check_remote(self, remote_path: str) -> bool:
         """
@@ -288,8 +401,17 @@ class WebDAVSync:
         """
         url = self._url(remote_path)
         try:
-            resp = self._http.request("PROPFIND", url, headers={"Depth": "0"})
-            return resp.status_code == 207
+            resp = self._http.request(
+                "PROPFIND",
+                url,
+                headers={"Depth": "0"},
+                timeout=DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
+            try:
+                return resp.status_code == 207
+            finally:
+                resp.close()
         except Exception as e:
             logger.debug(f"PROPFIND 检查失败 {url}: {e}")
             return False
@@ -301,7 +423,8 @@ class WebDAVSync:
             # 使用 PROPFIND 检查目标目录是否存在（支持坚果云等不支持 HEAD 的服务器）
             if not self._check_remote(remote):
                 # 如果不存在，尝试创建（以此验证凭据和写入权限）
-                self._ensure_remote_dir(remote + "/")
+                if not self._ensure_remote_dir(remote + "/"):
+                    raise RuntimeError("无法创建或确认 WebDAV 远程目录")
             return True
         except Exception as e:
             logger.error(f"WebDAV 连接测试失败: {e}")
@@ -332,7 +455,8 @@ class WebDAVSync:
         if config_path:
             try:
                 remote_file = self._remote("configs/config.json")
-                self._ensure_remote_dir(self._remote("configs") + "/")
+                if not self._ensure_remote_dir(self._remote("configs") + "/"):
+                    raise RuntimeError("无法创建 WebDAV 配置目录")
                 self.client.upload_file(remote_file, str(config_path))
                 results["configs/config.json"] = True
                 logger.info("已上传 configs/config.json")
@@ -607,7 +731,8 @@ class WebDAVSync:
             source_conn = None
 
             remote_file = self._remote("data/daily_research/daily_research.db")
-            self._ensure_remote_dir(self._remote("data/daily_research") + "/")
+            if not self._ensure_remote_dir(self._remote("data/daily_research") + "/"):
+                raise RuntimeError("无法创建 WebDAV SQLite 快照目录")
             self.client.upload_file(remote_file, str(temporary_path))
             logger.info("已上传一致性 SQLite 快照: data/daily_research/daily_research.db")
             return True
@@ -748,26 +873,42 @@ class WebDAVSync:
                 except OSError:
                     logger.warning("无法清理 SQLite 下载临时文件: %s", temporary_path)
 
-    def _ensure_remote_dir(self, remote_dir: str):
-        """确保远程目录存在，不存在则递归创建。"""
-        parts = remote_dir.strip("/").split("/")
+    def _ensure_remote_dir(self, remote_dir: str) -> bool:
+        """Ensure a validated remote directory exists and confirm every level.
+
+        The previous best-effort implementation swallowed all ``mkdir``
+        failures, so ``test_connection`` could report success while no usable
+        directory had been created.  A race where another client creates the
+        same directory remains fine, provided a subsequent PROPFIND confirms
+        it exists.
+        """
+        normalized = normalize_webdav_remote_path(remote_dir)
+        if not normalized:
+            return self._check_remote("")
+        parts = normalized.split("/")
         current = ""
         for part in parts:
             current = f"{current}/{part}" if current else part
+            if self._check_remote(current):
+                continue
             try:
+                self.client.mkdir(current + "/")
+            except Exception as exc:
+                # A concurrent creation is the only non-fatal failure path.
                 if not self._check_remote(current):
-                    self.client.mkdir(current + "/")
-                    logger.debug(f"已创建远程目录: {current}/")
-            except Exception:
-                try:
-                    self.client.mkdir(current + "/")
-                except Exception:
-                    pass  # 目录可能已存在
+                    logger.warning("创建 WebDAV 远程目录失败 %s: %s", current, exc)
+                    return False
+            if not self._check_remote(current):
+                logger.warning("WebDAV 远程目录创建后仍不可确认: %s", current)
+                return False
+            logger.debug(f"已创建远程目录: {current}/")
+        return True
 
     def _upload_directory(self, local_dir: Path, remote_dir: str) -> bool:
         """逐文件上传本地目录到远程（不使用 upload_directory 避免删除远程已有文件）。"""
         try:
-            self._ensure_remote_dir(remote_dir)
+            if not self._ensure_remote_dir(remote_dir):
+                raise RuntimeError("无法创建 WebDAV 目标目录")
             file_count = 0
             for item in local_dir.rglob("*"):
                 if item.is_file():
@@ -779,7 +920,8 @@ class WebDAVSync:
                     parent_parts = rel_posix.rsplit("/", 1)
                     if len(parent_parts) > 1:
                         parent_remote = f"{remote_dir.rstrip('/')}/{parent_parts[0]}/"
-                        self._ensure_remote_dir(parent_remote)
+                        if not self._ensure_remote_dir(parent_remote):
+                            raise RuntimeError(f"无法创建 WebDAV 目标目录: {parent_remote}")
                     self.client.upload_file(remote_file, str(item))
                     file_count += 1
             logger.info(f"已上传目录 {local_dir.name}/ ({file_count} 个文件)")
@@ -821,10 +963,17 @@ def create_sync_client(
             logger.warning("WebDAV URL 或用户名未配置")
             return None
 
-        # 获取代理配置
+        # WebDAV is a backup service, not a reason to route unexpectedly
+        # through a global proxy.  Keep its prior behavior only when the
+        # notification/network scope has explicitly opted in; older settings
+        # objects without ``get_proxy_dict`` safely retain no proxy.
         proxy_url = ""
-        if getattr(settings, "PROXY_ENABLED", False) and getattr(settings, "PROXY_URL", ""):
-            proxy_url = settings.PROXY_URL
+        try:
+            proxy_config = settings.get_proxy_dict("webdav")
+        except (AttributeError, TypeError):
+            proxy_config = None
+        if proxy_config:
+            proxy_url = proxy_config.get("https") or proxy_config.get("http") or ""
 
         return WebDAVSync(
             url=url,

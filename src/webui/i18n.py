@@ -909,6 +909,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "企业微信、钉钉、Telegram 等通知推送",
         "en": "WeChat Work, DingTalk, Telegram, and other notification pushes",
     },
+    "proxy_webdav_label": {"zh": "WebDAV 同步", "en": "WebDAV Sync"},
+    "proxy_webdav_help": {
+        "zh": "WebDAV 配置和数据备份/恢复请求",
+        "en": "WebDAV configuration and data backup/restore requests",
+    },
     "proxy_update_check_label": {"zh": "检查更新", "en": "Update Check"},
     "proxy_update_check_help": {
         "zh": "GitHub 版本更新检查（需访问 api.github.com）",

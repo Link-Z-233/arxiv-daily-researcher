@@ -124,6 +124,19 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         self.assertEqual(flat["huggingface_papers_request_interval_seconds"], 0.5)
         self.assertTrue(flat["proxy_huggingface_papers"])
 
+    def test_webdav_proxy_scope_round_trips_independently(self):
+        config = build_config_dict(proxy_webdav=True, proxy_notifications=False)
+        self.assertTrue(config["proxy"]["scope"]["webdav"])
+        self.assertFalse(config["proxy"]["scope"]["notifications"])
+
+        flat = flatten_config_dict(config)
+        self.assertTrue(flat["proxy_webdav"])
+        self.assertFalse(flat["proxy_notifications"])
+
+        # An old config without the new key must keep the former behavior:
+        # global proxying also covered WebDAV.
+        self.assertTrue(flatten_config_dict({"proxy": {"scope": {}}})["proxy_webdav"])
+
     def test_legacy_configuration_without_hf_block_stays_compatible(self):
         flat = flatten_config_dict({"data_sources": {"enabled": ["arxiv"]}})
         self.assertEqual(flat["huggingface_papers_availability_lag_days"], 2)

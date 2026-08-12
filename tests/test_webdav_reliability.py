@@ -12,10 +12,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from utils.webdav_sync import (  # noqa: E402
+    DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS,
     WebDAVSync,
     after_report_sync_maintenance_entry,
     cron_schedule_matches,
     deliver_pending_after_report_syncs,
+    normalize_webdav_base_url,
+    normalize_webdav_remote_path,
     validate_cron_schedule,
 )
 from utils.webdav_scheduler import run_scheduled_webdav_sync  # noqa: E402
@@ -43,6 +46,31 @@ def _sync_shell(project_root: Path) -> WebDAVSync:
     sync._project_root = project_root
     sync.remote_root = "arxiv-researcher"
     return sync
+
+
+class _PropfindResponse:
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _PropfindSession:
+    def __init__(self, response: _PropfindResponse):
+        self.response = response
+        self.calls = []
+
+    def request(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.response
+
+
+class _WebDavLibraryClient:
+    def __init__(self, options):
+        self.options = options
+        self.session = type("Session", (), {"proxies": {}})()
 
 
 class WebDAVReliabilityTests(unittest.TestCase):
@@ -192,6 +220,72 @@ class WebDAVReliabilityTests(unittest.TestCase):
             self.assertFalse(result["configs/config.json"])
             self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
             self.assertEqual(list(config_path.parent.glob("*.download")), [])
+
+    def test_remote_root_and_base_url_reject_traversal_credentials_and_query_syntax(self):
+        self.assertEqual(
+            normalize_webdav_remote_path(" /research/physics/ "), "research/physics"
+        )
+        self.assertEqual(
+            normalize_webdav_base_url("https://dav.example.test/dav/root/"),
+            "https://dav.example.test/dav/root",
+        )
+        for unsafe_path in ("../other", "data/%2e%2e/private", "a/%252e%252e/b", "a?x=1"):
+            with self.subTest(unsafe_path=unsafe_path):
+                with self.assertRaisesRegex(ValueError, "WebDAV 远程路径"):
+                    normalize_webdav_remote_path(unsafe_path)
+        for unsafe_url in (
+            "https://user:pass@dav.example.test/root",
+            "https://dav.example.test/root?token=1",
+            "https://dav.example.test/root#fragment",
+        ):
+            with self.subTest(unsafe_url=unsafe_url):
+                with self.assertRaisesRegex(ValueError, "WebDAV URL"):
+                    normalize_webdav_base_url(unsafe_url)
+
+    def test_propfind_is_bounded_non_redirecting_and_closes_response(self):
+        sync = WebDAVSync.__new__(WebDAVSync)
+        sync._base_url = "https://dav.example.test/root"
+        response = _PropfindResponse(207)
+        sync._http = _PropfindSession(response)
+
+        self.assertTrue(sync._check_remote("workspace/report"))
+        args, kwargs = sync._http.calls[0]
+        self.assertEqual(args, ("PROPFIND", "https://dav.example.test/root/workspace/report"))
+        self.assertEqual(kwargs["headers"], {"Depth": "0"})
+        self.assertEqual(kwargs["timeout"], DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS)
+        self.assertFalse(kwargs["allow_redirects"])
+        self.assertTrue(response.closed)
+
+    def test_ensure_remote_dir_fails_when_mkdir_cannot_be_confirmed(self):
+        sync = WebDAVSync.__new__(WebDAVSync)
+        sync._check_remote = lambda _remote: False
+        sync.client = type("Client", (), {"mkdir": lambda *_args, **_kwargs: None})()
+
+        self.assertFalse(sync._ensure_remote_dir("workspace/reports/"))
+
+    def test_constructor_sets_timeout_and_proxy_on_both_webdav_sessions(self):
+        with patch.dict(
+            sys.modules,
+            {
+                "webdav3": type("Module", (), {})(),
+                "webdav3.client": type("Module", (), {"Client": _WebDavLibraryClient})(),
+            },
+        ):
+            sync = WebDAVSync(
+                "https://dav.example.test/root/",
+                "user",
+                "password",
+                remote_path="research",
+                proxy_url="http://proxy.example.test:3128",
+            )
+
+        expected_proxy = {
+            "http": "http://proxy.example.test:3128",
+            "https": "http://proxy.example.test:3128",
+        }
+        self.assertEqual(sync.client.options["webdav_timeout"], DEFAULT_WEBDAV_REQUEST_TIMEOUT_SECONDS)
+        self.assertEqual(sync.client.session.proxies, expected_proxy)
+        self.assertEqual(sync._http.proxies, expected_proxy)
 
     def test_scheduled_cron_matching_supports_ranges_steps_names_and_cron_day_rules(self):
         self.assertTrue(

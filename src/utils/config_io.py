@@ -492,6 +492,7 @@ def build_config_dict(
     proxy_semantic_scholar: bool = False,
     proxy_llm_api: bool = False,
     proxy_notifications: bool = False,
+    proxy_webdav: bool = True,
     proxy_update_check: bool = False,
     webdav_enabled: bool = False,
     webdav_remote_path: str = "/arxiv-researcher/",
@@ -669,6 +670,7 @@ def build_config_dict(
                 "semantic_scholar": proxy_semantic_scholar,
                 "llm_api": proxy_llm_api,
                 "notifications": proxy_notifications,
+                "webdav": proxy_webdav,
                 "update_check": proxy_update_check,
             },
         },
@@ -900,6 +902,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["proxy_semantic_scholar"] = px_scope.get("semantic_scholar", False)
     flat["proxy_llm_api"] = px_scope.get("llm_api", False)
     flat["proxy_notifications"] = px_scope.get("notifications", False)
+    flat["proxy_webdav"] = px_scope.get("webdav", True)
     flat["proxy_update_check"] = px_scope.get("update_check", False)
 
     # WebDAV
