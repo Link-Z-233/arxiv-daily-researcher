@@ -85,6 +85,36 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         flat = flatten_config_dict(config)
         self.assertEqual(flat["arxiv_announcement_lookback_grace_days"], 4)
 
+    def test_huggingface_papers_configuration_and_proxy_round_trip(self):
+        config = build_config_dict(
+            enabled_sources=["arxiv", "huggingface_papers"],
+            huggingface_papers_availability_lag_days=3,
+            huggingface_papers_lookback_grace_days=4,
+            huggingface_papers_request_timeout_seconds=45,
+            huggingface_papers_request_interval_seconds=0.5,
+            proxy_huggingface_papers=True,
+        )
+        hf = config["data_sources"]["huggingface_papers"]
+        self.assertEqual(hf["availability_lag_days"], 3)
+        self.assertEqual(hf["lookback_grace_days"], 4)
+        self.assertEqual(hf["request_timeout_seconds"], 45)
+        self.assertEqual(hf["request_interval_seconds"], 0.5)
+        self.assertTrue(config["proxy"]["scope"]["huggingface_papers"])
+
+        flat = flatten_config_dict(config)
+        self.assertEqual(flat["enabled_sources"], ["arxiv", "huggingface_papers"])
+        self.assertEqual(flat["huggingface_papers_availability_lag_days"], 3)
+        self.assertEqual(flat["huggingface_papers_lookback_grace_days"], 4)
+        self.assertEqual(flat["huggingface_papers_request_timeout_seconds"], 45)
+        self.assertEqual(flat["huggingface_papers_request_interval_seconds"], 0.5)
+        self.assertTrue(flat["proxy_huggingface_papers"])
+
+    def test_legacy_configuration_without_hf_block_stays_compatible(self):
+        flat = flatten_config_dict({"data_sources": {"enabled": ["arxiv"]}})
+        self.assertEqual(flat["huggingface_papers_availability_lag_days"], 2)
+        self.assertEqual(flat["huggingface_papers_lookback_grace_days"], 2)
+        self.assertFalse(flat["proxy_huggingface_papers"])
+
     def test_v2_scoring_strategy_round_trips_and_missing_strategy_is_legacy(self):
         config = build_config_dict(
             score_strategy="core_relevance_v2",

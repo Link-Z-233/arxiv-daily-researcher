@@ -20,6 +20,14 @@
     "arxiv": {
       "fetch_timeout_seconds": 180,
       "announcement_lookback_grace_days": 2
+    },
+    // Optional curated supplementary feed; it does not replace arXiv's
+    // complete category scan and remains disabled in "enabled" by default.
+    "huggingface_papers": {
+      "availability_lag_days": 2,
+      "lookback_grace_days": 2,
+      "request_timeout_seconds": 30,
+      "request_interval_seconds": 0.25
     }
   },
 
@@ -253,6 +261,7 @@
     "scope": {
       "arxiv": true,
       "openalex": false,
+      "huggingface_papers": false,
       "semantic_scholar": false,
       "llm_api": false,
       "notifications": false,

@@ -70,6 +70,12 @@ def render(_env_values: dict, config_values: dict):
             help=t("proxy_openalex_help"),
         )
         st.toggle(
+            t("proxy_huggingface_papers_label"),
+            value=flat.get("proxy_huggingface_papers", False),
+            key="proxy_huggingface_papers",
+            help=t("proxy_huggingface_papers_help"),
+        )
+        st.toggle(
             t("proxy_semantic_scholar_label"),
             value=flat.get("proxy_semantic_scholar", False),
             key="proxy_semantic_scholar",
@@ -111,6 +117,9 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "proxy_no_proxy": no_proxy,
         "proxy_arxiv": st.session_state.get("proxy_arxiv", True),
         "proxy_openalex": st.session_state.get("proxy_openalex", False),
+        "proxy_huggingface_papers": st.session_state.get(
+            "proxy_huggingface_papers", False
+        ),
         "proxy_semantic_scholar": st.session_state.get("proxy_semantic_scholar", False),
         "proxy_llm_api": st.session_state.get("proxy_llm_api", False),
         "proxy_notifications": st.session_state.get("proxy_notifications", False),

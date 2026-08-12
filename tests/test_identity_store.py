@@ -15,7 +15,10 @@ from sources.base_source import PaperMetadata, split_arxiv_version  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from report.daily.reporter import Reporter  # noqa: E402
 from agents.analysis_agent import WeightedScoreResponse  # noqa: E402
-from modes.daily_research import _exclude_sqlite_delivered_papers  # noqa: E402
+from modes.daily_research import (  # noqa: E402
+    _exclude_cross_source_arxiv_mirrors,
+    _exclude_sqlite_delivered_papers,
+)
 
 
 def _paper(paper_id: str) -> PaperMetadata:
@@ -27,6 +30,21 @@ def _paper(paper_id: str) -> PaperMetadata:
         published_date=datetime.now(timezone.utc),
         url=f"https://arxiv.org/abs/{paper_id}",
         source="arxiv",
+    )
+
+
+def _hf_paper(arxiv_id: str) -> PaperMetadata:
+    return PaperMetadata(
+        paper_id=f"hf:{arxiv_id}",
+        title=f"HF mirror {arxiv_id}",
+        authors=["Author"],
+        abstract="abstract",
+        published_date=datetime.now(timezone.utc),
+        url=f"https://arxiv.org/abs/{arxiv_id}",
+        source="huggingface_papers",
+        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}.pdf",
+        arxiv_id=arxiv_id,
+        arxiv_url=f"https://arxiv.org/abs/{arxiv_id}",
     )
 
 
@@ -464,6 +482,72 @@ class IdentityStoreTests(unittest.TestCase):
 
             filtered = _exclude_sqlite_delivered_papers(store, {"arxiv": [paper]})
             self.assertEqual(filtered, {"arxiv": []})
+
+    def test_cross_source_arxiv_mirror_dedup_prefers_same_run_arxiv(self):
+        arxiv = _paper("2501.12345v2")
+        mirror = _hf_paper("2501.12345")
+
+        filtered = _exclude_cross_source_arxiv_mirrors(
+            None,
+            {"arxiv": [arxiv], "huggingface_papers": [mirror]},
+        )
+
+        self.assertEqual(filtered["arxiv"], [arxiv])
+        self.assertEqual(filtered["huggingface_papers"], [])
+
+    def test_delivered_arxiv_suppresses_late_hf_mirror_but_not_arxiv_revision(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(1)
+            v1 = _paper("2501.12345v1")
+            score = WeightedScoreResponse(
+                total_score=4,
+                keyword_scores={"quantum": 4},
+                author_bonus=0,
+                expert_authors_found=[],
+                passing_score=3,
+                is_qualified=True,
+                reasoning="relevant",
+                tldr="A concise TLDR",
+                extracted_keywords=["quantum"],
+            )
+            store.upsert_paper_seen(run_id, "arxiv", v1)
+            store.update_score(
+                run_id,
+                "arxiv",
+                {"paper_metadata": v1, "paper_id": v1.paper_id, "score_response": score},
+            )
+            store.update_translation(run_id, "arxiv", v1.paper_id, "中文摘要")
+            store.finalize_report_delivery(
+                run_id,
+                {"arxiv": Path(temp_dir) / "report.md"},
+                {"arxiv": [{"paper_metadata": v1, "paper_id": v1.paper_id, "requires_analysis": False}]},
+            )
+
+            mirror = _hf_paper("2501.12345")
+            mirror_only = _exclude_cross_source_arxiv_mirrors(
+                store,
+                {"huggingface_papers": [mirror]},
+            )
+            v2 = _paper("2501.12345v2")
+            revision_batch = _exclude_cross_source_arxiv_mirrors(
+                store,
+                {"arxiv": [v2]},
+            )
+
+        self.assertEqual(mirror_only["huggingface_papers"], [])
+        self.assertEqual(revision_batch["arxiv"], [v2])
+
+    def test_hf_only_item_remains_when_no_arxiv_mirror_was_delivered(self):
+        mirror = _hf_paper("2501.12345")
+        unrelated = _paper("2501.99999v1")
+
+        filtered = _exclude_cross_source_arxiv_mirrors(
+            None,
+            {"arxiv": [unrelated], "huggingface_papers": [mirror]},
+        )
+
+        self.assertEqual(filtered["huggingface_papers"], [mirror])
 
     def test_finalization_rejects_missing_translation_without_partial_delivery(self):
         with tempfile.TemporaryDirectory() as temp_dir:

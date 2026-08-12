@@ -1055,6 +1055,42 @@ class DailyResearchStore:
             ).fetchone()
             return row is not None
 
+    def has_delivered_arxiv_canonical(self, canonical_id: str) -> bool:
+        """Return whether any delivered arXiv version exists for a canonical ID.
+
+        This intentionally answers a broader question than
+        :meth:`is_paper_delivered`: a late-arriving supplemental mirror should
+        not create a second report merely because its upstream feed omitted an
+        arXiv ``vN`` suffix.  It is used only to suppress the mirror, never to
+        suppress an arXiv revision itself.
+        """
+        value = str(canonical_id or "").strip()
+        if not value:
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM paper_deliveries
+                WHERE source = 'arxiv' AND canonical_id = ?
+                LIMIT 1
+                """,
+                (value,),
+            ).fetchone()
+            if row is not None:
+                return True
+            # Backward-compatible fallback for databases before the delivery
+            # ledger.  Exact canonical identity still prevents false matches.
+            row = conn.execute(
+                """
+                SELECT 1 FROM daily_papers
+                WHERE source = 'arxiv' AND canonical_id = ?
+                  AND completed_at IS NOT NULL
+                LIMIT 1
+                """,
+                (value,),
+            ).fetchone()
+            return row is not None
+
     @staticmethod
     def _analysis_json(analysis: Any) -> str:
         if hasattr(analysis, "model_dump"):

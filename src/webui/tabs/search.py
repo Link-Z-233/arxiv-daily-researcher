@@ -5,6 +5,7 @@ from webui.i18n import t
 
 ALL_DATA_SOURCES = [
     "arxiv",
+    "huggingface_papers",
     "prl",
     "pra",
     "prb",
@@ -118,6 +119,44 @@ def render(_env_values: dict, config_values: dict):
         help=t("arxiv_announcement_lookback_grace_help"),
     )
 
+    st.info(t("huggingface_papers_source_notice"))
+    if "huggingface_papers" in current_sources:
+        hf_col1, hf_col2 = st.columns(2)
+        with hf_col1:
+            st.number_input(
+                t("huggingface_papers_availability_lag_label"),
+                min_value=0,
+                max_value=30,
+                value=flat.get("huggingface_papers_availability_lag_days", 2),
+                key="huggingface_papers_availability_lag_days",
+                help=t("huggingface_papers_availability_lag_help"),
+            )
+            st.number_input(
+                t("huggingface_papers_request_timeout_label"),
+                min_value=5,
+                max_value=600,
+                value=flat.get("huggingface_papers_request_timeout_seconds", 30),
+                key="huggingface_papers_request_timeout_seconds",
+            )
+        with hf_col2:
+            st.number_input(
+                t("huggingface_papers_lookback_grace_label"),
+                min_value=0,
+                max_value=30,
+                value=flat.get("huggingface_papers_lookback_grace_days", 2),
+                key="huggingface_papers_lookback_grace_days",
+                help=t("huggingface_papers_lookback_grace_help"),
+            )
+            st.number_input(
+                t("huggingface_papers_request_interval_label"),
+                min_value=0.0,
+                max_value=60.0,
+                step=0.05,
+                value=float(flat.get("huggingface_papers_request_interval_seconds", 0.25)),
+                key="huggingface_papers_request_interval_seconds",
+                help=t("huggingface_papers_request_interval_help"),
+            )
+
     st.divider()
 
     # ---- ArXiv Domains ----
@@ -163,6 +202,18 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "arxiv_fetch_timeout_seconds": st.session_state.get("arxiv_fetch_timeout_seconds", 180),
         "arxiv_announcement_lookback_grace_days": st.session_state.get(
             "arxiv_announcement_lookback_grace_days", 2
+        ),
+        "huggingface_papers_availability_lag_days": st.session_state.get(
+            "huggingface_papers_availability_lag_days", 2
+        ),
+        "huggingface_papers_lookback_grace_days": st.session_state.get(
+            "huggingface_papers_lookback_grace_days", 2
+        ),
+        "huggingface_papers_request_timeout_seconds": st.session_state.get(
+            "huggingface_papers_request_timeout_seconds", 30
+        ),
+        "huggingface_papers_request_interval_seconds": st.session_state.get(
+            "huggingface_papers_request_interval_seconds", 0.25
         ),
         "domains": domains,
     }

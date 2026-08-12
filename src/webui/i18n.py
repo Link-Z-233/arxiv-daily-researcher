@@ -282,6 +282,38 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "额外回看可能因周末公告或 API 索引延迟而晚出现的论文。已交付的同一版本会自动去重，不会重复推送。",
         "en": "Rescan this many extra days for papers delayed by announcements or API indexing. Delivered exact versions are deduplicated.",
     },
+    "huggingface_papers_source_notice": {
+        "zh": "Hugging Face Papers 是可选的精选补充流，不是 arXiv 全量来源。启用后会完整分页；与本次 arXiv 扫描或已交付 arXiv 镜像重复的条目会自动跳过。",
+        "en": "Hugging Face Papers is an optional curated supplementary feed, not a complete arXiv source. When enabled, all pages are fetched; mirrors already found or delivered through arXiv are skipped.",
+    },
+    "huggingface_papers_availability_lag_label": {
+        "zh": "HF 日榜可用性滞后（天）",
+        "en": "HF feed availability lag (days)",
+    },
+    "huggingface_papers_availability_lag_help": {
+        "zh": "避免将尚未形成的当天日榜误判为“没有论文”；默认读取两天前及更早的日榜。",
+        "en": "Avoid treating a not-yet-final daily feed as empty; by default, fetches feeds from two days ago and earlier.",
+    },
+    "huggingface_papers_lookback_grace_label": {
+        "zh": "HF 日榜额外回看（天）",
+        "en": "HF feed extra lookback (days)",
+    },
+    "huggingface_papers_lookback_grace_help": {
+        "zh": "对已可用日榜额外重扫近期日期，以抵御展示或索引延迟；精确交付账本会去重。",
+        "en": "Rescan additional already-available feeds for display or indexing delays; the exact delivery ledger prevents duplicates.",
+    },
+    "huggingface_papers_request_timeout_label": {
+        "zh": "HF 单页请求超时（秒）",
+        "en": "HF per-page request timeout (seconds)",
+    },
+    "huggingface_papers_request_interval_label": {
+        "zh": "HF 请求间隔（秒）",
+        "en": "HF request interval (seconds)",
+    },
+    "huggingface_papers_request_interval_help": {
+        "zh": "只限制请求速率，不限制结果数量或处理范围。",
+        "en": "Limits request rate only; it never caps result count or processing scope.",
+    },
     "arxiv_domains_title": {"zh": "ArXiv 目标分类", "en": "ArXiv Target Domains"},
     "arxiv_domains_hint": {
         "zh": "ArXiv 分类代码，详见 https://arxiv.org/category_taxonomy",
@@ -805,6 +837,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "proxy_openalex_help": {
         "zh": "OpenAlex 期刊论文数据源",
         "en": "OpenAlex journal paper data source",
+    },
+    "proxy_huggingface_papers_label": {
+        "zh": "Hugging Face Papers API",
+        "en": "Hugging Face Papers API",
+    },
+    "proxy_huggingface_papers_help": {
+        "zh": "Hugging Face Papers 可选补充论文流",
+        "en": "Hugging Face Papers optional supplementary feed",
     },
     "proxy_semantic_scholar_label": {
         "zh": "Semantic Scholar API",

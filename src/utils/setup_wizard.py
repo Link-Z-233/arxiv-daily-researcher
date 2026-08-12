@@ -338,6 +338,27 @@ def section_data_sources(existing_config: dict) -> dict:
             raise KeyboardInterrupt
         result["domains"] = [d.strip() for d in domains_str.split(",") if d.strip()]
 
+    if "huggingface_papers" in enabled:
+        console.print(
+            "[yellow]Hugging Face Papers is a curated supplementary feed, not a complete arXiv source.[/]"
+        )
+        lag = questionary.text(
+            "HF feed availability lag days:",
+            default=str(flat.get("huggingface_papers_availability_lag_days", 2)),
+            validate=lambda x: True if x.isdigit() else "Please enter a non-negative integer",
+            style=WIZARD_STYLE,
+        ).ask()
+        grace = questionary.text(
+            "HF feed extra lookback days:",
+            default=str(flat.get("huggingface_papers_lookback_grace_days", 2)),
+            validate=lambda x: True if x.isdigit() else "Please enter a non-negative integer",
+            style=WIZARD_STYLE,
+        ).ask()
+        if lag is None or grace is None:
+            raise KeyboardInterrupt
+        result["huggingface_papers_availability_lag_days"] = int(lag)
+        result["huggingface_papers_lookback_grace_days"] = int(grace)
+
     # OpenAlex config
     console.print()
     console.print("[dim]OpenAlex provides journal paper data. An email improves rate limits.[/]")

@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     # 扫描窗口之外额外回看这段时间；精确版本交付账本会去除重叠结果。
     ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS: int = 2
 
+    # Hugging Face Papers 配置。该日榜是可选的补充发现源，不是 arXiv
+    # 分类的全量替代；默认延迟读取已形成的榜单，并对近期日期重扫以抵御
+    # 上游索引/展示延迟。所有结果仍完整分页，不存在结果数量预算。
+    HUGGINGFACE_PAPERS_AVAILABILITY_LAG_DAYS: int = 2
+    HUGGINGFACE_PAPERS_LOOKBACK_GRACE_DAYS: int = 2
+    HUGGINGFACE_PAPERS_REQUEST_TIMEOUT_SECONDS: int = 30
+    HUGGINGFACE_PAPERS_REQUEST_INTERVAL_SECONDS: float = 0.25
+
     # Semantic Scholar 配置
     ENABLE_SEMANTIC_SCHOLAR_TLDR: bool = True  # 是否获取AI生成的TLDR
     SEMANTIC_SCHOLAR_API_KEY: str = ""  # Semantic Scholar API Key（可选）
@@ -191,6 +199,7 @@ class Settings(BaseSettings):
     # 各服务独立代理开关
     PROXY_ARXIV: bool = True  # ArXiv API 是否使用代理
     PROXY_OPENALEX: bool = False  # OpenAlex API 是否使用代理
+    PROXY_HUGGINGFACE_PAPERS: bool = False  # Hugging Face Papers API 是否使用代理
     PROXY_SEMANTIC_SCHOLAR: bool = False  # Semantic Scholar API 是否使用代理
     PROXY_LLM_API: bool = False  # LLM API 是否使用代理
     PROXY_NOTIFICATIONS: bool = False  # 通知 Webhook 是否使用代理
@@ -329,6 +338,25 @@ class Settings(BaseSettings):
                         self.ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS = arxiv_cfg.get(
                             "announcement_lookback_grace_days",
                             self.ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS,
+                        )
+                if "huggingface_papers" in ds_config:
+                    hf_cfg = ds_config["huggingface_papers"]
+                    if isinstance(hf_cfg, dict):
+                        self.HUGGINGFACE_PAPERS_AVAILABILITY_LAG_DAYS = hf_cfg.get(
+                            "availability_lag_days",
+                            self.HUGGINGFACE_PAPERS_AVAILABILITY_LAG_DAYS,
+                        )
+                        self.HUGGINGFACE_PAPERS_LOOKBACK_GRACE_DAYS = hf_cfg.get(
+                            "lookback_grace_days",
+                            self.HUGGINGFACE_PAPERS_LOOKBACK_GRACE_DAYS,
+                        )
+                        self.HUGGINGFACE_PAPERS_REQUEST_TIMEOUT_SECONDS = hf_cfg.get(
+                            "request_timeout_seconds",
+                            self.HUGGINGFACE_PAPERS_REQUEST_TIMEOUT_SECONDS,
+                        )
+                        self.HUGGINGFACE_PAPERS_REQUEST_INTERVAL_SECONDS = hf_cfg.get(
+                            "request_interval_seconds",
+                            self.HUGGINGFACE_PAPERS_REQUEST_INTERVAL_SECONDS,
                         )
 
             # 加载关键词配置
@@ -563,6 +591,7 @@ class Settings(BaseSettings):
                 scope = px_cfg.get("scope", {})
                 self.PROXY_ARXIV = scope.get("arxiv", True)
                 self.PROXY_OPENALEX = scope.get("openalex", False)
+                self.PROXY_HUGGINGFACE_PAPERS = scope.get("huggingface_papers", False)
                 self.PROXY_SEMANTIC_SCHOLAR = scope.get("semantic_scholar", False)
                 self.PROXY_LLM_API = scope.get("llm_api", False)
                 self.PROXY_NOTIFICATIONS = scope.get("notifications", False)
@@ -638,6 +667,7 @@ class Settings(BaseSettings):
         scope_map = {
             "arxiv": self.PROXY_ARXIV,
             "openalex": self.PROXY_OPENALEX,
+            "huggingface_papers": self.PROXY_HUGGINGFACE_PAPERS,
             "semantic_scholar": self.PROXY_SEMANTIC_SCHOLAR,
             "llm_api": self.PROXY_LLM_API,
             "notifications": self.PROXY_NOTIFICATIONS,

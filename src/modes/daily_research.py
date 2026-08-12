@@ -30,7 +30,12 @@ from config import settings
 from utils.logger import setup_logger
 from utils.token_counter import token_counter
 from agents import KeywordAgent, AnalysisAgent
-from sources import SearchAgent, PaperMetadata, ArxivFetchError
+from sources import (
+    ArxivFetchError,
+    HuggingFacePapersFetchError,
+    PaperMetadata,
+    SearchAgent,
+)
 from report.daily import Reporter
 from notifications import NotifierAgent, RunResult
 from utils.daily_research_store import DailyResearchStore
@@ -134,6 +139,75 @@ def _exclude_sqlite_delivered_papers(
                 len(delivered),
             )
         filtered[source] = [paper for paper in papers if paper not in delivered]
+    return filtered
+
+
+def _arxiv_mirror_canonical_id(paper: PaperMetadata) -> str:
+    """Return a normalised arXiv canonical ID exposed by a mirror record.
+
+    Mirror sources deliberately retain their own source/paper identity in the
+    delivery ledger.  This helper is only for deciding whether an arXiv record
+    should take precedence in the current report, or whether an already
+    delivered arXiv version has made a late mirror notification redundant.
+    """
+    from sources.base_source import split_arxiv_version
+
+    raw_id = getattr(paper, "arxiv_id", None)
+    if not isinstance(raw_id, str) or not raw_id.strip():
+        return ""
+    canonical_id, _version = split_arxiv_version(raw_id.strip())
+    return canonical_id.strip()
+
+
+def _exclude_cross_source_arxiv_mirrors(
+    store: DailyResearchStore | None,
+    papers_by_source: Dict[str, List[PaperMetadata]],
+) -> Dict[str, List[PaperMetadata]]:
+    """Prefer arXiv records over supplement-source mirrors without blocking revisions.
+
+    A Hugging Face entry is a mirror of a particular arXiv work, but its
+    source identity remains separate so a later arXiv v2/v3 is never hidden.
+    We suppress only the mirror: first if the same canonical arXiv work is in
+    the current batch, then if any arXiv version was previously delivered.
+    This avoids double reports when HF's curated feed arrives after the
+    canonical arXiv delivery while preserving HF-only discovery when arXiv is
+    not enabled.
+    """
+    arxiv_canonicals = {
+        (paper.canonical_id or paper.paper_id).strip()
+        for paper in papers_by_source.get("arxiv", [])
+        if (paper.canonical_id or paper.paper_id).strip()
+    }
+    if not arxiv_canonicals and store is None:
+        return papers_by_source
+
+    filtered: Dict[str, List[PaperMetadata]] = {}
+    for source, papers in papers_by_source.items():
+        if source != "huggingface_papers":
+            filtered[source] = papers
+            continue
+
+        kept = []
+        skipped_current = 0
+        skipped_delivered = 0
+        for paper in papers:
+            canonical_id = _arxiv_mirror_canonical_id(paper)
+            if canonical_id and canonical_id in arxiv_canonicals:
+                skipped_current += 1
+                continue
+            if canonical_id and store is not None and store.has_delivered_arxiv_canonical(canonical_id):
+                skipped_delivered += 1
+                continue
+            kept.append(paper)
+        if skipped_current or skipped_delivered:
+            logger.info(
+                "[%s] 跨源 arXiv 镜像去重跳过 %s 篇（同轮 arXiv %s，已交付 arXiv %s）",
+                source,
+                skipped_current + skipped_delivered,
+                skipped_current,
+                skipped_delivered,
+            )
+        filtered[source] = kept
     return filtered
 
 
@@ -706,6 +780,32 @@ class DailyResearchPipeline:
                 if store and run_id:
                     store.fail_run(run_id, error_detail)
                 return fetch_fail_result
+            except HuggingFacePapersFetchError as hfe:
+                # The optional source is still fail-closed once enabled: an
+                # incomplete curated feed must not be reported as an empty
+                # success, because its missed entries could fall outside the
+                # recovery window before the next run.
+                error_detail = str(hfe)
+                logger.error("Hugging Face Papers 抓取失败，终止本次运行: %s", error_detail)
+                fetch_fail_result = RunResult(
+                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    success=False,
+                    error_message=f"Hugging Face Papers 抓取失败: {error_detail}",
+                )
+                if settings.ENABLE_NOTIFICATIONS:
+                    try:
+                        NotifierAgent().notify(fetch_fail_result)
+                        NotifierAgent().notify_error(
+                            "huggingface_papers_fetch",
+                            "Hugging Face Papers 抓取失败\n\n"
+                            f"错误详情：{error_detail}\n\n"
+                            "已终止本次日报，以避免产生不完整的数据源结果。",
+                        )
+                    except Exception as ne:
+                        logger.warning("发送错误通知失败: %s", ne)
+                if store and run_id:
+                    store.fail_run(run_id, error_detail)
+                return fetch_fail_result
 
             if store:
                 # SQLite is the authoritative delivery ledger.  The JSON history
@@ -713,6 +813,10 @@ class DailyResearchPipeline:
                 # transaction; do not let that make an already delivered version
                 # appear as a fresh paper on the next run.
                 papers_by_source = _exclude_sqlite_delivered_papers(store, papers_by_source)
+
+            papers_by_source = _exclude_cross_source_arxiv_mirrors(
+                store, papers_by_source
+            )
 
             total_papers_count = sum(len(papers) for papers in papers_by_source.values())
 

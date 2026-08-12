@@ -102,7 +102,24 @@ V2 将把四个概念分离，而不是继续把所有内容累加进 `total_sco
 
 ### P3 — 数据源扩展（每个来源一个独立提交）
 
-候选顺序是 OpenReview、Hugging Face Papers，再根据实际需求评估 DBLP/PapersWithCode。每个来源都必须先完成：时间窗口/游标分页、源端延迟处理、规范化身份、精确交付去重、失败闭锁、可选富化与核心交付分离、fixture 测试和配置/WebUI 往返。不能用“某个第三方服务暂时不可用”把空列表当成功。
+每个来源都必须先完成：时间窗口/游标分页、源端延迟处理、规范化身份、精确交付去重、失败闭锁、可选富化与核心交付分离、fixture 测试和配置/WebUI 往返。不能用“某个第三方服务暂时不可用”把空列表当成功。
+
+#### P3.1 Hugging Face Papers（已实现，独立提交）
+
+- 新增默认关闭的 `huggingface_papers`。它是 Hugging Face 展示/精选的日榜，**不宣称全量 arXiv 覆盖，也绝不替代 arXiv 分类抓取**。
+- 使用日期接口完整跟随可信 HTTPS `rel=next` 分页；空数组才是正常结束。任何非空页缺续页、循环/跳页、错误 host/date/page、非列表 JSON、坏条目或网络失败都会 fail closed。
+- 默认 `availability_lag_days=2`，避免把尚未形成的当天榜单误当作空源；默认 `lookback_grace_days=2`，并以交付账本安全去重近期重扫。
+- HF 使用独立 JSON 历史和 SQLite source identity；调度器已泛化为“报告 source → 后端 source”映射，不会再把非 arXiv 来源错误写入 OpenAlex history。
+- 同轮 arXiv 记录优先于 HF 镜像；任何已交付 arXiv canonical ID 也会抑制其晚到 HF 镜像。此规则只抑制镜像，不会阻止 arXiv v2/v3 重新评分、分析和推送。
+- HF 条目保留 arXiv PDF，能够进入现有深度分析；报告中明确标识其“补充精选流”属性。
+
+#### P3.2 OpenReview（暂缓）
+
+OpenReview API V2 支持 invitation、时间水位和分页，技术上适合“明确会议 invitation”的可选监控，但不适合声称全站论文源。当前匿名 `/notes` 实测会触发 `403 ChallengeRequiredError`，会降低无人值守日报稳定性；因此不会把一个默认无法稳定运行的来源接入主线。待 API 访问策略稳定后，再以会议白名单、全量分页与失败闭锁的独立提交评估。
+
+#### P3.3 后续候选
+
+再根据实际需求评估 DBLP/PapersWithCode。拒绝 Google Scholar 无官方 API 的抓取方案；不引入任何结果上限、部分失败返回部分结果或“空列表降级成功”的实现。
 
 ### P4 — 可选的深度复核与个性化（后续设计，不预先承诺）
 

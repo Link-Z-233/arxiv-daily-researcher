@@ -10,6 +10,10 @@ from typing import List, Dict, Optional
 
 from .base_source import BasePaperSource, PaperMetadata
 from .arxiv_source import ArxivSource
+from .huggingface_papers_source import (
+    HUGGINGFACE_PAPERS_SOURCE_NAME,
+    HuggingFacePapersSource,
+)
 from .openalex_source import OpenAlexSource, JOURNAL_ISSN_MAP
 from .semantic_scholar_enricher import SemanticScholarEnricher
 
@@ -45,8 +49,9 @@ class SearchAgent:
 
         参数:
             history_dir: 历史记录存储目录
-            enabled_sources: 启用的数据源列表，如 ["arxiv", "prl", "pra"]。
-                只接受 ``arxiv`` 或已知的期刊代码；未知代码属于配置错误。
+            enabled_sources: 启用的数据源列表，如
+                ["arxiv", "huggingface_papers", "prl", "pra"]。
+                只接受内置来源或已知的期刊代码；未知代码属于配置错误。
             arxiv_domains: ArXiv 领域列表，如 ["quant-ph", "cs.AI"]
             journals: 期刊代码列表，如 ["prl", "pra"]
             max_results: 旧配置兼容字段。日报扫描不按数量截断，始终处理
@@ -87,6 +92,11 @@ class SearchAgent:
 
         # 初始化数据源
         self.sources: Dict[str, BasePaperSource] = {}
+        # A report's source label is not always the same as the object that
+        # fetched it: OpenAlex emits one label per configured journal. Keep
+        # this mapping explicit so a standalone source is never accidentally
+        # written into OpenAlex history or denied PDF analysis.
+        self._source_backends: Dict[str, str] = {}
         self._init_sources()
 
     def _init_sources(self):
@@ -106,10 +116,13 @@ class SearchAgent:
                     f"数据源代码必须是非空字符串: {configured_source!r}"
                 )
             source = configured_source.strip().lower()
-            if source != "arxiv" and source not in JOURNAL_ISSN_MAP:
+            if (
+                source not in {"arxiv", HUGGINGFACE_PAPERS_SOURCE_NAME}
+                and source not in JOURNAL_ISSN_MAP
+            ):
                 raise ValueError(
                     f"未知数据源代码: {configured_source}。"
-                    "请使用 arxiv 或已支持的 OpenAlex 期刊代码。"
+                    "请使用 arxiv、huggingface_papers 或已支持的 OpenAlex 期刊代码。"
                 )
             if source not in seen_sources:
                 normalized_sources.append(source)
@@ -144,13 +157,45 @@ class SearchAgent:
                     _settings, "ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS", 2
                 ),
             )
+            self._source_backends["arxiv"] = "arxiv"
             logger.info("[SearchAgent] 已启用 ArXiv 数据源")
+
+        # Hugging Face Papers is a selected supplementary feed, not an arXiv
+        # replacement.  It remains opt-in in config, but gets the same
+        # fail-closed fetch and independent compatibility history semantics.
+        if HUGGINGFACE_PAPERS_SOURCE_NAME in self.enabled_sources:
+            hf_source = HuggingFacePapersSource(
+                history_dir=self.history_dir,
+                availability_lag_days=getattr(
+                    _settings, "HUGGINGFACE_PAPERS_AVAILABILITY_LAG_DAYS", 2
+                ),
+                lookback_grace_days=getattr(
+                    _settings, "HUGGINGFACE_PAPERS_LOOKBACK_GRACE_DAYS", 2
+                ),
+                request_timeout_seconds=getattr(
+                    _settings, "HUGGINGFACE_PAPERS_REQUEST_TIMEOUT_SECONDS", 30
+                ),
+                request_interval_seconds=getattr(
+                    _settings, "HUGGINGFACE_PAPERS_REQUEST_INTERVAL_SECONDS", 0.25
+                ),
+            )
+            hf_proxy = _settings.get_proxy_dict(HUGGINGFACE_PAPERS_SOURCE_NAME)
+            if hf_proxy:
+                hf_source.session.proxies.update(hf_proxy)
+                logger.info("[SearchAgent] Hugging Face Papers 已配置网络代理")
+            self.sources[HUGGINGFACE_PAPERS_SOURCE_NAME] = hf_source
+            self._source_backends[HUGGINGFACE_PAPERS_SOURCE_NAME] = (
+                HUGGINGFACE_PAPERS_SOURCE_NAME
+            )
+            logger.info(
+                "[SearchAgent] 已启用 Hugging Face Papers 补充数据源（非 arXiv 全量源）"
+            )
 
         # 检查是否启用期刊（通过 OpenAlex）
         # 期刊代码可以直接作为 enabled_sources 的一部分
         journal_codes = []
         for source in self.enabled_sources:
-            if source != "arxiv":
+            if source not in {"arxiv", HUGGINGFACE_PAPERS_SOURCE_NAME}:
                 journal_codes.append(source)
 
         # 也支持通过 journals 参数指定
@@ -171,6 +216,8 @@ class SearchAgent:
                 self.sources["openalex"].session.proxies.update(openalex_proxy)
                 logger.info("[SearchAgent] OpenAlex 已配置网络代理")
             self._journal_codes = journal_codes
+            for journal_code in journal_codes:
+                self._source_backends[journal_code] = "openalex"
             logger.info(f"[SearchAgent] 已启用 OpenAlex 数据源，期刊: {journal_codes}")
         else:
             self._journal_codes = []
@@ -285,25 +332,24 @@ class SearchAgent:
             paper_id: 论文 ID
             source: 数据源名称（arxiv 或期刊代码）
         """
-        # ArXiv 论文
-        if source == "arxiv" and "arxiv" in self.sources:
-            self.sources["arxiv"].mark_as_processed(paper_id)
-        # 期刊论文（都通过 openalex）
-        elif "openalex" in self.sources:
-            self.sources["openalex"].mark_as_processed(paper_id)
+        backend_name = self._source_backends.get(source)
+        source_obj = self.sources.get(backend_name) if backend_name else None
+        if source_obj is None:
+            raise ValueError(f"无法标记未知或未启用的数据源论文: {source}:{paper_id}")
+        source_obj.mark_as_processed(paper_id)
 
     def mark_many_as_processed(self, paper_ids_by_source: Dict[str, List[str]]) -> None:
         """Flush compatibility histories in per-backend atomic batches."""
-        arxiv_ids = paper_ids_by_source.get("arxiv", [])
-        if arxiv_ids and "arxiv" in self.sources:
-            self.sources["arxiv"].mark_many_as_processed(arxiv_ids)
-
-        openalex_ids = []
+        paper_ids_by_backend: Dict[str, List[str]] = {}
         for source, paper_ids in paper_ids_by_source.items():
-            if source != "arxiv":
-                openalex_ids.extend(paper_ids)
-        if openalex_ids and "openalex" in self.sources:
-            self.sources["openalex"].mark_many_as_processed(openalex_ids)
+            backend_name = self._source_backends.get(source)
+            if backend_name is None or backend_name not in self.sources:
+                raise ValueError(f"无法批量标记未知或未启用的数据源: {source}")
+            paper_ids_by_backend.setdefault(backend_name, []).extend(paper_ids)
+
+        for backend_name, paper_ids in paper_ids_by_backend.items():
+            if paper_ids:
+                self.sources[backend_name].mark_many_as_processed(paper_ids)
 
     def get_previous_processed_version(self, paper_id: str, source: str):
         """Return legacy-history information for the previous arXiv version."""
@@ -314,22 +360,24 @@ class SearchAgent:
 
     def get_source(self, source_name: str) -> Optional[BasePaperSource]:
         """获取指定的数据源实例"""
-        if source_name == "arxiv":
-            return self.sources.get("arxiv")
+        backend_name = self._source_backends.get(source_name)
+        if backend_name is None:
+            return None
         # 期刊通过 openalex
-        return self.sources.get("openalex")
+        return self.sources.get(backend_name)
 
     def can_download_pdf(self, source: str) -> bool:
         """检查指定数据源是否支持 PDF 下载"""
-        if source == "arxiv":
-            return True
-        return False  # 期刊默认不支持
+        source_obj = self.get_source(source)
+        return bool(source_obj and source_obj.can_download_pdf())
 
     def get_enabled_sources(self) -> List[str]:
         """获取所有启用的数据源名称"""
         sources = []
         if "arxiv" in self.sources:
             sources.append("arxiv")
+        if HUGGINGFACE_PAPERS_SOURCE_NAME in self.sources:
+            sources.append(HUGGINGFACE_PAPERS_SOURCE_NAME)
         if "openalex" in self.sources:
             # 添加具体的期刊代码
             sources.extend(self._journal_codes)

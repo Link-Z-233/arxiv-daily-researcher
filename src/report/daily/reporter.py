@@ -40,6 +40,7 @@ class ReportGenerationError(RuntimeError):
 # 数据源显示名称映射
 SOURCE_DISPLAY_NAMES = {
     "arxiv": "ArXiv",
+    "huggingface_papers": "Hugging Face Papers（补充精选流）",
     "prl": "Physical Review Letters",
     "pra": "Physical Review A",
     "prb": "Physical Review B",
@@ -299,7 +300,13 @@ class Reporter:
         lines.append("")
 
         # 数据源说明
-        if source != "arxiv":
+        if source == "huggingface_papers":
+            lines.append(
+                "> ℹ️ **来源说明**: Hugging Face Papers 是精选补充流，不是 arXiv "
+                "分类的全量替代；同轮或此前已交付的 arXiv 镜像论文会自动去重。"
+            )
+            lines.append("")
+        elif source != "arxiv":
             lines.append("> ⚠️ **注意**: 该数据源不支持PDF下载，仅提供评分和摘要翻译，无深度分析")
             lines.append("")
 

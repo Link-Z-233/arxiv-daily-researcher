@@ -23,6 +23,7 @@ ENV_EXAMPLE_PATH = PROJECT_ROOT / ".env.example"
 
 ALL_DATA_SOURCES = [
     "arxiv",
+    "huggingface_papers",
     "prl",
     "pra",
     "prb",
@@ -402,6 +403,10 @@ def build_config_dict(
     reports_by_source: bool = True,
     arxiv_fetch_timeout_seconds: int = 180,
     arxiv_announcement_lookback_grace_days: int = 2,
+    huggingface_papers_availability_lag_days: int = 2,
+    huggingface_papers_lookback_grace_days: int = 2,
+    huggingface_papers_request_timeout_seconds: int = 30,
+    huggingface_papers_request_interval_seconds: float = 0.25,
     domains: Optional[List[str]] = None,
     primary_keywords: Optional[List[str]] = None,
     primary_keyword_weight: float = 1.0,
@@ -482,6 +487,7 @@ def build_config_dict(
     proxy_no_proxy: str = "localhost,127.0.0.1",
     proxy_arxiv: bool = True,
     proxy_openalex: bool = False,
+    proxy_huggingface_papers: bool = False,
     proxy_semantic_scholar: bool = False,
     proxy_llm_api: bool = False,
     proxy_notifications: bool = False,
@@ -508,6 +514,14 @@ def build_config_dict(
             "arxiv": {
                 "fetch_timeout_seconds": arxiv_fetch_timeout_seconds,
                 "announcement_lookback_grace_days": arxiv_announcement_lookback_grace_days,
+            },
+            # Hugging Face Papers is an optional curated supplementary feed,
+            # never a replacement for arXiv category completeness.
+            "huggingface_papers": {
+                "availability_lag_days": huggingface_papers_availability_lag_days,
+                "lookback_grace_days": huggingface_papers_lookback_grace_days,
+                "request_timeout_seconds": huggingface_papers_request_timeout_seconds,
+                "request_interval_seconds": huggingface_papers_request_interval_seconds,
             },
         },
         "run_lock": {
@@ -646,6 +660,7 @@ def build_config_dict(
             "scope": {
                 "arxiv": proxy_arxiv,
                 "openalex": proxy_openalex,
+                "huggingface_papers": proxy_huggingface_papers,
                 "semantic_scholar": proxy_semantic_scholar,
                 "llm_api": proxy_llm_api,
                 "notifications": proxy_notifications,
@@ -711,6 +726,21 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["arxiv_fetch_timeout_seconds"] = ds.get("arxiv", {}).get("fetch_timeout_seconds", 180)
     flat["arxiv_announcement_lookback_grace_days"] = ds.get("arxiv", {}).get(
         "announcement_lookback_grace_days", 2
+    )
+    hf_papers = ds.get("huggingface_papers", {})
+    if not isinstance(hf_papers, dict):
+        hf_papers = {}
+    flat["huggingface_papers_availability_lag_days"] = hf_papers.get(
+        "availability_lag_days", 2
+    )
+    flat["huggingface_papers_lookback_grace_days"] = hf_papers.get(
+        "lookback_grace_days", 2
+    )
+    flat["huggingface_papers_request_timeout_seconds"] = hf_papers.get(
+        "request_timeout_seconds", 30
+    )
+    flat["huggingface_papers_request_interval_seconds"] = hf_papers.get(
+        "request_interval_seconds", 0.25
     )
 
     # Run lock
@@ -860,6 +890,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     px_scope = px.get("scope", {})
     flat["proxy_arxiv"] = px_scope.get("arxiv", True)
     flat["proxy_openalex"] = px_scope.get("openalex", False)
+    flat["proxy_huggingface_papers"] = px_scope.get("huggingface_papers", False)
     flat["proxy_semantic_scholar"] = px_scope.get("semantic_scholar", False)
     flat["proxy_llm_api"] = px_scope.get("llm_api", False)
     flat["proxy_notifications"] = px_scope.get("notifications", False)
