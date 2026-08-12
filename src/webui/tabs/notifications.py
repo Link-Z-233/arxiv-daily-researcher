@@ -2,6 +2,18 @@
 
 import streamlit as st
 from webui.i18n import t
+from webui.secret_fields import render_secret_input, resolve_secret_value
+
+
+SECRET_FIELD_KEYS = (
+    "smtp_password",
+    "wechat_webhook_url",
+    "dingtalk_webhook_url",
+    "dingtalk_secret",
+    "telegram_bot_token",
+    "slack_webhook_url",
+    "generic_webhook_url",
+)
 
 
 def render(env_values: dict, config_values: dict):
@@ -80,11 +92,14 @@ def render(env_values: dict, config_values: dict):
                 t("smtp_user_label"), value=env_values.get("SMTP_USER", ""), key="smtp_user"
             )
         with col8:
-            st.text_input(
-                t("smtp_password_label"),
-                value=env_values.get("SMTP_PASSWORD", ""),
-                type="password",
-                key="smtp_password",
+            render_secret_input(
+                st,
+                label=t("smtp_password_label"),
+                env_values=env_values,
+                env_key="SMTP_PASSWORD",
+                field_key="smtp_password",
+                configured_hint=t("secret_configured_keep_blank"),
+                clear_label=t("clear_saved_secret"),
             )
 
         col9, col10 = st.columns(2)
@@ -105,7 +120,9 @@ def render(env_values: dict, config_values: dict):
                     st.session_state.get("smtp_host", ""),
                     int(st.session_state.get("smtp_port", "587")),
                     st.session_state.get("smtp_user", ""),
-                    st.session_state.get("smtp_password", ""),
+                    resolve_secret_value(
+                        env_values, "SMTP_PASSWORD", "smtp_password", st.session_state
+                    ),
                     st.session_state.get("smtp_use_tls", True),
                 )
             if ok:
@@ -120,11 +137,14 @@ def render(env_values: dict, config_values: dict):
             value=flat.get("notify_wechat_enabled", False),
             key="notify_wechat_enabled",
         )
-        st.text_input(
-            t("webhook_url_label"),
-            value=env_values.get("WECHAT_WEBHOOK_URL", ""),
-            type="password",
-            key="wechat_webhook_url",
+        render_secret_input(
+            st,
+            label=t("webhook_url_label"),
+            env_values=env_values,
+            env_key="WECHAT_WEBHOOK_URL",
+            field_key="wechat_webhook_url",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
 
     # ---- DingTalk ----
@@ -134,17 +154,23 @@ def render(env_values: dict, config_values: dict):
             value=flat.get("notify_dingtalk_enabled", False),
             key="notify_dingtalk_enabled",
         )
-        st.text_input(
-            t("webhook_url_label"),
-            value=env_values.get("DINGTALK_WEBHOOK_URL", ""),
-            type="password",
-            key="dingtalk_webhook_url",
+        render_secret_input(
+            st,
+            label=t("webhook_url_label"),
+            env_values=env_values,
+            env_key="DINGTALK_WEBHOOK_URL",
+            field_key="dingtalk_webhook_url",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
-        st.text_input(
-            t("secret_optional_label"),
-            value=env_values.get("DINGTALK_SECRET", ""),
-            type="password",
-            key="dingtalk_secret",
+        render_secret_input(
+            st,
+            label=t("secret_optional_label"),
+            env_values=env_values,
+            env_key="DINGTALK_SECRET",
+            field_key="dingtalk_secret",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
 
     # ---- Telegram ----
@@ -156,11 +182,14 @@ def render(env_values: dict, config_values: dict):
         )
         col11, col12 = st.columns(2)
         with col11:
-            st.text_input(
-                t("bot_token_label"),
-                value=env_values.get("TELEGRAM_BOT_TOKEN", ""),
-                type="password",
-                key="telegram_bot_token",
+            render_secret_input(
+                st,
+                label=t("bot_token_label"),
+                env_values=env_values,
+                env_key="TELEGRAM_BOT_TOKEN",
+                field_key="telegram_bot_token",
+                configured_hint=t("secret_configured_keep_blank"),
+                clear_label=t("clear_saved_secret"),
             )
         with col12:
             st.text_input(
@@ -176,11 +205,14 @@ def render(env_values: dict, config_values: dict):
             value=flat.get("notify_slack_enabled", False),
             key="notify_slack_enabled",
         )
-        st.text_input(
-            t("webhook_url_label"),
-            value=env_values.get("SLACK_WEBHOOK_URL", ""),
-            type="password",
-            key="slack_webhook_url",
+        render_secret_input(
+            st,
+            label=t("webhook_url_label"),
+            env_values=env_values,
+            env_key="SLACK_WEBHOOK_URL",
+            field_key="slack_webhook_url",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
 
     # ---- Generic Webhook ----
@@ -192,11 +224,14 @@ def render(env_values: dict, config_values: dict):
             value=flat.get("notify_generic_webhook_enabled", False),
             key="notify_generic_webhook_enabled",
         )
-        st.text_input(
-            t("webhook_url_label"),
-            value=env_values.get("GENERIC_WEBHOOK_URL", ""),
-            type="password",
-            key="generic_webhook_url",
+        render_secret_input(
+            st,
+            label=t("webhook_url_label"),
+            env_values=env_values,
+            env_key="GENERIC_WEBHOOK_URL",
+            field_key="generic_webhook_url",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
 
 
@@ -206,17 +241,31 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         "SMTP_HOST": st.session_state.get("smtp_host", ""),
         "SMTP_PORT": st.session_state.get("smtp_port", "587"),
         "SMTP_USER": st.session_state.get("smtp_user", ""),
-        "SMTP_PASSWORD": st.session_state.get("smtp_password", ""),
+        "SMTP_PASSWORD": resolve_secret_value(
+            env_values, "SMTP_PASSWORD", "smtp_password", st.session_state
+        ),
         "SMTP_FROM": st.session_state.get("smtp_from", ""),
         "SMTP_TO": st.session_state.get("smtp_to", ""),
         "SMTP_USE_TLS": "true" if st.session_state.get("smtp_use_tls", True) else "false",
-        "WECHAT_WEBHOOK_URL": st.session_state.get("wechat_webhook_url", ""),
-        "DINGTALK_WEBHOOK_URL": st.session_state.get("dingtalk_webhook_url", ""),
-        "DINGTALK_SECRET": st.session_state.get("dingtalk_secret", ""),
-        "TELEGRAM_BOT_TOKEN": st.session_state.get("telegram_bot_token", ""),
+        "WECHAT_WEBHOOK_URL": resolve_secret_value(
+            env_values, "WECHAT_WEBHOOK_URL", "wechat_webhook_url", st.session_state
+        ),
+        "DINGTALK_WEBHOOK_URL": resolve_secret_value(
+            env_values, "DINGTALK_WEBHOOK_URL", "dingtalk_webhook_url", st.session_state
+        ),
+        "DINGTALK_SECRET": resolve_secret_value(
+            env_values, "DINGTALK_SECRET", "dingtalk_secret", st.session_state
+        ),
+        "TELEGRAM_BOT_TOKEN": resolve_secret_value(
+            env_values, "TELEGRAM_BOT_TOKEN", "telegram_bot_token", st.session_state
+        ),
         "TELEGRAM_CHAT_ID": st.session_state.get("telegram_chat_id", ""),
-        "SLACK_WEBHOOK_URL": st.session_state.get("slack_webhook_url", ""),
-        "GENERIC_WEBHOOK_URL": st.session_state.get("generic_webhook_url", ""),
+        "SLACK_WEBHOOK_URL": resolve_secret_value(
+            env_values, "SLACK_WEBHOOK_URL", "slack_webhook_url", st.session_state
+        ),
+        "GENERIC_WEBHOOK_URL": resolve_secret_value(
+            env_values, "GENERIC_WEBHOOK_URL", "generic_webhook_url", st.session_state
+        ),
     }
 
     config_updates = {

@@ -2,6 +2,16 @@
 
 import streamlit as st
 from webui.i18n import t
+from webui.secret_fields import render_secret_input, resolve_secret_value
+
+
+SECRET_FIELD_KEYS = (
+    "cheap_api_key",
+    "smart_api_key",
+    "mineru_key",
+    "semantic_scholar_key",
+    "openalex_key",
+)
 
 
 # Provider presets
@@ -64,11 +74,14 @@ def render(env_values: dict, _config_values: dict):
 
     col3, col4 = st.columns(2)
     with col3:
-        cheap_key = st.text_input(
-            t("api_key"),
-            value=env_values.get("CHEAP_LLM__API_KEY", ""),
-            type="password",
-            key="cheap_api_key",
+        cheap_key = render_secret_input(
+            st,
+            label=t("api_key"),
+            env_values=env_values,
+            env_key="CHEAP_LLM__API_KEY",
+            field_key="cheap_api_key",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
     with col4:
         default_model = env_values.get("CHEAP_LLM__MODEL_NAME", preset["cheap"])
@@ -91,7 +104,13 @@ def render(env_values: dict, _config_values: dict):
         with st.spinner(t("testing_connection")):
             from utils.config_io import validate_llm_connection
 
-            ok, msg = validate_llm_connection(cheap_key, cheap_base, cheap_model)
+            ok, msg = validate_llm_connection(
+                resolve_secret_value(
+                    env_values, "CHEAP_LLM__API_KEY", "cheap_api_key", st.session_state
+                ),
+                cheap_base,
+                cheap_model,
+            )
         if ok:
             st.success(msg)
         else:
@@ -126,11 +145,14 @@ def render(env_values: dict, _config_values: dict):
 
     col7, col8 = st.columns(2)
     with col7:
-        smart_key = st.text_input(
-            t("api_key"),
-            value=env_values.get("SMART_LLM__API_KEY", ""),
-            type="password",
-            key="smart_api_key",
+        smart_key = render_secret_input(
+            st,
+            label=t("api_key"),
+            env_values=env_values,
+            env_key="SMART_LLM__API_KEY",
+            field_key="smart_api_key",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
     with col8:
         default_smart_model = env_values.get("SMART_LLM__MODEL_NAME", smart_preset["smart"])
@@ -153,7 +175,13 @@ def render(env_values: dict, _config_values: dict):
         with st.spinner(t("testing_connection")):
             from utils.config_io import validate_llm_connection
 
-            ok, msg = validate_llm_connection(smart_key, smart_base, smart_model)
+            ok, msg = validate_llm_connection(
+                resolve_secret_value(
+                    env_values, "SMART_LLM__API_KEY", "smart_api_key", st.session_state
+                ),
+                smart_base,
+                smart_model,
+            )
         if ok:
             st.success(msg)
         else:
@@ -166,11 +194,14 @@ def render(env_values: dict, _config_values: dict):
     )
     st.markdown(f'<p class="hint-text">{t("mineru_section_hint")}</p>', unsafe_allow_html=True)
 
-    mineru_key = st.text_input(
-        t("mineru_api_key_label"),
-        value=env_values.get("MINERU_API_KEY", ""),
-        type="password",
-        key="mineru_key",
+    mineru_key = render_secret_input(
+        st,
+        label=t("mineru_api_key_label"),
+        env_values=env_values,
+        env_key="MINERU_API_KEY",
+        field_key="mineru_key",
+        configured_hint=t("secret_configured_keep_blank"),
+        clear_label=t("clear_saved_secret"),
         help=t("mineru_key_help"),
     )
 
@@ -186,18 +217,15 @@ def render(env_values: dict, _config_values: dict):
         with st.spinner(t("testing_mineru")):
             from utils.config_io import validate_mineru_connection
 
-            ok, msg = validate_mineru_connection(mineru_key)
+            ok, msg = validate_mineru_connection(
+                resolve_secret_value(env_values, "MINERU_API_KEY", "mineru_key", st.session_state)
+            )
         if ok:
             st.success(msg)
         else:
             st.warning(msg)
 
     # 展示当前 Token 过期状态提醒（仅当有 key 时）
-    current_mineru_key = env_values.get("MINERU_API_KEY", "")
-    if current_mineru_key and not mineru_key:
-        # 已保存 key 但当前输入框为空（密码框默认不显示值）
-        pass
-
     st.divider()
 
     # ---- 其他第三方 API Keys ----
@@ -213,34 +241,53 @@ def render(env_values: dict, _config_values: dict):
             value=env_values.get("OPENALEX_EMAIL", ""),
             key="openalex_email",
         )
-        st.text_input(
-            t("s2_api_key_label"),
-            value=env_values.get("SEMANTIC_SCHOLAR_API_KEY", ""),
-            type="password",
-            key="semantic_scholar_key",
+        render_secret_input(
+            st,
+            label=t("s2_api_key_label"),
+            env_values=env_values,
+            env_key="SEMANTIC_SCHOLAR_API_KEY",
+            field_key="semantic_scholar_key",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
     with col10:
-        st.text_input(
-            t("openalex_api_key_label"),
-            value=env_values.get("OPENALEX_API_KEY", ""),
-            type="password",
-            key="openalex_key",
+        render_secret_input(
+            st,
+            label=t("openalex_api_key_label"),
+            env_values=env_values,
+            env_key="OPENALEX_API_KEY",
+            field_key="openalex_key",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
 
 
 def collect(env_values: dict, _config_values: dict) -> dict:
     """从 session_state 收集当前值，返回 env 更新字典。"""
     return {
-        "CHEAP_LLM__API_KEY": st.session_state.get("cheap_api_key", ""),
+        "CHEAP_LLM__API_KEY": resolve_secret_value(
+            env_values, "CHEAP_LLM__API_KEY", "cheap_api_key", st.session_state
+        ),
         "CHEAP_LLM__BASE_URL": st.session_state.get("cheap_base_url", ""),
         "CHEAP_LLM__MODEL_NAME": st.session_state.get("cheap_model_name", ""),
         "CHEAP_LLM__TEMPERATURE": str(st.session_state.get("cheap_temperature", 0.3)),
-        "SMART_LLM__API_KEY": st.session_state.get("smart_api_key", ""),
+        "SMART_LLM__API_KEY": resolve_secret_value(
+            env_values, "SMART_LLM__API_KEY", "smart_api_key", st.session_state
+        ),
         "SMART_LLM__BASE_URL": st.session_state.get("smart_base_url", ""),
         "SMART_LLM__MODEL_NAME": st.session_state.get("smart_model_name", ""),
         "SMART_LLM__TEMPERATURE": str(st.session_state.get("smart_temperature", 0.3)),
         "OPENALEX_EMAIL": st.session_state.get("openalex_email", ""),
-        "OPENALEX_API_KEY": st.session_state.get("openalex_key", ""),
-        "SEMANTIC_SCHOLAR_API_KEY": st.session_state.get("semantic_scholar_key", ""),
-        "MINERU_API_KEY": st.session_state.get("mineru_key", ""),
+        "OPENALEX_API_KEY": resolve_secret_value(
+            env_values, "OPENALEX_API_KEY", "openalex_key", st.session_state
+        ),
+        "SEMANTIC_SCHOLAR_API_KEY": resolve_secret_value(
+            env_values,
+            "SEMANTIC_SCHOLAR_API_KEY",
+            "semantic_scholar_key",
+            st.session_state,
+        ),
+        "MINERU_API_KEY": resolve_secret_value(
+            env_values, "MINERU_API_KEY", "mineru_key", st.session_state
+        ),
     }

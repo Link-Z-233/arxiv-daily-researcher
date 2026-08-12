@@ -8,6 +8,7 @@ import streamlit as st
 from pathlib import Path
 
 from webui.i18n import t
+from webui.secret_fields import render_secret_input, resolve_secret_value
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,8 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "configs" / "config.json"
 DEFAULT_ENV_PATH = _PROJECT_ROOT / ".env"
+
+SECRET_FIELD_KEYS = ("webdav_password",)
 
 
 def render(env_values: dict, config_values: dict):
@@ -83,24 +86,27 @@ def render(env_values: dict, config_values: dict):
             key="webdav_username",
         )
     with col_p:
-        st.text_input(
-            t("dm_webdav_password_label"),
-            value=env_values.get("WEBDAV_PASSWORD", ""),
-            type="password",
-            key="webdav_password",
+        render_secret_input(
+            st,
+            label=t("dm_webdav_password_label"),
+            env_values=env_values,
+            env_key="WEBDAV_PASSWORD",
+            field_key="webdav_password",
+            configured_hint=t("secret_configured_keep_blank"),
+            clear_label=t("clear_saved_secret"),
         )
 
     # 操作按钮（紧跟凭据后面）
     col_a, col_b, col_c = st.columns(3)
     with col_a:
         if st.button(t("dm_webdav_test_btn"), use_container_width=True):
-            _do_test_connection()
+            _do_test_connection(env_values)
     with col_b:
         if st.button(t("dm_webdav_upload_btn"), use_container_width=True):
-            _do_sync("upload")
+            _do_sync("upload", env_values)
     with col_c:
         if st.button(t("dm_webdav_download_btn"), use_container_width=True):
-            _do_sync("download")
+            _do_sync("download", env_values)
 
     st.divider()
 
@@ -194,7 +200,9 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
     env_updates = {
         "WEBDAV_URL": st.session_state.get("webdav_url", ""),
         "WEBDAV_USERNAME": st.session_state.get("webdav_username", ""),
-        "WEBDAV_PASSWORD": st.session_state.get("webdav_password", ""),
+        "WEBDAV_PASSWORD": resolve_secret_value(
+            env_values, "WEBDAV_PASSWORD", "webdav_password", st.session_state
+        ),
     }
 
     config_updates = {
@@ -241,7 +249,7 @@ def _build_export_zip() -> bytes | None:
     return buf.getvalue()
 
 
-def _do_test_connection():
+def _do_test_connection(env_values: dict):
     """测试 WebDAV 连接。"""
     try:
         from utils.webdav_sync import WebDAVSync
@@ -249,7 +257,9 @@ def _do_test_connection():
         # Use current form values directly so users can test before clicking Save.
         url = (st.session_state.get("webdav_url") or "").strip()
         username = (st.session_state.get("webdav_username") or "").strip()
-        password = st.session_state.get("webdav_password") or ""
+        password = resolve_secret_value(
+            env_values, "WEBDAV_PASSWORD", "webdav_password", st.session_state
+        )
         remote_path = (
             st.session_state.get("webdav_remote_path") or "/arxiv-daily-researcher/"
         ).strip()
@@ -275,7 +285,7 @@ def _do_test_connection():
         st.error(f"{t('dm_webdav_test_fail')}: {e}")
 
 
-def _do_sync(direction: str):
+def _do_sync(direction: str, env_values: dict):
     """执行 WebDAV 同步。"""
     try:
         from utils.webdav_sync import WebDAVSync
@@ -283,7 +293,9 @@ def _do_sync(direction: str):
         # Use current form values directly so users can sync immediately.
         url = (st.session_state.get("webdav_url") or "").strip()
         username = (st.session_state.get("webdav_username") or "").strip()
-        password = st.session_state.get("webdav_password") or ""
+        password = resolve_secret_value(
+            env_values, "WEBDAV_PASSWORD", "webdav_password", st.session_state
+        )
         remote_path = (
             st.session_state.get("webdav_remote_path") or "/arxiv-daily-researcher/"
         ).strip()

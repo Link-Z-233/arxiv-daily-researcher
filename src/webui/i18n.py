@@ -68,6 +68,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "provider_preset": {"zh": "服务商预设", "en": "Provider Preset"},
     "base_url": {"zh": "Base URL", "en": "Base URL"},
     "api_key": {"zh": "API Key", "en": "API Key"},
+    "secret_configured_keep_blank": {
+        "zh": "已保存；为保护密钥，留空会保留原值。",
+        "en": "Saved; leave this blank to keep the existing secret.",
+    },
+    "clear_saved_secret": {"zh": "清除已保存的密钥", "en": "Clear saved secret"},
     "model_name": {"zh": "模型名称", "en": "Model Name"},
     "temperature": {"zh": "Temperature", "en": "Temperature"},
     "test_cheap_btn": {

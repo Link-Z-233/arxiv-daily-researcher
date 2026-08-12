@@ -33,6 +33,7 @@ from webui.styles import CUSTOM_CSS
 from webui.tabs import llm, search, keywords, scoring, notifications, advanced, reports
 from webui.tabs import run_manager, trend_runner, proxy, data_management
 from webui.i18n import t
+from webui.secret_fields import clear_secret_field_state
 
 
 # ==================== Page Config ====================
@@ -116,6 +117,14 @@ def do_save():
     merged_config = {**config_values, **config_updates}
     config_dict = build_config_dict(**merged_config)
     write_config_json(config_dict)
+
+    # Never retain newly entered credentials in Streamlit session state after
+    # persisting them.  Saved secrets are intentionally not rendered back into
+    # password widgets on the next run.
+    clear_secret_field_state(
+        st.session_state,
+        (*llm.SECRET_FIELD_KEYS, *notifications.SECRET_FIELD_KEYS, *data_management.SECRET_FIELD_KEYS),
+    )
 
     # Clear cache to reload fresh data
     st.cache_data.clear()
