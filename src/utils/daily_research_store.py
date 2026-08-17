@@ -451,10 +451,14 @@ class DailyResearchStore:
 
         with self._lock, self._connect() as conn:
             run = conn.execute(
-                "SELECT run_id FROM daily_runs WHERE run_id = ?", (run_id,)
+                "SELECT run_id, status FROM daily_runs WHERE run_id = ?", (run_id,)
             ).fetchone()
             if run is None:
                 raise KeyError(f"daily run does not exist: {run_id}")
+            if run["status"] != "running":
+                raise RuntimeError(
+                    f"只能为 running 运行准备扫描计划: {run_id} ({run['status']})"
+                )
 
             recovery_days = base_days
             if normalized_sources:
@@ -466,12 +470,16 @@ class DailyResearchStore:
                     + ")",
                     normalized_sources,
                 ).fetchall()
-                checkpoints = {
-                    row["source"]: self._parse_checkpoint_timestamp(
-                        row["successful_scan_started_at"]
-                    )
-                    for row in rows
-                }
+                checkpoints = {}
+                for row in rows:
+                    raw_checkpoint = row["successful_scan_started_at"]
+                    checkpoint = self._parse_checkpoint_timestamp(raw_checkpoint)
+                    if checkpoint is None:
+                        raise RuntimeError(
+                            "扫描水位线损坏，已停止本次运行以避免漏抓: "
+                            f"{row['source']}: {raw_checkpoint!r}"
+                        )
+                    checkpoints[row["source"]] = checkpoint
                 for source in normalized_sources:
                     checkpoint = checkpoints.get(source)
                     if checkpoint is None:
@@ -501,19 +509,28 @@ class DailyResearchStore:
     @staticmethod
     def _scan_sources_from_run(conn, run_id: str) -> list[str]:
         row = conn.execute(
-            "SELECT scanned_sources_json FROM daily_runs WHERE run_id = ?", (run_id,)
+            "SELECT scanned_sources_json, scan_days FROM daily_runs WHERE run_id = ?",
+            (run_id,),
         ).fetchone()
-        if row is None or not row["scanned_sources_json"]:
+        if row is None:
             return []
+        if row["scanned_sources_json"] is None:
+            if row["scan_days"] is not None:
+                raise RuntimeError(f"日报运行扫描计划缺失: {run_id}")
+            return []
+        raw_sources = row["scanned_sources_json"]
         try:
-            sources = json.loads(row["scanned_sources_json"])
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return []
-        if not isinstance(sources, list):
-            return []
-        return sorted(
-            {str(source).strip().lower() for source in sources if str(source).strip()}
-        )
+            sources = json.loads(raw_sources)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"日报运行扫描计划损坏: {run_id}") from exc
+        if not isinstance(sources, list) or any(
+            not isinstance(source, str) or not source.strip() for source in sources
+        ):
+            raise RuntimeError(f"日报运行扫描计划格式无效: {run_id}")
+        normalized = [source.strip().lower() for source in sources]
+        if len(set(normalized)) != len(normalized):
+            raise RuntimeError(f"日报运行扫描计划包含重复数据源: {run_id}")
+        return sorted(normalized)
 
     @staticmethod
     def _scan_started_at_from_run(conn, run_id: str, fallback: str) -> str:
@@ -522,7 +539,10 @@ class DailyResearchStore:
         ).fetchone()
         if row is None:
             return fallback
-        return row["scan_started_at"] or row["started_at"] or fallback
+        value = row["scan_started_at"] or row["started_at"] or fallback
+        if DailyResearchStore._parse_checkpoint_timestamp(value) is None:
+            raise RuntimeError(f"日报运行扫描开始时间损坏: {run_id}")
+        return value
 
     def _advance_scan_watermarks(self, conn, run_id: str, now: str) -> None:
         """Advance all planned source checkpoints inside a successful commit."""
@@ -700,6 +720,17 @@ class DailyResearchStore:
     def complete_run(self, run_id: str, report_paths: Optional[Dict[str, Any]] = None):
         now = datetime.now().isoformat()
         with self._lock, self._connect() as conn:
+            run = conn.execute(
+                "SELECT status FROM daily_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise KeyError(f"daily run does not exist: {run_id}")
+            if run["status"] == "completed":
+                return
+            if run["status"] != "running":
+                raise RuntimeError(
+                    f"只能完成 running 运行: {run_id} ({run['status']})"
+                )
             conn.execute(
                 """
                 UPDATE daily_runs
@@ -739,10 +770,14 @@ class DailyResearchStore:
 
         with self._lock, self._connect() as conn:
             run = conn.execute(
-                "SELECT run_id FROM daily_runs WHERE run_id = ?", (run_id,)
+                "SELECT run_id, status FROM daily_runs WHERE run_id = ?", (run_id,)
             ).fetchone()
             if run is None:
                 raise KeyError(f"daily run does not exist: {run_id}")
+            if run["status"] != "running":
+                raise RuntimeError(
+                    f"只能交付 running 运行: {run_id} ({run['status']})"
+                )
 
             for source, papers in delivered_papers_by_source.items():
                 report_path = normalized_paths.get(source) or normalized_paths.get(
@@ -897,6 +932,20 @@ class DailyResearchStore:
     def fail_run(self, run_id: str, error: str):
         now = datetime.now().isoformat()
         with self._lock, self._connect() as conn:
+            run = conn.execute(
+                "SELECT status FROM daily_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise KeyError(f"daily run does not exist: {run_id}")
+            # A completed report is authoritative.  A late provider or cleanup
+            # exception must not reopen it as a failed/retryable run.  Repeated
+            # failure calls are also idempotent and preserve the first error.
+            if run["status"] in {"completed", "failed"}:
+                return
+            if run["status"] != "running":
+                raise RuntimeError(
+                    f"只能失败 running 运行: {run_id} ({run['status']})"
+                )
             conn.execute(
                 """
                 UPDATE daily_runs
@@ -1770,4 +1819,41 @@ class DailyResearchStore:
             return None
         if record["analysis_status"] != "succeeded":
             return None
-        return json.loads(record["analysis_json"])
+        raw_analysis = record["analysis_json"]
+        try:
+            payload = json.loads(raw_analysis)
+            if not isinstance(payload, dict) or not payload:
+                raise ValueError("深度分析缓存必须是非空 JSON 对象")
+
+            # Validate known fields while preserving unknown template fields.
+            # Future/custom report modules may add keys that Stage2Response does
+            # not know yet, so returning model_dump() here would silently lose
+            # them during retry hydration.
+            from agents.analysis_agent import Stage2Response
+
+            Stage2Response.model_validate(payload)
+        except Exception as exc:
+            # A successful status with unreadable data is a recoverable cache
+            # corruption, not a valid result.  Clear it and mark the stage
+            # failed so the next run retries it with the same input fingerprint.
+            try:
+                source = record["source"]
+                paper_id = record["paper_id"]
+            except (IndexError, KeyError, TypeError):
+                return None
+            error = f"持久化深度分析缓存无效: {exc}"[:4000]
+            now = datetime.now().isoformat()
+            with self._lock, self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE daily_papers
+                    SET analysis_json = NULL, analyzed_at = NULL,
+                        analysis_status = 'failed', last_error = ?,
+                        retry_count = retry_count + 1
+                    WHERE source = ? AND paper_id = ?
+                      AND analysis_status = 'succeeded'
+                    """,
+                    (error, source, paper_id),
+                )
+            return None
+        return payload

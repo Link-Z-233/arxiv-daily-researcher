@@ -209,6 +209,68 @@ class IdentityStoreTests(unittest.TestCase):
                 10,
             )
 
+    def test_run_state_transitions_are_one_way(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+
+            failed_run = store.start_run(0)
+            store.fail_run(failed_run, "first failure")
+            with self.assertRaisesRegex(RuntimeError, "只能完成 running"):
+                store.complete_run(failed_run, {})
+            store.fail_run(failed_run, "late replacement")
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT status, error FROM daily_runs WHERE run_id = ?",
+                    (failed_run,),
+                ).fetchone()
+            self.assertEqual(row["status"], "failed")
+            self.assertEqual(row["error"], "first failure")
+
+            completed_run = store.start_run(0)
+            store.complete_run(completed_run, {})
+            store.complete_run(completed_run, {})  # idempotent recovery call
+            store.fail_run(completed_run, "late provider failure")
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT status, error FROM daily_runs WHERE run_id = ?",
+                    (completed_run,),
+                ).fetchone()
+            self.assertEqual(row["status"], "completed")
+            self.assertIsNone(row["error"])
+
+    def test_corrupt_watermark_or_scan_plan_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            checkpoint_run = store.start_run(0)
+            store.prepare_scan(checkpoint_run, 2, ["arxiv"])
+            store.complete_run(checkpoint_run, {})
+            with store._connect() as conn:
+                conn.execute(
+                    "UPDATE daily_scan_watermarks SET successful_scan_started_at = ? "
+                    "WHERE source = 'arxiv'",
+                    ("not-a-timestamp",),
+                )
+
+            recovery_run = store.start_run(0)
+            with self.assertRaisesRegex(RuntimeError, "水位线损坏"):
+                store.prepare_scan(recovery_run, 2, ["arxiv"])
+
+            plan_store = DailyResearchStore(Path(temp_dir) / "plan.db")
+            plan_run = plan_store.start_run(0)
+            plan_store.prepare_scan(plan_run, 2, ["arxiv"])
+            with plan_store._connect() as conn:
+                conn.execute(
+                    "UPDATE daily_runs SET scanned_sources_json = ? WHERE run_id = ?",
+                    ("{broken", plan_run),
+                )
+            with self.assertRaisesRegex(RuntimeError, "扫描计划损坏"):
+                plan_store.complete_run(plan_run, {})
+            with plan_store._connect() as conn:
+                status = conn.execute(
+                    "SELECT status FROM daily_runs WHERE run_id = ?", (plan_run,)
+                ).fetchone()["status"]
+            self.assertEqual(status, "running")
+
     def test_arxiv_identity_and_legacy_history_are_version_aware(self):
         self.assertEqual(split_arxiv_version("2501.12345v2"), ("2501.12345", 2))
         self.assertEqual(split_arxiv_version("hep-th/9901001"), ("hep-th/9901001", None))
@@ -332,6 +394,26 @@ class IdentityStoreTests(unittest.TestCase):
             store.update_analysis(run_id, "arxiv", paper.paper_id, {"summary": "analysis"})
             hydrated = store.hydrate_analysis(store.get_paper_record("arxiv", paper.paper_id))
             self.assertEqual(hydrated, {"summary": "analysis"})
+
+    def test_corrupt_analysis_cache_is_cleared_and_marked_retryable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            paper = _paper("2501.12345v1")
+            run_id = store.start_run(1)
+            store.upsert_paper_seen(run_id, "arxiv", paper)
+            store.update_analysis(run_id, "arxiv", paper.paper_id, {"summary": "analysis"})
+            with store._connect() as conn:
+                conn.execute(
+                    "UPDATE daily_papers SET analysis_json = ? WHERE source = ? AND paper_id = ?",
+                    ("{broken", "arxiv", paper.paper_id),
+                )
+
+            self.assertIsNone(store.hydrate_analysis(store.get_paper_record("arxiv", paper.paper_id)))
+            record = store.get_paper_record("arxiv", paper.paper_id)
+            self.assertEqual(record["analysis_status"], "failed")
+            self.assertIsNone(record["analysis_json"])
+            self.assertEqual(record["retry_count"], 1)
+            self.assertIn("缓存无效", record["last_error"])
 
     def test_changed_score_input_invalidates_all_incomplete_downstream_stages(self):
         with tempfile.TemporaryDirectory() as temp_dir:
