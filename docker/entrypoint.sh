@@ -64,9 +64,20 @@ fi
 
 # ==================== Cron Mode ====================
 
-# Export environment variables for cron
-# (cron does not inherit the container's environment by default)
-printenv | grep -v "no_proxy" > /etc/environment
+# cron does not inherit the container's environment by default.  The worker
+# loads application settings from the mounted /app/.env, so never copy the
+# whole process environment here: that would persist API keys, webhook URLs,
+# and SMTP/WebDAV passwords in the container filesystem.  Keep only the
+# non-sensitive runtime values needed by cron-launched Python processes.
+{
+    printf 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n'
+    printf 'PYTHONUNBUFFERED=1\n'
+    printf 'PYTHONDONTWRITEBYTECODE=1\n'
+    if [ -n "${TZ:-}" ]; then
+        printf 'TZ=%s\n' "$TZ"
+    fi
+} > /etc/environment
+chmod 0644 /etc/environment
 
 # Create the cron job
 CRON_LOG="/app/logs/cron_\$(date +\%Y\%m\%d_\%H\%M\%S).log"
