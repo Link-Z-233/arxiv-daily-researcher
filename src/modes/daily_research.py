@@ -878,10 +878,18 @@ class DailyResearchPipeline:
                 )
                 if store and run_id:
                     store.complete_run(run_id, {})
+                    # The scan/checkpoint commit is complete before the
+                    # optional status notification. A provider failure must
+                    # never turn an already completed no-paper run back into
+                    # a failed run or reopen its recovery window.
+                    report_delivery_committed = True
                 if settings.ENABLE_NOTIFICATIONS:
                     # No-paper runs do not have a report delivery to recover;
                     # retain the legacy best-effort behaviour for this status-only notice.
-                    (notifier or NotifierAgent()).notify(no_papers_result)
+                    try:
+                        (notifier or NotifierAgent()).notify(no_papers_result)
+                    except Exception as exc:
+                        logger.warning("无新论文通知发送失败，运行状态仍保持已完成: %s", exc)
                 return no_papers_result
 
             logger.info(
@@ -1400,7 +1408,14 @@ class DailyResearchPipeline:
                 else:
                     # Explicitly preserve the non-persistence mode, where an
                     # outbox cannot survive restarts.
-                    notifier.notify(run_result)
+                    try:
+                        notifier.notify(run_result)
+                    except Exception as exc:
+                        # Notification delivery is a follow-up concern. The
+                        # report and compatibility history have already been
+                        # committed, so a provider outage must not make the
+                        # completed paper batch look retryable.
+                        logger.warning("通知发送失败，日报状态仍保持已完成: %s", exc)
 
             return run_result
 
