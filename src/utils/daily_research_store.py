@@ -5,7 +5,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agents.analysis_agent import Stage2Response
@@ -244,6 +244,32 @@ class DailyResearchStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_run_token_usage_recorded "
                 "ON run_token_usage(recorded_at)"
+            )
+            # Reader-owned paper preferences (like/dislike). Rows are never
+            # deleted: clearing a preference writes 'none' so the history of
+            # what was marked stays intact. Snapshots of title/authors keep
+            # each row self-contained even if the paper is later re-queued.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS paper_preferences (
+                    source TEXT NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    canonical_id TEXT,
+                    version INTEGER,
+                    preference TEXT NOT NULL
+                        CHECK (preference IN ('like', 'dislike', 'none')),
+                    title TEXT NOT NULL,
+                    authors_json TEXT NOT NULL DEFAULT '[]',
+                    categories_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (source, paper_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_paper_preferences_updated "
+                "ON paper_preferences(updated_at)"
             )
 
     @staticmethod
@@ -857,6 +883,198 @@ class DailyResearchStore:
             }
             for row in rows
         ]
+
+    # ==================== Paper preferences ====================
+
+    def set_paper_preference(
+        self,
+        source: str,
+        paper_id: str,
+        *,
+        preference: str,
+        title: str,
+        canonical_id: Optional[str] = None,
+        version: Optional[int] = None,
+        authors: Optional[list[str]] = None,
+        categories: Optional[list[str]] = None,
+    ) -> None:
+        """Upsert one reader preference; clearing writes 'none', never a delete."""
+        if preference not in ("like", "dislike", "none"):
+            raise ValueError(f"invalid preference: {preference!r}")
+        now = datetime.now().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO paper_preferences (
+                    source, paper_id, canonical_id, version, preference,
+                    title, authors_json, categories_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source, paper_id) DO UPDATE SET
+                    canonical_id = excluded.canonical_id,
+                    version = excluded.version,
+                    preference = excluded.preference,
+                    title = excluded.title,
+                    authors_json = excluded.authors_json,
+                    categories_json = excluded.categories_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    source,
+                    paper_id,
+                    canonical_id,
+                    version,
+                    preference,
+                    title,
+                    json.dumps(list(authors or []), ensure_ascii=False),
+                    json.dumps(list(categories or []), ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+
+    @staticmethod
+    def _preference_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+        def parse(raw: object) -> list[str]:
+            try:
+                parsed = json.loads(raw) if isinstance(raw, str) else []
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return []
+            return [item for item in parsed if isinstance(item, str)] if isinstance(parsed, list) else []
+
+        return {
+            "source": row["source"],
+            "paper_id": row["paper_id"],
+            "canonical_id": row["canonical_id"],
+            "version": row["version"],
+            "preference": row["preference"],
+            "title": row["title"],
+            "authors": parse(row["authors_json"]),
+            "categories": parse(row["categories_json"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def get_paper_preference(self, source: str, paper_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM paper_preferences WHERE source = ? AND paper_id = ?",
+                (source, paper_id),
+            ).fetchone()
+        return self._preference_row_to_dict(row) if row else None
+
+    def get_preference_map(self, papers: list[Dict[str, Any]]) -> Dict[Tuple[str, str], str]:
+        """Batch lookup of preference strings for (source, paper_id) pairs."""
+        result: Dict[Tuple[str, str], str] = {}
+        with self._connect() as conn:
+            for paper in papers:
+                source = paper.get("source")
+                paper_id = paper.get("paper_id")
+                if not isinstance(source, str) or not isinstance(paper_id, str):
+                    continue
+                row = conn.execute(
+                    "SELECT preference FROM paper_preferences "
+                    "WHERE source = ? AND paper_id = ?",
+                    (source, paper_id),
+                ).fetchone()
+                if row and row["preference"] != "none":
+                    result[(source, paper_id)] = row["preference"]
+        return result
+
+    def list_preferences(
+        self, *, preference: Optional[str] = None, limit: int = 100
+    ) -> list[Dict[str, Any]]:
+        """List marked papers newest-first; 'none' rows are skipped by default."""
+        query = "SELECT * FROM paper_preferences"
+        params: list[Any] = []
+        if preference in ("like", "dislike"):
+            query += " WHERE preference = ?"
+            params.append(preference)
+        elif preference != "all":
+            query += " WHERE preference != 'none'"
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(int(limit))
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._preference_row_to_dict(row) for row in rows]
+
+    def get_preference_counts(self) -> Dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT preference, COUNT(*) AS n FROM paper_preferences "
+                "GROUP BY preference"
+            ).fetchall()
+        counts = {"like": 0, "dislike": 0, "none": 0}
+        for row in rows:
+            if row["preference"] in counts:
+                counts[row["preference"]] = row["n"]
+        return counts
+
+    def aggregate_liked_preferences(self) -> Dict[str, list[Dict[str, Any]]]:
+        """Deterministic top authors/categories among liked papers.
+
+        Pure SQLite + Python counting; no LLM involved by design — the goal is
+        a faithful mirror of what the reader marked, not a model's guess.
+        """
+        rows = self.list_preferences(preference="like", limit=100000)
+        author_counts: Dict[str, int] = {}
+        category_counts: Dict[str, int] = {}
+        for row in rows:
+            for author in row["authors"]:
+                key = author.strip()
+                if key:
+                    author_counts[key] = author_counts.get(key, 0) + 1
+            for category in row["categories"]:
+                key = category.strip()
+                if key:
+                    category_counts[key] = category_counts.get(key, 0) + 1
+
+        def ranked(counts: Dict[str, int]) -> list[Dict[str, Any]]:
+            return [
+                {"name": name, "count": count}
+                for name, count in sorted(
+                    counts.items(), key=lambda item: (-item[1], item[0])
+                )
+            ]
+
+        return {"authors": ranked(author_counts), "categories": ranked(category_counts)}
+
+    def list_delivered_papers(self, limit: int = 50) -> list[Dict[str, Any]]:
+        """Recently completed papers (newest first) for preference marking."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT source, paper_id, canonical_id, version, paper_json, "
+                "completed_at FROM daily_papers "
+                "WHERE completed_at IS NOT NULL "
+                "ORDER BY completed_at DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        papers = []
+        for row in rows:
+            try:
+                metadata = json.loads(row["paper_json"]) if row["paper_json"] else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            papers.append(
+                {
+                    "source": row["source"],
+                    "paper_id": row["paper_id"],
+                    "canonical_id": row["canonical_id"],
+                    "version": row["version"],
+                    "title": str(metadata.get("title") or row["paper_id"]),
+                    "authors": [
+                        a for a in (metadata.get("authors") or []) if isinstance(a, str)
+                    ],
+                    "categories": [
+                        c
+                        for c in (metadata.get("categories") or [])
+                        if isinstance(c, str)
+                    ],
+                    "completed_at": row["completed_at"],
+                }
+            )
+        return papers
 
     def get_recent_runs(self, limit: int = 20) -> list[Dict[str, Any]]:
         """Return recent run summaries plus receipts for local observability."""
