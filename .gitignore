@@ -42,3 +42,7 @@ Thumbs.db
 
 # test
 test/
+# ZCode agent workspace
+.zcode/
+# Windows NTFS download markers
+*:Zone.Identifier
