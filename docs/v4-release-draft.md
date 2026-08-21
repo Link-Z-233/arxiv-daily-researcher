@@ -68,7 +68,7 @@
 - [x] Worker 仅启动 cron/watcher，使用不会命中的测试 cron，`RUN_ON_STARTUP=false`、`SETUP_WIZARD=false`，确认没有执行每日研究。
 - [x] WebUI 健康检查通过（`/_stcore/health` 返回 200；宿主机 8501 被无关项目占用，smoke test 使用临时端口映射验证，compose 仍绑定 `127.0.0.1:8501`）。
 - [x] 只删除属于本项目的旧容器和旧镜像；不删除卷，不执行全局 `image prune`。
-- [ ] 重建并启动最终本地测试部署，不 push。
+- [x] 重建并启动最终本地测试部署，不 push（2026-08-22 通过 WebUI 模拟真实用户触发每日研究：完整扫描 16 天窗口入队 1495 篇、本次处理 3 篇、报告生成与交付正常；期间发现并修复 3 个真实 bug：WebUI 页脚硬编码版本号、Docker 单文件挂载 `.env` 保存 EBUSY 失败、保存无关 Tab 会改写评分公式）。
 
 ## 决策记录
 
