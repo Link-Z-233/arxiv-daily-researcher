@@ -26,6 +26,27 @@ def _get_local_version() -> str:
     return "unknown"
 
 
+def _parse_version(version: str):
+    """把点分数字版本号解析成可比较的整数元组；非纯数字段返回 None。"""
+    parts = version.strip().lstrip("vV").split(".")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError:
+        return None
+
+
+def _is_remote_newer(remote_version: str, local_version: str):
+    """远端更新返回 True，不更新返回 False，无法比较返回 None。"""
+    remote = _parse_version(remote_version)
+    local = _parse_version(local_version)
+    if remote is None or local is None:
+        return None
+    width = max(len(remote), len(local))
+    remote += (0,) * (width - len(remote))
+    local += (0,) * (width - len(local))
+    return remote > local
+
+
 def _load_template(name: str, subdir: str = "notifications") -> str | None:
     """从 configs/templates 加载通知模板文件。"""
     path = TEMPLATES_DIR / subdir / name
@@ -237,6 +258,16 @@ def _check_version_via_api(logger=None) -> bool:
 
         if remote_version == local_version:
             log(f"当前版本 {local_version} 已是最新")
+            return True
+
+        # 只有远端语义化版本更高时才提醒；本地领先（如未发布的开发版）
+        # 或版本号无法比较时保持安静，避免每次运行都误报"新版本"。
+        newer = _is_remote_newer(remote_version, local_version)
+        if newer is None:
+            log(f"远程版本号 {remote_version} 无法与 {local_version} 比较，跳过提醒")
+            return True
+        if not newer:
+            log(f"当前版本 {local_version} 不低于远程 {remote_version}，已是最新")
             return True
 
         log(f"发现新版本: {remote_version}（当前: {local_version}）")
