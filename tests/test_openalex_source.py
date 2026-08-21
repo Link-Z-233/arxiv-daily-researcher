@@ -309,6 +309,85 @@ class OpenAlexFetchTests(unittest.TestCase):
             self.assertEqual(recent["scanned_sources"], ["prl"])
             self.assertIsNone(store.get_scan_watermark("prl"))
 
+    def test_pipeline_registers_every_source_receipt_before_advancing_watermarks(self):
+        class _SearchAgent:
+            received_callback_sources = set()
+
+            def __init__(self, **_kwargs):
+                pass
+
+            def get_enabled_sources(self):
+                return ["huggingface_papers", "prl"]
+
+            def fetch_all_papers(self, **kwargs):
+                callbacks = kwargs["scan_receipt_callbacks"]
+                self.__class__.received_callback_sources = set(callbacks)
+                for source, callback in callbacks.items():
+                    callback(
+                        {
+                            "source": source,
+                            "status": "succeeded",
+                            "scanned_at": "2026-08-13T08:00:00+00:00",
+                            "receipt_kind": "source_summary_v1",
+                            "domain_receipts": [],
+                            "total_new_candidates": 0,
+                        }
+                    )
+                return {}
+
+        class _KeywordAgent:
+            def get_all_keywords(self):
+                return {"quantum": 1.0}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "daily.db"
+            fake_settings = SimpleNamespace(
+                TOKEN_TRACKING_ENABLED=False,
+                DAILY_RESEARCH_PERSISTENCE_ENABLED=True,
+                DAILY_RESEARCH_DB_PATH=db_path,
+                ENABLE_NOTIFICATIONS=False,
+                ENABLED_SOURCES=["huggingface_papers", "prl"],
+                TARGET_DOMAINS=[],
+                TARGET_JOURNALS=["prl"],
+                SEARCH_DAYS=1,
+                ENABLE_REFERENCE_EXTRACTION=False,
+                PRIMARY_KEYWORDS=["quantum"],
+                PRIMARY_KEYWORD_WEIGHT=1.0,
+                SCORE_STRATEGY="core_relevance_v2",
+                CORE_RELEVANCE_THRESHOLD=6.0,
+                CORE_KEYWORD_MIN_SCORE=8.0,
+                HISTORY_DIR=Path(temp_dir) / "history",
+                OPENALEX_EMAIL="",
+                OPENALEX_API_KEY="",
+                ENABLE_SEMANTIC_SCHOLAR_TLDR=False,
+                SEMANTIC_SCHOLAR_API_KEY="",
+                KEYWORD_TRACKER_ENABLED=False,
+                DAILY_ENABLE_DEEP_ANALYSIS=False,
+                normalized_score_strategy=lambda: "core_relevance_v2",
+            )
+            with (
+                patch("modes.daily_research.settings", fake_settings),
+                patch("modes.daily_research.SearchAgent", _SearchAgent),
+                patch("modes.daily_research.KeywordAgent", _KeywordAgent),
+                patch("modes.daily_research.deliver_pending_after_report_syncs", return_value={"claimed": 0}),
+            ):
+                result = DailyResearchPipeline().run()
+
+            store = DailyResearchStore(db_path)
+            recent = store.get_recent_runs(1)[0]
+            watermarks = {
+                source: store.get_scan_watermark(source)
+                for source in ("huggingface_papers", "prl")
+            }
+
+        self.assertTrue(result.success)
+        self.assertEqual({"huggingface_papers", "prl"}, _SearchAgent.received_callback_sources)
+        self.assertEqual("completed", recent["status"])
+        self.assertEqual(
+            {"huggingface_papers", "prl"}, {receipt["source"] for receipt in recent["receipts"]}
+        )
+        self.assertTrue(all(watermarks.values()))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -544,11 +544,46 @@ class DailyResearchStore:
             raise RuntimeError(f"日报运行扫描开始时间损坏: {run_id}")
         return value
 
+    @staticmethod
+    def _require_successful_scan_receipts(conn, run_id: str, sources: list[str]) -> None:
+        """Refuse a checkpoint when any planned source lacks terminal success proof.
+
+        A source fetch can be fail-closed and still leave an observability
+        hole if a later refactor accidentally omits its receipt callback.
+        Checkpoint advancement is the last irreversible-looking transition in
+        a run, so require one ``succeeded`` receipt for every source that was
+        recorded in ``prepare_scan``.  The caller's transaction rolls back all
+        delivery/completion writes if this invariant is not satisfied.
+        """
+        if not sources:
+            return
+        placeholders = ", ".join("?" for _ in sources)
+        rows = conn.execute(
+            "SELECT source, status FROM daily_scan_receipts WHERE run_id = ? "
+            f"AND source IN ({placeholders})",
+            [run_id, *sources],
+        ).fetchall()
+        statuses = {row["source"]: row["status"] for row in rows}
+        missing = [source for source in sources if source not in statuses]
+        unsuccessful = [
+            source for source in sources if source in statuses and statuses[source] != "succeeded"
+        ]
+        if missing or unsuccessful:
+            details = []
+            if missing:
+                details.append(f"缺少收据: {', '.join(missing)}")
+            if unsuccessful:
+                details.append(f"未成功: {', '.join(unsuccessful)}")
+            raise RuntimeError(
+                "扫描收据不完整，拒绝推进来源水位线: " + "; ".join(details)
+            )
+
     def _advance_scan_watermarks(self, conn, run_id: str, now: str) -> None:
         """Advance all planned source checkpoints inside a successful commit."""
         sources = self._scan_sources_from_run(conn, run_id)
         if not sources:
             return
+        self._require_successful_scan_receipts(conn, run_id, sources)
         scan_started_at = self._scan_started_at_from_run(conn, run_id, now)
         for source in sources:
             conn.execute(

@@ -11,7 +11,7 @@ import arxiv
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sources.arxiv_source import ArxivSource, normalize_arxiv_domains  # noqa: E402
-from sources.search_agent import SearchAgent  # noqa: E402
+from sources.search_agent import SearchAgent, SourceScanReceiptError  # noqa: E402
 
 
 class _FakeResult:
@@ -48,6 +48,16 @@ class _FailingSource:
 
     def fetch_papers(self, **_kwargs):
         raise RuntimeError("network unavailable")
+
+
+class _StaticSource:
+    display_name = "fake"
+
+    def __init__(self, papers):
+        self.papers = papers
+
+    def fetch_papers(self, **_kwargs):
+        return list(self.papers)
 
 
 class ArxivFetchTests(unittest.TestCase):
@@ -228,6 +238,78 @@ class ArxivFetchTests(unittest.TestCase):
         agent.sources = {"fake": _FailingSource()}
         with self.assertRaisesRegex(RuntimeError, "network unavailable"):
             agent.fetch_all_papers(days=1)
+
+    def test_non_arxiv_sources_emit_terminal_summary_receipts(self):
+        hf_agent = SearchAgent.__new__(SearchAgent)
+        hf_agent.sources = {"huggingface_papers": _StaticSource([object(), object()])}
+        hf_receipts = []
+        hf_result = hf_agent.fetch_all_papers(
+            days=1, scan_receipt_callbacks={"huggingface_papers": hf_receipts.append}
+        )
+
+        self.assertEqual(2, len(hf_result["huggingface_papers"]))
+        self.assertEqual(
+            {
+                "source": "huggingface_papers",
+                "status": "succeeded",
+                "receipt_kind": "source_summary_v1",
+                "total_new_candidates": 2,
+            },
+            {
+                key: hf_receipts[0][key]
+                for key in (
+                    "source",
+                    "status",
+                    "receipt_kind",
+                    "total_new_candidates",
+                )
+            },
+        )
+        self.assertEqual([], hf_receipts[0]["domain_receipts"])
+
+        openalex_agent = SearchAgent.__new__(SearchAgent)
+        openalex_agent.sources = {
+            "openalex": _StaticSource([SimpleNamespace(source="prl"), SimpleNamespace(source="prl")])
+        }
+        openalex_agent._journal_codes = ["prl", "pra"]
+        openalex_agent.enable_semantic_scholar = False
+        openalex_agent.semantic_scholar_enricher = None
+        openalex_receipts = {"prl": [], "pra": []}
+        openalex_agent.fetch_all_papers(
+            days=1,
+            scan_receipt_callbacks={
+                source: receipts.append for source, receipts in openalex_receipts.items()
+            },
+        )
+
+        self.assertEqual(2, openalex_receipts["prl"][0]["total_new_candidates"])
+        self.assertEqual(0, openalex_receipts["pra"][0]["total_new_candidates"])
+        self.assertTrue(
+            all(receipt["status"] == "succeeded" for receipts in openalex_receipts.values() for receipt in receipts)
+        )
+
+    def test_non_arxiv_failure_emits_failed_receipt_and_callback_failure_is_fatal(self):
+        agent = SearchAgent.__new__(SearchAgent)
+        agent.sources = {"huggingface_papers": _FailingSource()}
+        receipts = []
+        with self.assertRaisesRegex(RuntimeError, "network unavailable"):
+            agent.fetch_all_papers(
+                days=1, scan_receipt_callbacks={"huggingface_papers": receipts.append}
+            )
+        self.assertEqual("failed", receipts[0]["status"])
+        self.assertNotIn("total_new_candidates", receipts[0])
+
+        persistence_agent = SearchAgent.__new__(SearchAgent)
+        persistence_agent.sources = {"huggingface_papers": _StaticSource([])}
+        with self.assertRaisesRegex(SourceScanReceiptError, "无法持久化"):
+            persistence_agent.fetch_all_papers(
+                days=1,
+                scan_receipt_callbacks={
+                    "huggingface_papers": lambda _receipt: (_ for _ in ()).throw(
+                        OSError("database read-only")
+                    )
+                },
+            )
 
     def test_announcement_grace_catches_late_indexed_submission_without_result_cap(self):
         now = datetime.now(timezone.utc)

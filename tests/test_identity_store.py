@@ -49,6 +49,15 @@ def _hf_paper(arxiv_id: str) -> PaperMetadata:
     )
 
 
+def _source_receipt(source: str, status: str = "succeeded") -> dict:
+    return {
+        "source": source,
+        "status": status,
+        "scanned_at": "2026-08-13T08:00:00+00:00",
+        "domain_receipts": [],
+    }
+
+
 class IdentityStoreTests(unittest.TestCase):
     def test_scan_receipts_are_run_scoped_durable_and_visible_in_recent_runs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -150,7 +159,10 @@ class IdentityStoreTests(unittest.TestCase):
                 2,
             )
             # A no-new-paper run is still a complete scan and must establish
-            # the checkpoint for every enabled source.
+            # the checkpoint for every enabled source, but only after each
+            # source has a durable terminal success receipt.
+            for source in ("arxiv", "prl"):
+                store.record_scan_receipt(successful_run, source, _source_receipt(source))
             store.complete_run(successful_run, {})
 
             for source in ("arxiv", "prl"):
@@ -188,12 +200,35 @@ class IdentityStoreTests(unittest.TestCase):
                 checkpoint_time.isoformat(),
             )
 
+    def test_checkpoint_requires_successful_receipt_for_every_planned_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(0)
+            store.prepare_scan(run_id, 2, ["arxiv", "prl"])
+            store.record_scan_receipt(run_id, "arxiv", _source_receipt("arxiv"))
+
+            with self.assertRaisesRegex(RuntimeError, "扫描收据不完整"):
+                store.complete_run(run_id, {})
+
+            store.record_scan_receipt(run_id, "prl", _source_receipt("prl", "failed"))
+            with self.assertRaisesRegex(RuntimeError, "未成功: prl"):
+                store.complete_run(run_id, {})
+
+            with store._connect() as conn:
+                state = conn.execute(
+                    "SELECT status FROM daily_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()["status"]
+            self.assertEqual("running", state)
+            self.assertIsNone(store.get_scan_watermark("arxiv"))
+            self.assertIsNone(store.get_scan_watermark("prl"))
+
     def test_new_source_uses_normal_window_while_existing_source_recovers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "daily.db")
             checkpoint_time = datetime(2026, 8, 1, tzinfo=timezone.utc)
             first_run = store.start_run(0)
             store.prepare_scan(first_run, 3, ["arxiv"], now=checkpoint_time)
+            store.record_scan_receipt(first_run, "arxiv", _source_receipt("arxiv"))
             store.complete_run(first_run, {})
 
             next_run = store.start_run(0)
@@ -243,6 +278,7 @@ class IdentityStoreTests(unittest.TestCase):
             store = DailyResearchStore(Path(temp_dir) / "daily.db")
             checkpoint_run = store.start_run(0)
             store.prepare_scan(checkpoint_run, 2, ["arxiv"])
+            store.record_scan_receipt(checkpoint_run, "arxiv", _source_receipt("arxiv"))
             store.complete_run(checkpoint_run, {})
             with store._connect() as conn:
                 conn.execute(

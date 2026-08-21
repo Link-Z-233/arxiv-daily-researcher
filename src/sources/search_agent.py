@@ -5,8 +5,9 @@
 """
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Any, Callable, List, Dict, Optional
 
 from .base_source import BasePaperSource, PaperMetadata, normalize_arxiv_identifier
 from .arxiv_source import ArxivSource, normalize_arxiv_domains
@@ -18,6 +19,10 @@ from .openalex_source import OpenAlexSource, JOURNAL_ISSN_MAP
 from .semantic_scholar_enricher import SemanticScholarEnricher
 
 logger = logging.getLogger(__name__)
+
+
+class SourceScanReceiptError(RuntimeError):
+    """Raised when a non-arXiv source cannot persist its terminal scan receipt."""
 
 
 class SearchAgent:
@@ -255,18 +260,60 @@ class SearchAgent:
                 self.semantic_scholar_enricher.session.proxies.update(s2_proxy)
                 logger.info("[SearchAgent] Semantic Scholar 已配置网络代理")
 
+    @staticmethod
+    def _source_scan_receipt(
+        source: str, status: str, candidate_count: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Build a minimal terminal receipt for sources without arXiv's detail.
+
+        ArXiv owns a richer per-domain/per-query receipt because it exposes
+        two independent queries.  Hugging Face Papers and OpenAlex still need
+        one durable source-level terminal record before their shared daily
+        checkpoint can advance.  Do not put exception text, URLs, request
+        parameters, or credentials into this payload.
+        """
+        payload: Dict[str, Any] = {
+            "source": source,
+            "status": status,
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
+            "receipt_kind": "source_summary_v1",
+            "domain_receipts": [],
+        }
+        if candidate_count is not None:
+            payload["total_new_candidates"] = max(0, int(candidate_count))
+        return payload
+
+    @classmethod
+    def _emit_source_scan_receipt(
+        cls,
+        callback: Optional[Callable[[Dict[str, Any]], None]],
+        source: str,
+        status: str,
+        candidate_count: Optional[int] = None,
+    ) -> None:
+        """Persist a terminal source receipt or fail closed before reporting."""
+        if callback is None:
+            return
+        try:
+            callback(cls._source_scan_receipt(source, status, candidate_count))
+        except Exception as exc:
+            raise SourceScanReceiptError(
+                f"无法持久化 {source} 扫描收据"
+            ) from exc
+
     def fetch_all_papers(
         self,
         days: int = 7,
-        scan_receipt_callbacks: Optional[Dict[str, callable]] = None,
+        scan_receipt_callbacks: Optional[Dict[str, Callable[[Dict[str, Any]], None]]] = None,
     ) -> Dict[str, List[PaperMetadata]]:
         """
         从所有启用的数据源抓取论文。
 
         参数:
             days: 搜索最近 N 天的论文
-            scan_receipt_callbacks: 可选的来源→回调映射。当前 arXiv 使用它
-                在成功或失败扫描后持久化完整的领域级扫描收据。
+            scan_receipt_callbacks: 可选的报告来源→回调映射。ArXiv 写入
+                完整的领域级收据；Hugging Face Papers 和 OpenAlex 期刊写入
+                最小的来源级终态收据。任一收据持久化失败都会中止本次扫描。
 
         返回:
             Dict[str, List[PaperMetadata]]: {数据源名: 论文列表}
@@ -277,6 +324,11 @@ class SearchAgent:
 
         for source_name, source in self.sources.items():
             logger.info(f">>> 从 {source.display_name} 抓取论文...")
+            receipt_sources = (
+                list(getattr(self, "_journal_codes", []))
+                if source_name == "openalex"
+                else [source_name]
+            )
 
             try:
                 if source_name == "arxiv":
@@ -298,14 +350,39 @@ class SearchAgent:
                         if paper.source not in results:
                             results[paper.source] = []
                         results[paper.source].append(paper)
+                    # OpenAlex queries all configured journals in one backend
+                    # call.  Persist a terminal receipt for each report source
+                    # (including a legitimate zero-result journal) before the
+                    # shared daily watermark is allowed to advance.
+                    for journal_code in receipt_sources:
+                        self._emit_source_scan_receipt(
+                            receipt_callbacks.get(journal_code),
+                            journal_code,
+                            "succeeded",
+                            len(results.get(journal_code, [])),
+                        )
 
                 else:
                     papers = source.fetch_papers(days=days)
                     results[source_name] = papers
+                    self._emit_source_scan_receipt(
+                        receipt_callbacks.get(source_name),
+                        source_name,
+                        "succeeded",
+                        len(papers),
+                    )
 
             except Exception:
                 # 抓取错误不能被转换为空列表，否则上层会生成看似成功但实际
-                # 漏论文的日报。让调用方决定是否重试/终止本次运行。
+                # 漏论文的日报。除 arXiv 外的来源由这里写失败终态收据；
+                # arXiv 已在其两个查询/领域循环内写入更细的失败收据。
+                if source_name != "arxiv":
+                    for report_source in receipt_sources:
+                        self._emit_source_scan_receipt(
+                            receipt_callbacks.get(report_source),
+                            report_source,
+                            "failed",
+                        )
                 logger.exception(f"[{source_name}] 抓取失败")
                 raise
 

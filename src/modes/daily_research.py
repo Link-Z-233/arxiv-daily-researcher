@@ -36,6 +36,7 @@ from sources import (
     OpenAlexFetchError,
     PaperMetadata,
     SearchAgent,
+    SourceScanReceiptError,
 )
 from report.daily import Reporter
 from notifications import NotifierAgent, RunResult
@@ -770,18 +771,42 @@ class DailyResearchPipeline:
                 scan_receipt_callbacks = {}
                 if store and run_id:
                     # Receipt persistence is part of source completeness, not
-                    # an optional analytics side effect.  If it fails, arXiv
-                    # raises before any paper can be reported or its checkpoint
-                    # advanced, preserving a retryable recovery window.
-                    scan_receipt_callbacks["arxiv"] = (
-                        lambda receipt: store.record_scan_receipt(
-                            run_id, "arxiv", receipt
+                    # optional analytics. Every configured report source gets
+                    # one callback: arXiv emits a rich domain receipt, while
+                    # supplementary feeds/each OpenAlex journal emit a source
+                    # summary. A callback failure aborts before reports or
+                    # watermarks can make an incomplete scan look complete.
+                    for receipt_source in search_agent.get_enabled_sources():
+                        scan_receipt_callbacks[receipt_source] = (
+                            lambda receipt, source=receipt_source: store.record_scan_receipt(
+                                run_id, source, receipt
+                            )
                         )
-                    )
                 papers_by_source: Dict[str, List[PaperMetadata]] = search_agent.fetch_all_papers(
                     days=effective_scan_days,
                     scan_receipt_callbacks=scan_receipt_callbacks,
                 )
+            except SourceScanReceiptError as sre:
+                error_detail = str(sre)
+                logger.error("数据源扫描收据持久化失败，终止本次运行: %s", error_detail)
+                receipt_fail_result = RunResult(
+                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    success=False,
+                    error_message=f"数据源扫描收据失败: {error_detail}",
+                )
+                if settings.ENABLE_NOTIFICATIONS:
+                    try:
+                        NotifierAgent().notify(receipt_fail_result)
+                        NotifierAgent().notify_error(
+                            "source_scan_receipt",
+                            "数据源扫描收据持久化失败；本次日报已终止，"
+                            "以避免将无完整扫描证据的结果标记为成功。",
+                        )
+                    except Exception as ne:
+                        logger.warning("发送扫描收据错误通知失败: %s", ne)
+                if store and run_id:
+                    store.fail_run(run_id, error_detail)
+                return receipt_fail_result
             except ArxivFetchError as afe:
                 # ArXiv 抓取彻底失败（多次重试后仍无法获取任何论文）
                 error_detail = str(afe)
