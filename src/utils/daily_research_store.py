@@ -224,6 +224,27 @@ class DailyResearchStore:
                 )
                 """
             )
+            # LLM token usage per run and model, persisted when a run ends.
+            # Trend runs use a synthetic run id and mode='trend_research'.
+            # Rows are append-only history; nothing is ever pruned.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS run_token_usage (
+                    run_id TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'daily_research',
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    recorded_at TEXT NOT NULL,
+                    PRIMARY KEY (run_id, model)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_run_token_usage_recorded "
+                "ON run_token_usage(recorded_at)"
+            )
 
     @staticmethod
     def _migrate_run_scan_state(conn):
@@ -736,6 +757,106 @@ class DailyResearchStore:
                 """,
                 (key, value, now),
             )
+
+    def record_token_usage(
+        self,
+        run_id: str,
+        by_model: Dict[str, Dict[str, int]],
+        *,
+        mode: str = "daily_research",
+    ) -> None:
+        """Persist one run's per-model token usage.
+
+        ``by_model`` follows TokenCounter.get_summary(): ``{model: {"prompt":
+        int, "completion": int, "total": int}}``.  Recording again for the
+        same run replaces its rows, keeping interrupted-then-retried runs
+        from double counting.
+        """
+        now = datetime.now().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM run_token_usage WHERE run_id = ?", (run_id,)
+            )
+            for model, usage in (by_model or {}).items():
+                prompt = int(usage.get("prompt", 0) or 0)
+                completion = int(usage.get("completion", 0) or 0)
+                conn.execute(
+                    """
+                    INSERT INTO run_token_usage (
+                        run_id, mode, model, prompt_tokens,
+                        completion_tokens, total_tokens, recorded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        mode,
+                        str(model),
+                        prompt,
+                        completion,
+                        prompt + completion,
+                        now,
+                    ),
+                )
+
+    def get_daily_token_totals(self, days: Optional[int] = None) -> list[Dict[str, Any]]:
+        """Aggregate persisted token usage by calendar day (oldest first).
+
+        ``days`` limits the window to the most recent N days; None returns
+        the full history.  Each row: ``{"date", "prompt", "completion",
+        "total", "runs"}``.
+        """
+        query = (
+            "SELECT substr(recorded_at, 1, 10) AS day, "
+            "SUM(prompt_tokens) AS prompt, "
+            "SUM(completion_tokens) AS completion, "
+            "SUM(total_tokens) AS total, "
+            "COUNT(DISTINCT run_id) AS runs "
+            "FROM run_token_usage"
+        )
+        params: list[Any] = []
+        if days is not None and days > 0:
+            cutoff = (datetime.now() - timedelta(days=days)).date().isoformat()
+            query += " WHERE substr(recorded_at, 1, 10) >= ?"
+            params.append(cutoff)
+        query += " GROUP BY day ORDER BY day"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "date": row["day"],
+                "prompt": row["prompt"] or 0,
+                "completion": row["completion"] or 0,
+                "total": row["total"] or 0,
+                "runs": row["runs"] or 0,
+            }
+            for row in rows
+        ]
+
+    def get_token_usage_by_model(self, days: Optional[int] = None) -> list[Dict[str, Any]]:
+        """Aggregate persisted token usage by model over the window."""
+        query = (
+            "SELECT model, SUM(prompt_tokens) AS prompt, "
+            "SUM(completion_tokens) AS completion, "
+            "SUM(total_tokens) AS total "
+            "FROM run_token_usage"
+        )
+        params: list[Any] = []
+        if days is not None and days > 0:
+            cutoff = (datetime.now() - timedelta(days=days)).date().isoformat()
+            query += " WHERE substr(recorded_at, 1, 10) >= ?"
+            params.append(cutoff)
+        query += " GROUP BY model ORDER BY total DESC"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "model": row["model"],
+                "prompt": row["prompt"] or 0,
+                "completion": row["completion"] or 0,
+                "total": row["total"] or 0,
+            }
+            for row in rows
+        ]
 
     def get_recent_runs(self, limit: int = 20) -> list[Dict[str, Any]]:
         """Return recent run summaries plus receipts for local observability."""

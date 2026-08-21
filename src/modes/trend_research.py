@@ -240,6 +240,26 @@ class TrendResearchPipeline:
                 success=False,
                 error_message=str(e),
             )
+        finally:
+            # 趋势运行不在 daily_runs 里，用合成 run_id 落库 token 用量；
+            # 统计失败绝不影响主流程。
+            try:
+                if settings.TOKEN_TRACKING_ENABLED:
+                    usage = token_counter.get_summary()
+                    if usage.get("by_model"):
+                        from utils.daily_research_store import DailyResearchStore
+
+                        store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
+                        synthetic_run_id = (
+                            f"trend_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                        )
+                        store.record_token_usage(
+                            synthetic_run_id,
+                            usage["by_model"],
+                            mode="trend_research",
+                        )
+            except Exception:
+                logger.debug("Token 用量记录失败", exc_info=True)
 
     # ==================== TLDR 生成辅助 ====================
 

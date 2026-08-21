@@ -1455,3 +1455,16 @@ class DailyResearchPipeline:
                     pass
 
             raise
+        finally:
+            # 无论成功、失败还是中断，都把本次运行真实消耗的 token 落库；
+            # 统计失败绝不影响主流程。
+            if store and run_id:
+                try:
+                    usage = token_counter.get_summary()
+                    by_model = usage.get("by_model") or {}
+                    if by_model:
+                        store.record_token_usage(
+                            run_id, by_model, mode="daily_research"
+                        )
+                except Exception:
+                    logger.debug("Token 用量记录失败", exc_info=True)
