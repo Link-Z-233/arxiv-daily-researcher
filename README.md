@@ -4,12 +4,13 @@
 
 **基于 LLM 的智能学术论文监控、筛选、深度分析与趋势研究系统**
 
-[![Version](https://img.shields.io/badge/version-3.2-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-4.0-brightgreen.svg)](CHANGELOG.md)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Supported-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
 [![Streamlit](https://img.shields.io/badge/Config_Panel-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](#️-streamlit-配置面板)
+[![English](https://img.shields.io/badge/README-English-blue.svg)](README_EN.md)
 
 *每天接收高质量论文摘要；一行命令纵览一年研究趋势；一个面板完成配置、运行、预览与排障。*
 
@@ -118,7 +119,7 @@ ArXiv Daily Researcher 会自动从 **ArXiv** 与 **20+ 学术期刊**抓取论�
 </td>
 <td width="50%" valign="top">
 
-### 🖥️ Streamlit 配置面板 <sup><kbd>v3.2</kbd></sup>
+### 🖥️ Streamlit 配置面板 <sup><kbd>v4.0</kbd></sup>
 
 提供 **11 个 Tab** 的浏览器管理界面：每日推送（运行管理 + 报告开关）、报告查看、趋势分析、关键词、搜索、评分、通知、数据管理（配置导出 + WebDAV 同步）、API 配置、网络代理与高级设置。
 
@@ -920,6 +921,7 @@ WebDAV 同步支持三种模式（在 WebUI「数据管理」Tab 配置）：
 
 <table>
 <tr><th>版本</th><th>日期</th><th>类型</th><th>亮点</th></tr>
+<tr><td><b>v4.0</b></td><td>2026-08-22</td><td>🚀 重大更新</td><td>SQLite 日报历史与精确版本交付、持久化待处理队列（max_papers_per_run）、arXiv 完整分页与扫描收据、声明式额外数据源（核心收敛为 arXiv + PRL）、Hugging Face Papers 源、评分评估反馈、Docker 镜像拆分与安全修复（WebUI 默认绑定 127.0.0.1、cron 不泄漏密钥）、大规模可靠性加固（fail-closed、原子交付、边界加固）</td></tr>
 <tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ 增强 + 🐛 修复</td><td>网络代理（per-service 粒度）、WebDAV 数据同步（含坚果云兼容修复）、配置一键导出、Docker 更新通知、日常推送 Tab（原运行管理重组）、Markdown/HTML 报告独立开关、趋势分析双开关输出、运行日志刷新自动跳转、ArXiv 抓取优化与早停、每日深度分析可配置</td></tr>
 <tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ 增强 + 🐛 修复</td><td>运行管理 Tab、日志查看器升级、趋势分析 Tab、报告查看增强、ArXiv 超时守卫、运行锁超龄回收</td></tr>
 <tr><td><b>v3.0</b></td><td>2026-03-09</td><td>✨ 重大更新</td><td>研究趋势模式、趋势分析 GitHub Actions 工作流、综合趋势分析、Token 追踪、配置向导自动触发、并发运行互斥锁、运行专用日志、Streamlit 配置面板（含报告查看）、关键词趋势 HTML 报告</td></tr>
