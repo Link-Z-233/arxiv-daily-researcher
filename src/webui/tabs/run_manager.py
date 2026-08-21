@@ -225,6 +225,12 @@ def _render_live_status_body() -> None:
             for f, pid in active_locks
         )
         st.info(f"🟢 {t('rm_status_running')} — {lock_info}")
+        # 停止控件放在自动刷新的 fragment 里：整页脚本不会自动重跑，
+        # 只有这里能随运行状态自动出现/消失。
+        with st.popover("⏹ " + t("rm_stop_btn")):
+            st.warning(t("rm_stop_confirm_hint"))
+            if st.button(t("rm_stop_confirm"), key="rm_stop_confirm", type="primary"):
+                _request_worker_stop(active_locks)
         log = _latest_run_log()
         if log is not None:
             tail = _read_log_tail(log, max_lines=12)
@@ -295,19 +301,6 @@ def _render_run_control() -> None:
             "▶ " + t("run_now_btn"), key="rm_run_now",
             type="primary", use_container_width=True, disabled=not can_run,
         )
-        if is_running:
-            # 二次确认放在 popover 里，避免误触；停止信号走共享卷，
-            # 由 worker 侧 webui_trigger 的 stop 监听转发 SIGTERM。
-            with st.popover(
-                "⏹ " + t("rm_stop_btn"),
-                use_container_width=True,
-                disabled=not is_running,
-            ):
-                st.warning(t("rm_stop_confirm_hint"))
-                if st.button(
-                    t("rm_stop_confirm"), key="rm_stop_confirm", type="primary"
-                ):
-                    _request_worker_stop(active_locks)
     with col_status:
         auto_refresh = st.toggle(
             t("rm_auto_refresh"),
