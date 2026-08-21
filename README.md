@@ -716,7 +716,7 @@ arxiv-daily-researcher/
 ├── docker-compose.yml               # Docker Compose 编排文件
 ├── docker/
 │   ├── Dockerfile
-│   ├── Dockerfile.webui
+│   │   └── (targets: worker / webui)
 │   └── entrypoint.sh
 │
 ├── VERSION                          # 版本号（用于 Docker 更新检查）

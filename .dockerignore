@@ -39,3 +39,17 @@ docker/docker-compose.yml
 # Documentation
 LICENSE
 README.md
+
+# Extra build-context noise (not needed inside images)
+docs/
+promo/
+tests/
+assets/
+README_EN.md
+CHANGELOG.md
+requirements.txt
+.pytest_cache/
+.zcode/
+.claude/
+.codex/
+.agents/

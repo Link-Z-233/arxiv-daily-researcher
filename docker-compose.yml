@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      target: worker
     image: arxiv-daily-researcher:latest
     container_name: arxiv-daily-researcher
     restart: unless-stopped
@@ -53,7 +54,8 @@ services:
   config-panel:
     build:
       context: .
-      dockerfile: docker/Dockerfile.webui
+      dockerfile: docker/Dockerfile
+      target: webui
     image: arxiv-daily-researcher-config-panel:latest
     container_name: arxiv-daily-researcher-config-panel
     restart: unless-stopped

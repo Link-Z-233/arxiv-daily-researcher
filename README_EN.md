@@ -716,7 +716,7 @@ arxiv-daily-researcher/
 ├── docker-compose.yml               # Docker Compose orchestration file
 ├── docker/
 │   ├── Dockerfile
-│   ├── Dockerfile.webui
+│   │   └── (targets: worker / webui)
 │   └── entrypoint.sh
 │
 ├── VERSION                          # Version number (for Docker update check)
