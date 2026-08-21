@@ -21,6 +21,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+# 专用退出码：相同任务已在运行而被跳过（沿用 EX_TEMPFAIL 惯例取值）。
+# WebUI 触发链路据此区分“真的跑完”和“被锁跳过”；cron 直接调用时
+# 非零返回码只进日志，无副作用。
+LOCK_SKIPPED_EXIT_CODE = 75
+
 
 def _lock_dir() -> Path:
     try:
@@ -185,7 +190,7 @@ def run_lock(
         if expired_message:
             print(f"   {expired_message}")
         print(f"   锁文件: {lock_path}\n")
-        sys.exit(0)
+        sys.exit(LOCK_SKIPPED_EXIT_CODE)
 
     # 写入诊断信息方便排查
     try:

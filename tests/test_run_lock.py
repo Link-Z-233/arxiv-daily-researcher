@@ -69,7 +69,9 @@ class RunLockSafetyTests(unittest.TestCase):
                     with run_lock_module.run_lock("daily_research"):
                         self.fail("a held lock must not be acquired")
 
-            self.assertEqual(raised.exception.code, 0)
+            # 被锁跳过必须用专用退出码，WebUI 触发链路才能与真跑完区分。
+            self.assertEqual(raised.exception.code, run_lock_module.LOCK_SKIPPED_EXIT_CODE)
+            self.assertEqual(run_lock_module.LOCK_SKIPPED_EXIT_CODE, 75)
             kill.assert_not_called()
             self.assertIn("不会自动终止进程", output.getvalue())
             self.assertTrue(holder.is_alive())

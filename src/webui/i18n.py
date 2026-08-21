@@ -92,6 +92,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "未能从锁文件解析出 PID，无法发送停止请求。",
         "en": "No PID parsed from the lock file; cannot request a stop.",
     },
+    "rm_status_skipped_busy": {
+        "zh": "上次请求未执行：已有相同任务在运行（被运行锁跳过）。",
+        "en": "Last request did not run: an identical task was already active.",
+    },
     # ── usage.py ────────────────────────────────────────────────────────
     "usage_title": {"zh": "LLM Token 用量", "en": "LLM Token Usage"},
     "usage_hint": {

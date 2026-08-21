@@ -178,3 +178,47 @@ class StopRequestTests(unittest.TestCase):
             payload = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual(payload["pid"], 4242)
             self.assertEqual(target.name, "stop_4242.json")
+
+
+class SkippedBusyMappingTests(unittest.TestCase):
+    def test_exit_75_maps_to_skipped_busy_status(self):
+        """被锁跳过的触发不得伪装成 succeeded。"""
+        from utils import webui_trigger
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            from utils.webui_trigger import trigger_directory
+
+            requests = trigger_directory(data_dir)
+            requests.mkdir(parents=True, exist_ok=True)
+            request_path = requests / "20260101T000000000000Z_c0ffee0000000000000000000000eeee.json"
+            webui_trigger._atomic_write_json(
+                request_path,
+                {
+                    "schema_version": 1,
+                    "request_id": "c0ffee0000000000000000000000eeee",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "mode": "daily_research",
+                    "args": {},
+                },
+            )
+            claimed = request_path.with_suffix(".running")
+            request_path.rename(claimed)
+
+            # 伪造一个总是以 75 退出的 main.py。
+            with patch.object(
+                webui_trigger.subprocess, "Popen"
+            ) as popen:
+                popen.return_value.returncode = 75
+                popen.return_value.poll.return_value = 75
+                popen.return_value.pid = 4242
+                popen.return_value.wait.return_value = 75
+                with patch.object(webui_trigger.threading, "Thread"):
+                    rc = webui_trigger.execute_trigger_request(
+                        claimed, project_root=Path.cwd()
+                    )
+            self.assertEqual(rc, 75)
+            status_dir = trigger_status_directory(data_dir)
+            status_files = list(status_dir.glob("c0ffee0000000000000000000000eeee.json"))
+            self.assertEqual(len(status_files), 1)
+            state = json.loads(status_files[0].read_text(encoding="utf-8"))["state"]
+            self.assertEqual(state, "skipped_busy")

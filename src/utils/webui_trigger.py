@@ -381,6 +381,9 @@ def execute_trigger_request(
             # main.py maps SIGTERM to its interrupt path; distinguish it from
             # a genuine failure so the UI can explain what happened.
             state = "interrupted"
+        elif return_code == 75:
+            # run_lock: the same task was already active, so nothing ran.
+            state = "skipped_busy"
         else:
             state = "failed"
         _write_status(data_dir, payload, state, return_code=return_code, command=command)

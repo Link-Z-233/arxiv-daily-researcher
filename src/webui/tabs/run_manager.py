@@ -241,7 +241,9 @@ def _render_live_status_body() -> None:
         return
 
     status = _latest_trigger_status()
-    if status and status.get("state") in {"failed", "rejected", "interrupted"}:
+    if status and status.get("state") == "skipped_busy":
+        st.info(t("rm_status_skipped_busy"))
+    elif status and status.get("state") in {"failed", "rejected", "interrupted"}:
         # The worker-owned status may contain an exception string.
         # Keep that detail in the worker log: local WebUI feedback
         # only needs the terminal state and a safe numeric exit code.
