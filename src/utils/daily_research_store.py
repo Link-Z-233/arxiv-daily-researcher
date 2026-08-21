@@ -1058,6 +1058,23 @@ class DailyResearchStore:
 
         return {"authors": ranked(author_counts), "categories": ranked(category_counts)}
 
+    def count_pending_papers(self) -> Dict[str, int]:
+        """Global durable-queue depth: uncompleted papers, split by retry need.
+
+        Pure SQL with no paper-source imports so the thin WebUI image can
+        surface the real backlog any time.
+        """
+        with self._connect() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) AS n FROM daily_papers WHERE completed_at IS NULL"
+            ).fetchone()["n"] or 0
+            failed = conn.execute(
+                "SELECT COUNT(*) AS n FROM daily_papers WHERE completed_at IS NULL "
+                "AND (score_status = 'failed' OR translation_status = 'failed' "
+                "OR analysis_status = 'failed')"
+            ).fetchone()["n"] or 0
+        return {"total": total, "failed_retry": failed, "fresh": total - failed}
+
     def list_delivered_papers(self, limit: int = 50) -> list[Dict[str, Any]]:
         """Recently completed papers (newest first) for preference marking."""
         with self._connect() as conn:

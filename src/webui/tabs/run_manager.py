@@ -839,6 +839,34 @@ def _render_log_section() -> None:
 # ─── 主渲染 ─────────────────────────────────────────────────────────────────
 
 
+def _render_queue_metrics(config_values: dict) -> None:
+    """常驻队列指标：待处理 / 失败待重试 / 按当前上限的预计批次数。"""
+    db_path = _daily_db_path_from_config(config_values)
+    if not db_path.exists():
+        return
+    try:
+        from utils.daily_research_store import DailyResearchStore
+
+        counts = DailyResearchStore(db_path).count_pending_papers()
+    except Exception:
+        return
+
+    per_run = config_values.get("daily_max_papers_per_run")
+    if isinstance(per_run, int) and not isinstance(per_run, bool) and per_run > 0:
+        batches = max(1, -(-counts["total"] // per_run))
+        batches_label = t("rm_queue_batches").format(n=batches, per=per_run)
+    else:
+        batches_label = t("rm_queue_all")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric(t("rm_queue_pending"), f"{counts['total']:,}")
+    with col2:
+        st.metric(t("rm_queue_failed"), f"{counts['failed_retry']:,}")
+    with col3:
+        st.metric(t("rm_queue_estimate"), batches_label)
+
+
 def render(_env_values: dict, config_values: dict) -> None:
     flat = config_values
 
@@ -847,6 +875,7 @@ def render(_env_values: dict, config_values: dict) -> None:
         unsafe_allow_html=True,
     )
     _render_run_control()
+    _render_queue_metrics(config_values)
 
     st.divider()
 

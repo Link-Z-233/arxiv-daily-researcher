@@ -75,3 +75,33 @@ class PaperPreferenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueueDepthTests(unittest.TestCase):
+    def test_pending_counts_split_fresh_and_failed(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "state.db"
+            store = DailyResearchStore(db_path)
+            conn = sqlite3.connect(db_path)
+            # 三篇：一篇已完成、一篇全新待处理、一篇评分失败待重试。
+            rows = [
+                ("arxiv", "done1", "succeeded", "succeeded", "not_required", "2026-01-01T00:00:00"),
+                ("arxiv", "fresh1", "pending", "pending", "pending", None),
+                ("arxiv", "fail1", "failed", "pending", "pending", None),
+            ]
+            for source, pid, sc, tr, an, completed in rows:
+                conn.execute(
+                    "INSERT INTO daily_papers (source, paper_id, paper_json, score_status,"
+                    " translation_status, analysis_status, completed_at, first_seen_at,"
+                    " last_seen_at, run_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (source, pid, "{}", sc, tr, an, completed, "2026-01-01", "2026-01-01", "r"),
+                )
+            conn.commit()
+            conn.close()
+
+            counts = store.count_pending_papers()
+            self.assertEqual(counts["total"], 2)
+            self.assertEqual(counts["failed_retry"], 1)
+            self.assertEqual(counts["fresh"], 1)

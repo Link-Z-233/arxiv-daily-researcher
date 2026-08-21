@@ -67,6 +67,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "尾部 12 行 · 每 5 秒自动刷新",
         "en": "last 12 lines · auto-refreshes every 5s",
     },
+    "rm_queue_pending": {"zh": "待处理队列", "en": "Pending queue"},
+    "rm_queue_failed": {"zh": "失败待重试", "en": "Awaiting retry"},
+    "rm_queue_estimate": {"zh": "处理节奏", "en": "Pace"},
+    "rm_queue_batches": {
+        "zh": "还需 {n} 次运行（每次 {per} 篇）",
+        "en": "{n} more runs ({per}/run)",
+    },
+    "rm_queue_all": {"zh": "下次运行全量处理", "en": "All on next run"},
     # ── usage.py ────────────────────────────────────────────────────────
     "usage_title": {"zh": "LLM Token 用量", "en": "LLM Token Usage"},
     "usage_hint": {
