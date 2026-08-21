@@ -86,6 +86,40 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "usage_total_tokens": {"zh": "总 tokens", "en": "Total tokens"},
     "usage_by_model_title": {"zh": "按模型汇总", "en": "By model"},
     "usage_model": {"zh": "模型", "en": "Model"},
+    # ── favorites.py ────────────────────────────────────────────────────
+    "tab_favorites": {"zh": "收藏偏好", "en": "Favorites"},
+    "fav_title": {"zh": "收藏偏好", "en": "Paper Favorites"},
+    "fav_hint": {
+        "zh": "给论文点喜欢或不喜欢；标记只用于汇总你的兴趣画像（作者、领域、关键词），"
+              "不会影响 AI 评分。数据永久保留。",
+        "en": "Mark papers you like or dislike. Marks only build your interest "
+              "profile (authors, categories, keywords) and never affect AI "
+              "scoring. Data is kept forever.",
+    },
+    "fav_mark_title": {"zh": "论文标注", "en": "Mark papers"},
+    "fav_mark_empty": {
+        "zh": "暂无可标注的论文——完成一次每日研究后这里会出现论文列表。",
+        "en": "No papers to mark yet — complete a daily research run first.",
+    },
+    "fav_like": {"zh": "喜欢", "en": "Like"},
+    "fav_dislike": {"zh": "不喜欢", "en": "Dislike"},
+    "fav_clear": {"zh": "清除标记", "en": "Clear mark"},
+    "fav_state_like": {"zh": "已喜欢", "en": "Liked"},
+    "fav_state_dislike": {"zh": "已不喜欢", "en": "Disliked"},
+    "fav_summary_title": {"zh": "偏好汇总", "en": "Preference summary"},
+    "fav_likes": {"zh": "喜欢", "en": "Likes"},
+    "fav_dislikes": {"zh": "不喜欢", "en": "Dislikes"},
+    "fav_top_authors": {"zh": "收藏作者 Top", "en": "Top authors"},
+    "fav_top_categories": {"zh": "收藏领域 Top", "en": "Top categories"},
+    "fav_matched_keywords": {
+        "zh": "命中的主要关键词（按已喜欢论文标题统计）",
+        "en": "Matched primary keywords (from liked paper titles)",
+    },
+    "fav_no_marks": {"zh": "还没有任何标记。", "en": "No marks yet."},
+    "fav_no_keyword_hits": {
+        "zh": "已喜欢的论文标题中没有命中主要关键词。",
+        "en": "No primary keyword hits in liked paper titles.",
+    },
     # ── llm.py ───────────────────────────────────────────────────────────
     "cheap_llm_title": {
         "zh": "低成本 LLM (CHEAP_LLM)",
