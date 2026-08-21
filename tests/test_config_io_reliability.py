@@ -475,3 +475,84 @@ class ConfigIOReliabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigCommentPreservationTests(unittest.TestCase):
+    def _write_with_comments(self, root: Path):
+        path = root / "config.json"
+        write_config_json({"search_settings": {"search_days": 14}, "daily_research": {"max_papers_per_run": 0}}, path)
+        hand_commented = path.read_text(encoding="utf-8").replace(
+            '    "search_days": 14',
+            "    // Hand-written: full window is scanned.\n    \"search_days\": 14",
+        ).replace(
+            '    "max_papers_per_run": 0',
+            "    // 0 = all pending; positive caps this run only.\n    \"max_papers_per_run\": 3",
+        )
+        path.write_text(hand_commented, encoding="utf-8")
+        return path
+
+    def test_hand_comments_survive_a_rewrite_with_changed_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = self._write_with_comments(root)
+            config = read_config_json(path)
+            config["daily_research"]["max_papers_per_run"] = 5
+            write_config_json(config, path)
+
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("// Hand-written: full window is scanned.", text)
+            self.assertIn("// 0 = all pending; positive caps this run only.", text)
+            self.assertIn('"max_papers_per_run": 5', text)
+            self.assertEqual(read_config_json(path)["daily_research"]["max_papers_per_run"], 5)
+
+    def test_generated_section_headers_are_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = self._write_with_comments(root)
+            before = path.read_text(encoding="utf-8")
+            header_count_before = before.count("// ==")
+            config = read_config_json(path)
+            write_config_json(config, path)
+
+            text = path.read_text(encoding="utf-8")
+            # 生成的分节横幅只会来自 writer 自己；回注不得把它们翻倍。
+            self.assertEqual(text.count("// =="), header_count_before)
+
+    def test_comment_for_removed_key_is_dropped_without_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = self._write_with_comments(root)
+            config = read_config_json(path)
+            del config["daily_research"]["max_papers_per_run"]
+            write_config_json(config, path)
+
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("0 = all pending", text)
+            self.assertIn("// Hand-written: full window is scanned.", text)
+
+    def test_repeated_member_names_anchor_in_document_order(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = root / "config.json"
+            path.write_text(
+                '{\n'
+                '  "a": {\n'
+                '    // comment for first enabled\n'
+                '    "enabled": true\n'
+                '  },\n'
+                '  "b": {\n'
+                '    // comment for second enabled\n'
+                '    "enabled": false\n'
+                '  }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            config = read_config_json(path)
+            config["a"]["enabled"] = False
+            write_config_json(config, path)
+
+            text = path.read_text(encoding="utf-8")
+            first = text.index("comment for first enabled")
+            second = text.index("comment for second enabled")
+            self.assertLess(first, second)
+            self.assertIn("comment for first enabled\n    \"enabled\": false", text)
