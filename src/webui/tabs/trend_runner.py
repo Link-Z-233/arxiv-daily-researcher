@@ -87,20 +87,32 @@ def render(_env_values: dict, config_values: dict) -> None:
 
     # 当前趋势分析进程状态
     trend_locks = _get_trend_lock_files()
+    any_trend_running = False
     if trend_locks:
         st.info(t("tr_locks_found").format(n=len(trend_locks)))
         for lock in trend_locks:
             pid = _read_pid_from_lock(lock)
             is_running = _is_lock_held(lock)
+            any_trend_running = any_trend_running or is_running
             status = f"🟢 {t('rm_status_running')}" if is_running else f"🔴 {t('rm_status_stopped')}"
             st.caption(f"{status} — `{lock.name}` PID={pid or t('rm_no_pid')}")
+
+    # 触发队列守卫：与每日推送一致，pending/运行中不允许重复提交，
+    # 否则重复请求只会在 worker 侧被锁静默吞掉，用户无从得知。
+    from webui.tabs.run_manager import _trigger_age_seconds
+
+    trigger_age = _trigger_age_seconds()
+    trigger_pending = trigger_age is not None and trigger_age <= 30
+    if trigger_pending:
+        st.info(f"⏳ {t('rm_trigger_pending')}")
+    can_run = not trigger_pending and not any_trend_running
 
     # 关键词输入放在运行按钮前（运行需要关键词）
     keywords_input = st.text_input(
         t("trend_keywords_label"),
         value="",
         key="tr_keywords",
-        placeholder=t("tr_keywords_placeholder"),
+        placeholder=t("trend_keywords_placeholder"),
         help=t("trend_keywords_help"),
     )
 
@@ -112,6 +124,7 @@ def render(_env_values: dict, config_values: dict) -> None:
             key="tr_run_btn",
             type="primary",
             use_container_width=True,
+            disabled=not can_run,
         )
 
     st.divider()
