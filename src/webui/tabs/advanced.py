@@ -121,11 +121,7 @@ def render(_env_values: dict, config_values: dict):
 
     col4d, col4e = st.columns(2)
     with col4d:
-        st.toggle(
-            t("enable_daily_persistence"),
-            value=flat.get("daily_research_persistence_enabled", True),
-            key="daily_research_persistence_enabled",
-        )
+        st.info(t("daily_persistence_required"))
     with col4e:
         st.toggle(
             t("daily_deep_analysis_label"),
@@ -306,9 +302,7 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "llm_request_pool_log_slow_wait_seconds": st.session_state.get(
             "llm_request_pool_log_slow_wait_seconds", 5.0
         ),
-        "daily_research_persistence_enabled": st.session_state.get(
-            "daily_research_persistence_enabled", True
-        ),
+        "daily_research_persistence_enabled": True,
         "daily_research_db_path": st.session_state.get(
             "daily_research_db_path", "data/daily_research/daily_research.db"
         ),

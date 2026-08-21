@@ -806,13 +806,10 @@ def render(_env_values: dict, config_values: dict) -> None:
     )
     _render_status()
 
-    st.divider()
-
-    _render_scan_receipts(config_values)
-
-    st.divider()
-
-    _render_operational_health(config_values)
+    with st.expander(t("rm_advanced_diagnostics"), expanded=False):
+        _render_scan_receipts(config_values)
+        st.divider()
+        _render_operational_health(config_values)
 
     st.divider()
 
@@ -821,7 +818,7 @@ def render(_env_values: dict, config_values: dict) -> None:
         f'<p class="section-title">⚙️ {t("daily_research_settings_title")}</p>',
         unsafe_allow_html=True,
     )
-    col_ds1, col_ds2, col_ds3 = st.columns(3)
+    col_ds1, col_ds2, col_ds3, col_ds4 = st.columns(4)
     with col_ds1:
         st.toggle(
             t("html_reports_label"),
@@ -841,6 +838,16 @@ def render(_env_values: dict, config_values: dict) -> None:
             key="include_all_in_report",
             help=t("include_all_help"),
         )
+    with col_ds4:
+        st.number_input(
+            t("daily_max_papers_label"),
+            min_value=0,
+            max_value=100000,
+            value=int(flat.get("daily_max_papers_per_run", 0)),
+            step=1,
+            key="daily_max_papers_per_run",
+            help=t("daily_max_papers_help"),
+        )
 
     st.divider()
 
@@ -857,4 +864,7 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "enable_html_report": st.session_state.get("enable_html_report", True),
         "enable_markdown_report": st.session_state.get("enable_markdown_report", True),
         "include_all_in_report": st.session_state.get("include_all_in_report", True),
+        "daily_max_papers_per_run": int(
+            st.session_state.get("daily_max_papers_per_run", 0)
+        ),
     }

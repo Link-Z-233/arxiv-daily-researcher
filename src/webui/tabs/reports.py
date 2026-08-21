@@ -13,6 +13,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from webui.i18n import t
+from utils.source_registry import source_display_names
 
 # project root: tabs/ -> webui/ -> src/ -> project_root
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -32,7 +33,7 @@ _ARXIV_SOURCES = {"ARXIV", "arxiv"}
 class ReportFile(NamedTuple):
     path: Path
     display: str  # human-friendly label shown in UI
-    source: str  # uppercase source name / keyword slug / "keyword_trend"
+    source: str  # stable source code / keyword slug / "keyword_trend"
     report_type: str  # "daily" | "trend" | "keyword_trend"
     date_key: str  # YYYY-MM-DD 日期字符串，用于前后天导航
 
@@ -68,10 +69,16 @@ def _fmt_kw(stem: str) -> str:
     return m.group(1) if m else stem
 
 
+def _source_from_daily_filename(stem: str) -> str:
+    """Recover a source code when reports are stored without source folders."""
+    match = re.match(r"(?P<source>.+?)_Report_", stem, flags=re.IGNORECASE)
+    return match.group("source").strip().lower() if match else "unknown"
+
+
 # ─── discovery ────────────────────────────────────────────────────────────────
 
 
-def _discover_reports() -> dict[str, list[ReportFile]]:
+def _discover_reports(reports_dir: Path = _REPORTS_DIR) -> dict[str, list[ReportFile]]:
     """Scan data/reports/ and return three lists, each newest-first."""
     result: dict[str, list[ReportFile]] = {
         "daily": [],
@@ -80,19 +87,32 @@ def _discover_reports() -> dict[str, list[ReportFile]]:
     }
 
     # daily_research/html/{source}/*.html
-    daily_html = _REPORTS_DIR / "daily_research" / "html"
+    daily_html = reports_dir / "daily_research" / "html"
     if daily_html.exists():
         for src_dir in daily_html.iterdir():
             if src_dir.is_dir():
-                src = src_dir.name.upper()
+                src = src_dir.name.strip().lower()
                 for f in src_dir.glob("*.html"):
                     result["daily"].append(
                         ReportFile(f, _fmt_daily(f.stem), src, "daily", _extract_date_key(f.stem))
                     )
+        # ``reports_by_source=false`` writes files directly in the html
+        # directory. Keep that supported while deriving groups without a
+        # hard-coded source list.
+        for f in daily_html.glob("*.html"):
+            result["daily"].append(
+                ReportFile(
+                    f,
+                    _fmt_daily(f.stem),
+                    _source_from_daily_filename(f.stem),
+                    "daily",
+                    _extract_date_key(f.stem),
+                )
+            )
         result["daily"].sort(key=lambda r: r.path.stat().st_mtime, reverse=True)
 
     # trend_research/html/{keyword-slug}/*.html
-    trend_html = _REPORTS_DIR / "trend_research" / "html"
+    trend_html = reports_dir / "trend_research" / "html"
     if trend_html.exists():
         for kw_dir in trend_html.iterdir():
             if kw_dir.is_dir():
@@ -104,7 +124,7 @@ def _discover_reports() -> dict[str, list[ReportFile]]:
         result["trend"].sort(key=lambda r: r.path.stat().st_mtime, reverse=True)
 
     # keyword_trend/html/*.html
-    kw_html = _REPORTS_DIR / "keyword_trend" / "html"
+    kw_html = reports_dir / "keyword_trend" / "html"
     if kw_html.exists():
         for f in sorted(kw_html.glob("*.html"), reverse=True):
             result["keyword_trend"].append(
@@ -145,7 +165,12 @@ def _make_on_change(key: str, by_display: dict[str, ReportFile]):
     return _cb
 
 
-def _render_group_selectbox(rtype: str, group: str, reports: list[ReportFile]) -> None:
+def _render_group_selectbox(
+    rtype: str,
+    group: str,
+    reports: list[ReportFile],
+    group_label: Optional[str] = None,
+) -> None:
     """Render one selectbox for a source/slug group; updates preview on change."""
     by_display = {r.display: r for r in reports}
     labels = [r.display for r in reports]
@@ -156,7 +181,7 @@ def _render_group_selectbox(rtype: str, group: str, reports: list[ReportFile]) -
         st.session_state[_PREVIEW_KEY] = reports[0]
 
     st.selectbox(
-        f"**{group}** ({len(labels)})",
+        f"**{group_label or group}** ({len(labels)})",
         labels,
         key=key,
         on_change=_make_on_change(key, by_display),
@@ -197,6 +222,7 @@ def _render_category_col(
     rtype: str,
     reports: list[ReportFile],
     header: str,
+    source_labels: Optional[dict[str, str]] = None,
 ) -> None:
     """渲染一个报告类型列（daily / trend / keyword_trend）。"""
     count = len(reports)
@@ -217,7 +243,12 @@ def _render_category_col(
         groups = sorted({r.source for r in reports})
         for grp in groups:
             grp_reports = [r for r in reports if r.source == grp]
-            _render_group_selectbox(rtype, grp, grp_reports)
+            _render_group_selectbox(
+                rtype,
+                grp,
+                grp_reports,
+                (source_labels or {}).get(grp, grp),
+            )
 
 
 # ─── navigation helpers ───────────────────────────────────────────────────────
@@ -414,6 +445,9 @@ def render(_env_values: dict, _config_values: dict) -> None:
 
     st.divider()
 
+    source_labels = source_display_names(
+        _config_values.get("extra_source_definitions", [])
+    )
     all_reports = _discover_reports()
     visible_reports = _filter_visible_reports(all_reports, show_non_arxiv)
     total = sum(len(v) for v in visible_reports.values())
@@ -440,6 +474,7 @@ def render(_env_values: dict, _config_values: dict) -> None:
             "daily",
             visible_reports["daily"],
             f"📅 {t('rtype_daily')}",
+            source_labels,
         )
 
     with c2:
