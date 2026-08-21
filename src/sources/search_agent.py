@@ -16,6 +16,10 @@ from .huggingface_papers_source import (
     HuggingFacePapersSource,
 )
 from .openalex_source import OpenAlexSource, JOURNAL_ISSN_MAP
+from utils.source_registry import (
+    merge_source_catalog,
+    validate_source_definitions,
+)
 from .semantic_scholar_enricher import SemanticScholarEnricher
 
 logger = logging.getLogger(__name__)
@@ -49,6 +53,7 @@ class SearchAgent:
         enable_semantic_scholar: bool = True,
         semantic_scholar_api_key: str = None,
         use_legacy_history_filter: bool = True,
+        extra_source_definitions: Optional[List[Dict[str, Any]]] = None,
     ):
         """
         初始化搜索调度器。
@@ -88,6 +93,8 @@ class SearchAgent:
         self.openalex_email = openalex_email
         self.openalex_api_key = openalex_api_key
         self.use_legacy_history_filter = bool(use_legacy_history_filter)
+        self.extra_source_definitions = validate_source_definitions(extra_source_definitions or [])
+        self.journal_catalog = merge_source_catalog(JOURNAL_ISSN_MAP, self.extra_source_definitions)
 
         # 初始化 Semantic Scholar 增强器
         self.enable_semantic_scholar = enable_semantic_scholar
@@ -145,7 +152,7 @@ class SearchAgent:
             source = configured_source.strip().lower()
             if (
                 source not in {"arxiv", HUGGINGFACE_PAPERS_SOURCE_NAME}
-                and source not in JOURNAL_ISSN_MAP
+                and source not in self.journal_catalog
             ):
                 raise ValueError(
                     f"未知数据源代码: {configured_source}。"
@@ -167,7 +174,7 @@ class SearchAgent:
                     f"期刊代码必须是非空字符串: {configured_journal!r}"
                 )
             journal = configured_journal.strip().lower()
-            if journal not in JOURNAL_ISSN_MAP:
+            if journal not in self.journal_catalog:
                 raise ValueError(
                     f"未知 OpenAlex 期刊代码: {configured_journal}。"
                     "请使用内置支持的期刊代码。"
@@ -181,12 +188,17 @@ class SearchAgent:
         if "arxiv" in self.enabled_sources:
             self.arxiv_domains = normalize_arxiv_domains(self.arxiv_domains)
             arxiv_proxy = _settings.get_proxy_dict("arxiv")
-            self.sources["arxiv"] = ArxivSource(
-                history_dir=self.history_dir,
-                proxy_dict=arxiv_proxy,
-                announcement_lookback_grace_days=getattr(
+            arxiv_kwargs = {
+                "history_dir": self.history_dir,
+                "proxy_dict": arxiv_proxy,
+                "announcement_lookback_grace_days": getattr(
                     _settings, "ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS", 2
                 ),
+            }
+            if not self.use_legacy_history_filter:
+                arxiv_kwargs["load_legacy_history"] = False
+            self.sources["arxiv"] = ArxivSource(
+                **arxiv_kwargs,
             )
             self._source_backends["arxiv"] = "arxiv"
             logger.info("[SearchAgent] 已启用 ArXiv 数据源")
@@ -195,20 +207,25 @@ class SearchAgent:
         # replacement.  It remains opt-in in config, but gets the same
         # fail-closed fetch and independent compatibility history semantics.
         if HUGGINGFACE_PAPERS_SOURCE_NAME in self.enabled_sources:
-            hf_source = HuggingFacePapersSource(
-                history_dir=self.history_dir,
-                availability_lag_days=getattr(
+            hf_kwargs = {
+                "history_dir": self.history_dir,
+                "availability_lag_days": getattr(
                     _settings, "HUGGINGFACE_PAPERS_AVAILABILITY_LAG_DAYS", 2
                 ),
-                lookback_grace_days=getattr(
+                "lookback_grace_days": getattr(
                     _settings, "HUGGINGFACE_PAPERS_LOOKBACK_GRACE_DAYS", 2
                 ),
-                request_timeout_seconds=getattr(
+                "request_timeout_seconds": getattr(
                     _settings, "HUGGINGFACE_PAPERS_REQUEST_TIMEOUT_SECONDS", 30
                 ),
-                request_interval_seconds=getattr(
+                "request_interval_seconds": getattr(
                     _settings, "HUGGINGFACE_PAPERS_REQUEST_INTERVAL_SECONDS", 0.25
                 ),
+            }
+            if not self.use_legacy_history_filter:
+                hf_kwargs["load_legacy_history"] = False
+            hf_source = HuggingFacePapersSource(
+                **hf_kwargs,
             )
             hf_proxy = _settings.get_proxy_dict(HUGGINGFACE_PAPERS_SOURCE_NAME)
             if hf_proxy:
@@ -235,12 +252,16 @@ class SearchAgent:
                 journal_codes.append(journal)
 
         if journal_codes:
-            self.sources["openalex"] = OpenAlexSource(
-                history_dir=self.history_dir,
-                journals=journal_codes,
-                email=self.openalex_email,
-                api_key=self.openalex_api_key,
-            )
+            openalex_kwargs = {
+                "history_dir": self.history_dir,
+                "journals": journal_codes,
+                "journal_catalog": self.journal_catalog,
+                "email": self.openalex_email,
+                "api_key": self.openalex_api_key,
+            }
+            if not self.use_legacy_history_filter:
+                openalex_kwargs["load_legacy_history"] = False
+            self.sources["openalex"] = OpenAlexSource(**openalex_kwargs)
             # 注入代理
             openalex_proxy = _settings.get_proxy_dict("openalex")
             if openalex_proxy:

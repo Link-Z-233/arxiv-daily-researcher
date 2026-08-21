@@ -61,8 +61,13 @@ class HuggingFacePapersSource(BasePaperSource):
         lookback_grace_days: int = 2,
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
+        load_legacy_history: bool = True,
     ):
-        super().__init__(HUGGINGFACE_PAPERS_SOURCE_NAME, history_dir)
+        super().__init__(
+            HUGGINGFACE_PAPERS_SOURCE_NAME,
+            history_dir,
+            load_legacy_history=load_legacy_history,
+        )
         self.availability_lag_days = max(0, int(availability_lag_days))
         self.lookback_grace_days = max(0, int(lookback_grace_days))
         self.request_timeout_seconds = max(1, int(request_timeout_seconds))

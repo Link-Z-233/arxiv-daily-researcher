@@ -251,6 +251,29 @@ class OpenAlexFetchTests(unittest.TestCase):
                     enable_semantic_scholar=False,
                 )
 
+    def test_search_agent_accepts_declarative_openalex_journal(self):
+        definition = {
+            "type": "openalex_journal",
+            "code": "custom_physics",
+            "display_name": "Custom Phys.",
+            "full_name": "Custom Physics Journal",
+            "issn": ["1234-567X"],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            agent = SearchAgent(
+                Path(temp_dir),
+                enabled_sources=["custom_physics"],
+                extra_source_definitions=[definition],
+                enable_semantic_scholar=False,
+                use_legacy_history_filter=False,
+            )
+
+            self.assertEqual(agent.get_enabled_sources(), ["custom_physics"])
+            self.assertEqual(
+                agent.sources["openalex"].get_journal_info("custom_physics")["issn"],
+                ["1234-567X"],
+            )
+
     def test_pipeline_returns_failed_result_and_keeps_openalex_watermark_on_fetch_error(self):
         class _SearchAgent:
             def __init__(self, **_kwargs):

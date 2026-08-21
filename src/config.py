@@ -5,6 +5,12 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from utils.source_registry import (
+    CORE_SOURCE_CODES,
+    definitions_for_builtin_codes,
+    source_codes_from_definitions,
+    validate_source_definitions,
+)
 
 # 1. 定义基础路径：获取项目根目录（src/ 的上级目录）
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -105,6 +111,8 @@ class Settings(BaseSettings):
     # ==================== 数据源配置 ====================
     ENABLED_SOURCES: List[str] = ["arxiv"]  # 启用的数据源列表
     TARGET_JOURNALS: List[str] = []  # 目标期刊列表（如 ["prl", "pra"]）
+    EXTRA_SOURCES_ENABLED: bool = False
+    EXTRA_SOURCE_DEFINITIONS: List[Dict[str, Any]] = []
     REPORTS_BY_SOURCE: bool = True  # 是否按数据源分目录存放报告
     HISTORY_DIR: Path = DATA_DIR / "history"  # 历史记录目录
 
@@ -221,8 +229,12 @@ class Settings(BaseSettings):
 
     # ==================== Daily Research 模式配置 ====================
     DAILY_ENABLE_DEEP_ANALYSIS: bool = True  # 是否在每日研究模式中执行深度分析
-    DAILY_RESEARCH_PERSISTENCE_ENABLED: bool = True  # 是否启用论文级持久化与断点续跑
+    # Compatibility field only. SQLite is mandatory for daily research.
+    DAILY_RESEARCH_PERSISTENCE_ENABLED: bool = True
     DAILY_RESEARCH_DB_PATH: Path = DATA_DIR / "daily_research" / "daily_research.db"
+    # 0 means process the complete pending queue. A positive value limits only
+    # downstream work; source scans still exhaust their configured windows.
+    DAILY_MAX_PAPERS_PER_RUN: int = 0
 
     # ==================== PDF 解析配置 ====================
     PDF_PARSER_MODE: str = "mineru"  # PDF 解析模式: "mineru" (云端API) 或 "pymupdf" (本地解析)
@@ -388,9 +400,84 @@ class Settings(BaseSettings):
             # 加载数据源配置
             if "data_sources" in config:
                 ds_config = config["data_sources"]
-                self.ENABLED_SOURCES = ds_config.get("enabled", ["arxiv"])
-                self.TARGET_JOURNALS = ds_config.get("journals", [])
+                if not isinstance(ds_config, dict):
+                    raise ValueError("data_sources 必须是对象")
+                configured_enabled = ds_config.get("enabled", ["arxiv"])
+                if not isinstance(configured_enabled, list):
+                    raise ValueError("data_sources.enabled 必须是列表")
+                legacy_journals = ds_config.get("journals", [])
+                if not isinstance(legacy_journals, list):
+                    raise ValueError("data_sources.journals 必须是列表")
+
+                normalized_configured = []
+                for source in configured_enabled:
+                    if not isinstance(source, str) or not source.strip():
+                        raise ValueError("data_sources.enabled 只能包含非空字符串")
+                    source_code = source.strip().lower()
+                    if source_code not in normalized_configured:
+                        normalized_configured.append(source_code)
+
+                normalized_legacy_journals = []
+                for source in legacy_journals:
+                    if not isinstance(source, str) or not source.strip():
+                        raise ValueError("data_sources.journals 只能包含非空字符串")
+                    source_code = source.strip().lower()
+                    if source_code not in normalized_legacy_journals:
+                        normalized_legacy_journals.append(source_code)
+
                 self.REPORTS_BY_SOURCE = ds_config.get("reports_by_source", True)
+                if "extra_sources" in ds_config:
+                    # In the v4 format this switch is authoritative. Stale
+                    # ``enabled``/``journals`` values must not reactivate an
+                    # explicitly disabled extra source.
+                    extra_sources = ds_config.get("extra_sources")
+                    if extra_sources is None:
+                        extra_sources = {}
+                    if not isinstance(extra_sources, dict):
+                        raise ValueError("data_sources.extra_sources 必须是对象")
+                    self.EXTRA_SOURCES_ENABLED = extra_sources.get("enabled", False)
+                    if not isinstance(self.EXTRA_SOURCES_ENABLED, bool):
+                        raise ValueError("data_sources.extra_sources.enabled 必须是布尔值")
+                    self.EXTRA_SOURCE_DEFINITIONS = validate_source_definitions(
+                        extra_sources.get("definitions", [])
+                    )
+                    core_sources = [
+                        source
+                        for source in normalized_configured
+                        if source in CORE_SOURCE_CODES
+                    ]
+                else:
+                    # One-time in-memory compatibility for pre-v4 source
+                    # lists. Saving through the wizard/WebUI writes the new
+                    # declarative shape; no executable source code is loaded.
+                    legacy_scope = [
+                        *normalized_configured,
+                        *normalized_legacy_journals,
+                    ]
+                    core_sources = []
+                    legacy_extra_codes = []
+                    for source in legacy_scope:
+                        if source in CORE_SOURCE_CODES:
+                            if source not in core_sources:
+                                core_sources.append(source)
+                        elif source not in legacy_extra_codes:
+                            legacy_extra_codes.append(source)
+                    self.EXTRA_SOURCE_DEFINITIONS = definitions_for_builtin_codes(
+                        legacy_extra_codes
+                    )
+                    self.EXTRA_SOURCES_ENABLED = bool(self.EXTRA_SOURCE_DEFINITIONS)
+
+                self.ENABLED_SOURCES = list(core_sources)
+                if self.EXTRA_SOURCES_ENABLED:
+                    for source_code in source_codes_from_definitions(
+                        self.EXTRA_SOURCE_DEFINITIONS
+                    ):
+                        if source_code not in self.ENABLED_SOURCES:
+                            self.ENABLED_SOURCES.append(source_code)
+                # v4 expresses every source in ``enabled`` plus the
+                # declarative block. Keeping the legacy journal side channel
+                # populated would let it bypass the master switch.
+                self.TARGET_JOURNALS = []
                 if "arxiv" in ds_config:
                     arxiv_cfg = ds_config["arxiv"]
                     if isinstance(arxiv_cfg, dict):
@@ -647,9 +734,23 @@ class Settings(BaseSettings):
                 self.DAILY_ENABLE_DEEP_ANALYSIS = daily_cfg.get(
                     "enable_deep_analysis", True
                 )
-                self.DAILY_RESEARCH_PERSISTENCE_ENABLED = daily_cfg.get(
-                    "persistence_enabled", self.DAILY_RESEARCH_PERSISTENCE_ENABLED
+                # ``persistence_enabled`` was an early migration switch. Exact
+                # version delivery and resumable stages now require SQLite, so
+                # legacy false values are normalized rather than re-enabling
+                # JSON-only history.
+                self.DAILY_RESEARCH_PERSISTENCE_ENABLED = True
+                max_papers_per_run = daily_cfg.get(
+                    "max_papers_per_run", self.DAILY_MAX_PAPERS_PER_RUN
                 )
+                if (
+                    isinstance(max_papers_per_run, bool)
+                    or not isinstance(max_papers_per_run, int)
+                    or max_papers_per_run < 0
+                ):
+                    raise ValueError(
+                        "daily_research.max_papers_per_run 必须是非负整数（0 表示不限）"
+                    )
+                self.DAILY_MAX_PAPERS_PER_RUN = max_papers_per_run
                 if "db_path" in daily_cfg:
                     self.DAILY_RESEARCH_DB_PATH = resolve_project_relative_path(
                         self.PROJECT_ROOT,

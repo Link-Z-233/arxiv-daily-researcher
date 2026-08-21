@@ -14,6 +14,7 @@ from typing import Any, List, Dict, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from .base_source import BasePaperSource, PaperMetadata
+from utils.source_registry import OPENALEX_JOURNAL_CATALOG
 
 logger = logging.getLogger(__name__)
 
@@ -27,82 +28,8 @@ class OpenAlexFetchError(RuntimeError):
     """Raised when any configured journal cannot be fetched completely."""
 
 
-# 期刊名称到 ISSN 的映射（与 Crossref 保持一致）
-JOURNAL_ISSN_MAP = {
-    # Physical Review 系列
-    "prl": {
-        "full_name": "Physical Review Letters",
-        "issn": ["0031-9007", "1079-7114"],
-        "display_name": "PRL",
-    },
-    "pra": {
-        "full_name": "Physical Review A",
-        "issn": ["2469-9926", "1050-2947"],
-        "display_name": "PRA",
-    },
-    "prb": {
-        "full_name": "Physical Review B",
-        "issn": ["2469-9950", "1098-0121"],
-        "display_name": "PRB",
-    },
-    "prc": {
-        "full_name": "Physical Review C",
-        "issn": ["2469-9985", "0556-2813"],
-        "display_name": "PRC",
-    },
-    "prd": {
-        "full_name": "Physical Review D",
-        "issn": ["2470-0010", "1550-7998"],
-        "display_name": "PRD",
-    },
-    "pre": {
-        "full_name": "Physical Review E",
-        "issn": ["2470-0045", "1539-3755"],
-        "display_name": "PRE",
-    },
-    "prx": {"full_name": "Physical Review X", "issn": ["2160-3308"], "display_name": "PRX"},
-    "prxq": {"full_name": "PRX Quantum", "issn": ["2691-3399"], "display_name": "PRX Quantum"},
-    "rmp": {
-        "full_name": "Reviews of Modern Physics",
-        "issn": ["0034-6861", "1539-0756"],
-        "display_name": "RMP",
-    },
-    # Nature 系列
-    "nature": {"full_name": "Nature", "issn": ["0028-0836", "1476-4687"], "display_name": "Nature"},
-    "nature_physics": {
-        "full_name": "Nature Physics",
-        "issn": ["1745-2473", "1745-2481"],
-        "display_name": "Nat. Phys.",
-    },
-    "nature_communications": {
-        "full_name": "Nature Communications",
-        "issn": ["2041-1723"],
-        "display_name": "Nat. Commun.",
-    },
-    # Science 系列
-    "science": {
-        "full_name": "Science",
-        "issn": ["0036-8075", "1095-9203"],
-        "display_name": "Science",
-    },
-    "science_advances": {
-        "full_name": "Science Advances",
-        "issn": ["2375-2548"],
-        "display_name": "Sci. Adv.",
-    },
-    # 其他重要期刊
-    "npj_quantum_information": {
-        "full_name": "npj Quantum Information",
-        "issn": ["2056-6387"],
-        "display_name": "npj QI",
-    },
-    "quantum": {"full_name": "Quantum", "issn": ["2521-327X"], "display_name": "Quantum"},
-    "new_journal_of_physics": {
-        "full_name": "New Journal of Physics",
-        "issn": ["1367-2630"],
-        "display_name": "NJP",
-    },
-}
+# Backward-compatible export for integrations importing the old constant.
+JOURNAL_ISSN_MAP = OPENALEX_JOURNAL_CATALOG
 
 
 class OpenAlexSource(BasePaperSource):
@@ -130,6 +57,8 @@ class OpenAlexSource(BasePaperSource):
         max_results: int = 100,
         email: str = None,
         api_key: str = None,
+        journal_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
+        load_legacy_history: bool = True,
     ):
         """
         初始化 OpenAlex 数据源。
@@ -141,11 +70,14 @@ class OpenAlexSource(BasePaperSource):
             email: 用户邮箱（用于礼貌池，提高速率限制）
             api_key: OpenAlex API Key（可选，2026年2月后必需）
         """
-        super().__init__("openalex", history_dir)
+        super().__init__(
+            "openalex", history_dir, load_legacy_history=load_legacy_history
+        )
         self.journals = journals or []
         self.max_results = max_results
         self.email = email
         self.api_key = api_key
+        self.journal_catalog = journal_catalog or OPENALEX_JOURNAL_CATALOG
 
         self.session = requests.Session()
         self.session.headers.update(
@@ -194,7 +126,7 @@ class OpenAlexSource(BasePaperSource):
 
     def get_journal_info(self, journal_code: str) -> Optional[Dict]:
         """获取期刊信息"""
-        return JOURNAL_ISSN_MAP.get(journal_code.lower())
+        return self.journal_catalog.get(journal_code.lower())
 
     def fetch_papers(self, days: int, journals: List[str] = None, **kwargs) -> List[PaperMetadata]:
         """
@@ -226,7 +158,7 @@ class OpenAlexSource(BasePaperSource):
                     f"OpenAlex 期刊代码必须是非空字符串: {configured_code!r}"
                 )
             journal_code = configured_code.strip().lower()
-            if journal_code not in JOURNAL_ISSN_MAP:
+            if journal_code not in self.journal_catalog:
                 raise OpenAlexFetchError(f"OpenAlex 未知期刊代码: {configured_code}")
             if journal_code not in seen_journals:
                 normalized_journals.append(journal_code)

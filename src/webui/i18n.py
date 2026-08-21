@@ -155,6 +155,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "run_log_title": {"zh": "运行日志", "en": "Run Logs"},
     "daily_research_settings_title": {"zh": "每日研究设置", "en": "Daily Research Settings"},
+    "daily_max_papers_label": {
+        "zh": "本次最多处理论文数",
+        "en": "Maximum papers per run",
+    },
+    "daily_max_papers_help": {
+        "zh": "0 表示处理全部。正数只限制本次评分/分析数量；抓取仍完整执行，剩余论文保存在 SQLite 中等待下次处理。",
+        "en": "0 processes all papers. A positive value limits scoring/analysis only; scans remain complete and excess papers stay queued in SQLite.",
+    },
     "markdown_report_label": {"zh": "Markdown 报告", "en": "Markdown Report"},
     "no_logs_found": {"zh": "暂未找到日志文件。", "en": "No log files found."},
     "pid_killed": {"zh": "已向进程 {pid} 发送停止信号", "en": "Sent stop signal to process {pid}"},
@@ -260,9 +268,33 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "data_sources_title": {"zh": "数据源", "en": "Data Sources"},
     "data_sources_hint": {
-        "zh": "选择要监控的论文来源。",
-        "en": "Select which paper sources to monitor.",
+        "zh": "核心来源只保留 arXiv 和 PRL；其他来源通过安全的声明式 JSON 添加。",
+        "en": "Core sources are arXiv and PRL; add other sources with safe declarative JSON.",
     },
+    "extra_sources_title": {"zh": "额外来源", "en": "Extra Sources"},
+    "extra_sources_enabled": {"zh": "启用额外来源", "en": "Enable extra sources"},
+    "extra_sources_help": {
+        "zh": "关闭时保留文本内容但不抓取；开启后只接受内置类型，不执行 Python 代码。",
+        "en": "When off, definitions are retained but not fetched. Only built-in types are accepted; Python code is never executed.",
+    },
+    "extra_sources_json_label": {
+        "zh": "来源定义（JSON 数组）",
+        "en": "Source definitions (JSON array)",
+    },
+    "extra_sources_json_help": {
+        "zh": "OpenAlex 期刊格式：type=openalex_journal、唯一 code、显示名称、全名及 ISSN 数组；也支持 type=huggingface_papers。",
+        "en": "OpenAlex journals use type=openalex_journal, a unique code, names and an ISSN array; type=huggingface_papers is also supported.",
+    },
+    "extra_sources_templates_title": {
+        "zh": "可复制的内置来源模板",
+        "en": "Copyable built-in source templates",
+    },
+    "extra_sources_templates_help": {
+        "zh": "从下方数组复制需要的对象到上方输入框；只有输入框中的定义会在开关打开时启用。",
+        "en": "Copy only the desired objects into the field above. Definitions present there are enabled when the master switch is on.",
+    },
+    "extra_sources_valid": {"zh": "来源定义格式有效。", "en": "Source definitions are valid."},
+    "extra_sources_invalid": {"zh": "来源定义无效", "en": "Invalid source definitions"},
     "reports_by_source_toggle": {
         "zh": "按数据源分类整理报告",
         "en": "Organize reports by source",
@@ -575,6 +607,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "daily_persistence_hint": {
         "zh": "保存论文级评分与分析进度，用于断点续跑和失败恢复。",
         "en": "Save paper-level scoring and analysis progress for resume and recovery.",
+    },
+    "daily_persistence_required": {
+        "zh": "SQLite 状态库已作为每日研究的必备基础设施启用",
+        "en": "The SQLite state store is required for daily research",
     },
     "enable_daily_persistence": {
         "zh": "启用论文级持久化",
@@ -915,6 +951,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_health_outbox_attempts": {"zh": "最大尝试数", "en": "Max attempts"},
     "rm_health_yes": {"zh": "是", "en": "Yes"},
     "rm_health_no": {"zh": "否", "en": "No"},
+    "rm_advanced_diagnostics": {
+        "zh": "高级诊断：扫描覆盖与运行健康",
+        "en": "Advanced diagnostics: scan coverage and operational health",
+    },
     # ── proxy.py ──────────────────────────────────────────────────────
     "tab_proxy": {"zh": "网络代理", "en": "Network Proxy"},
     "proxy_title": {"zh": "网络代理设置", "en": "Network Proxy Settings"},
@@ -979,6 +1019,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "proxy_update_check_help": {
         "zh": "GitHub 版本更新检查（需访问 api.github.com）",
         "en": "GitHub version update check (requires access to api.github.com)",
+    },
+    "proxy_details_collapsed": {
+        "zh": "代理未启用；代理地址、不使用代理的地址和服务范围已折叠。",
+        "en": "Proxy is disabled; URL, no-proxy addresses, and service scope are collapsed.",
     },
     # ── data_management.py ───────────────────────────────────────────
     "tab_data_management": {"zh": "数据管理", "en": "Data Management"},

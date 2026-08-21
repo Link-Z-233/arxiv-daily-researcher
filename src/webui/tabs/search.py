@@ -1,29 +1,14 @@
 """Search & Data Sources tab for the Streamlit config panel."""
 
+import json
 import streamlit as st
 from webui.i18n import t
+from utils.source_registry import (
+    builtin_extra_source_definitions,
+    validate_source_definitions,
+)
 
-ALL_DATA_SOURCES = [
-    "arxiv",
-    "huggingface_papers",
-    "prl",
-    "pra",
-    "prb",
-    "prc",
-    "prd",
-    "pre",
-    "prx",
-    "prxq",
-    "rmp",
-    "nature",
-    "nature_physics",
-    "nature_communications",
-    "science",
-    "science_advances",
-    "npj_quantum_information",
-    "quantum",
-    "new_journal_of_physics",
-]
+CORE_DATA_SOURCES = ("arxiv", "prl")
 
 # Common ArXiv categories
 ARXIV_CATEGORIES = [
@@ -85,16 +70,53 @@ def render(_env_values: dict, config_values: dict):
     if not isinstance(current_sources, list):
         current_sources = []
 
-    # Create checkboxes in a grid
-    cols = st.columns(4)
     source_states = {}
-    for i, src in enumerate(ALL_DATA_SOURCES):
-        with cols[i % 4]:
-            source_states[src] = st.checkbox(
-                src.upper() if len(src) <= 4 else src.replace("_", " ").title(),
-                value=src in current_sources,
-                key=f"source_{src}",
-            )
+    col_arxiv, col_prl = st.columns(2)
+    with col_arxiv:
+        source_states["arxiv"] = st.checkbox(
+            "arXiv", value="arxiv" in current_sources, key="source_arxiv"
+        )
+    with col_prl:
+        source_states["prl"] = st.checkbox(
+            "PRL", value="prl" in current_sources, key="source_prl"
+        )
+
+    st.markdown(f"**{t('extra_sources_title')}**")
+    extra_cfg = flat.get("extra_source_definitions", [])
+    extra_enabled = st.toggle(
+        t("extra_sources_enabled"),
+        value=bool(flat.get("extra_sources_enabled", False)),
+        key="extra_sources_enabled",
+        help=t("extra_sources_help"),
+    )
+    default_json = json.dumps(
+        extra_cfg,
+        ensure_ascii=False,
+        indent=2,
+    )
+    extra_json = st.text_area(
+        t("extra_sources_json_label"),
+        value=default_json,
+        key="extra_source_definitions_json",
+        height=220,
+        disabled=not extra_enabled,
+        help=t("extra_sources_json_help"),
+    )
+    with st.expander(t("extra_sources_templates_title"), expanded=False):
+        st.caption(t("extra_sources_templates_help"))
+        st.code(
+            json.dumps(
+                builtin_extra_source_definitions(), ensure_ascii=False, indent=2
+            ),
+            language="json",
+        )
+    if extra_enabled:
+        try:
+            parsed_extra = validate_source_definitions(json.loads(extra_json or "[]"))
+            st.caption(t("extra_sources_valid"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            st.error(f"{t('extra_sources_invalid')}: {exc}")
+            parsed_extra = []
 
     st.toggle(
         t("reports_by_source_toggle"),
@@ -121,8 +143,9 @@ def render(_env_values: dict, config_values: dict):
         help=t("arxiv_announcement_lookback_grace_help"),
     )
 
-    st.info(t("huggingface_papers_source_notice"))
-    if source_states.get("huggingface_papers", False):
+    extra_codes = {item["code"] for item in parsed_extra} if extra_enabled else set()
+    if "huggingface_papers" in extra_codes:
+        st.info(t("huggingface_papers_source_notice"))
         hf_col1, hf_col2 = st.columns(2)
         with hf_col1:
             st.number_input(
@@ -189,16 +212,28 @@ def render(_env_values: dict, config_values: dict):
 def collect(_env_values: dict, _config_values: dict) -> dict:
     """Collect current values from session state. Returns config updates."""
     # Collect enabled sources
-    enabled = [src for src in ALL_DATA_SOURCES if st.session_state.get(f"source_{src}", False)]
+    enabled = [
+        src for src in CORE_DATA_SOURCES if st.session_state.get(f"source_{src}", False)
+    ]
     # Collect domains
     domains = list(st.session_state.get("arxiv_domains", ["quant-ph"]))
     custom = st.session_state.get("custom_domains", "")
     if custom:
         domains.extend(d.strip() for d in custom.split(",") if d.strip())
 
+    raw_extra = st.session_state.get("extra_source_definitions_json", "[]")
+    try:
+        extra_definitions = validate_source_definitions(json.loads(raw_extra or "[]"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"额外来源配置无效: {exc}") from exc
+
     return {
         "search_days": st.session_state.get("search_days", 7),
         "enabled_sources": enabled,
+        "extra_sources_enabled": bool(
+            st.session_state.get("extra_sources_enabled", False)
+        ),
+        "extra_source_definitions": extra_definitions,
         "reports_by_source": st.session_state.get("reports_by_source", True),
         "arxiv_fetch_timeout_seconds": st.session_state.get("arxiv_fetch_timeout_seconds", 180),
         "arxiv_announcement_lookback_grace_days": st.session_state.get(
