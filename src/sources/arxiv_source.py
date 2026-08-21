@@ -137,6 +137,7 @@ class ArxivSource(BasePaperSource):
         max_results: int = 100,
         proxy_dict: dict = None,
         announcement_lookback_grace_days: int = 2,
+        load_legacy_history: bool = True,
     ):
         """
         初始化 ArXiv 数据源。
@@ -147,7 +148,9 @@ class ArxivSource(BasePaperSource):
             proxy_dict: 代理配置字典，如 {"http": "...", "https": "..."}
             announcement_lookback_grace_days: 为公告/API 索引延迟额外回看的天数。
         """
-        super().__init__("arxiv", history_dir)
+        super().__init__(
+            "arxiv", history_dir, load_legacy_history=load_legacy_history
+        )
         self.max_results = max_results
         self.announcement_lookback_grace_days = max(
             0, int(announcement_lookback_grace_days)

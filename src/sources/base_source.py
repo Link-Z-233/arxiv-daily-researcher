@@ -165,6 +165,76 @@ class PaperMetadata:
             "updated_date": self.updated_date.isoformat() if self.updated_date else None,
         }
 
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "PaperMetadata":
+        """Restore one internally persisted metadata record fail-closed.
+
+        The daily queue is durable across process restarts, so records selected
+        on a later day must be reconstructed from SQLite rather than from the
+        current API response.  Reject malformed rows instead of silently
+        dropping them and advancing a successful scan watermark.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("paper metadata must be an object")
+
+        def required_text(name: str, *, allow_empty: bool = False) -> str:
+            value = payload.get(name)
+            if not isinstance(value, str) or (not allow_empty and not value.strip()):
+                raise ValueError(f"paper metadata field {name} must be a string")
+            return value if allow_empty else value.strip()
+
+        def optional_text(name: str) -> Optional[str]:
+            value = payload.get(name)
+            if value is None:
+                return None
+            if not isinstance(value, str):
+                raise ValueError(f"paper metadata field {name} must be a string or null")
+            return value
+
+        def string_list(name: str) -> List[str]:
+            value = payload.get(name, [])
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                raise ValueError(f"paper metadata field {name} must be a string list")
+            return list(value)
+
+        def parsed_datetime(name: str, *, required: bool = False) -> Optional[datetime]:
+            value = payload.get(name)
+            if value is None and not required:
+                return None
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"paper metadata field {name} must be an ISO timestamp")
+            try:
+                return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError(
+                    f"paper metadata field {name} must be an ISO timestamp"
+                ) from exc
+
+        version = payload.get("version")
+        if version is not None:
+            if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+                raise ValueError("paper metadata field version must be a positive integer or null")
+
+        return cls(
+            paper_id=required_text("paper_id"),
+            title=required_text("title"),
+            authors=string_list("authors"),
+            abstract=required_text("abstract", allow_empty=True),
+            published_date=parsed_datetime("published_date", required=True),
+            url=required_text("url"),
+            source=required_text("source"),
+            pdf_url=optional_text("pdf_url"),
+            doi=optional_text("doi"),
+            journal=optional_text("journal"),
+            categories=string_list("categories"),
+            semantic_scholar_tldr=optional_text("semantic_scholar_tldr"),
+            arxiv_id=optional_text("arxiv_id"),
+            arxiv_url=optional_text("arxiv_url"),
+            canonical_id=optional_text("canonical_id"),
+            version=version,
+            updated_date=parsed_datetime("updated_date"),
+        )
+
 
 class BasePaperSource(ABC):
     """
@@ -178,7 +248,13 @@ class BasePaperSource(ABC):
     - 提供数据源元信息
     """
 
-    def __init__(self, source_name: str, history_dir: Path):
+    def __init__(
+        self,
+        source_name: str,
+        history_dir: Path,
+        *,
+        load_legacy_history: bool = True,
+    ):
         """
         初始化数据源。
 
@@ -195,9 +271,10 @@ class BasePaperSource(ABC):
         # mode without the SQLite delivery ledger.  The SearchAgent disables
         # this filter for normal persistent daily runs, where an old history
         # entry must never hide a paper that was not durably delivered.
-        self.history_filtering_enabled = True
+        self.history_filtering_enabled = bool(load_legacy_history)
         self._history_load_error: Optional[str] = None
-        self._load_history()
+        if load_legacy_history:
+            self._load_history()
 
     @abstractmethod
     def fetch_papers(self, days: int, **kwargs) -> List[PaperMetadata]:

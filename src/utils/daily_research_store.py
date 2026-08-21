@@ -1,10 +1,4 @@
-"""
-SQLite persistence for daily research paper progress.
-
-The legacy JSON history should only mean "fully handled".  This store keeps
-paper-level intermediate state so interrupted runs can reuse successful LLM
-work without prematurely hiding papers from future runs.
-"""
+"""Authoritative SQLite history and resumable state for daily research."""
 
 import json
 import sqlite3
@@ -1439,6 +1433,190 @@ class DailyResearchStore:
         except (IndexError, KeyError, TypeError):
             return
         cls._restore_optional_enrichment(paper, persisted_paper_json)
+
+    def register_paper_candidates(
+        self,
+        run_id: str,
+        papers_by_source: Dict[str, list["PaperMetadata"]],
+    ) -> int:
+        """Durably register every newly discovered candidate before limiting work.
+
+        A per-run processing limit must never truncate an upstream scan.  All
+        exact source/version candidates enter ``daily_papers`` first; papers
+        not selected in this run remain pending and are eligible next time even
+        after the successful scan watermark advances.
+        """
+        registered = 0
+        seen_identities = set()
+        candidates = []
+        for source, papers in papers_by_source.items():
+            normalized_source = str(source or "").strip().lower()
+            if not normalized_source:
+                raise ValueError("candidate source must be a non-empty string")
+            for paper in papers:
+                if paper.source != normalized_source:
+                    raise ValueError(
+                        "candidate source mismatch: "
+                        f"group={normalized_source}, metadata={paper.source}"
+                    )
+                identity = (
+                    normalized_source,
+                    paper.canonical_id or paper.paper_id,
+                    paper.version or 0,
+                )
+                if identity in seen_identities:
+                    continue
+                seen_identities.add(identity)
+                candidates.append((normalized_source, paper))
+
+        with self._lock, self._connect() as conn:
+            run = conn.execute(
+                "SELECT status FROM daily_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise KeyError(f"daily run does not exist: {run_id}")
+            if run["status"] != "running":
+                raise RuntimeError(f"只能向 running 运行登记候选论文: {run_id}")
+
+            for normalized_source, paper in candidates:
+                candidate_seen_at = datetime.now().isoformat()
+                existing = conn.execute(
+                    "SELECT paper_json FROM daily_papers WHERE source = ? AND paper_id = ?",
+                    (normalized_source, paper.paper_id),
+                ).fetchone()
+                if existing is not None:
+                    self._restore_optional_enrichment(paper, existing["paper_json"])
+                conn.execute(
+                    """
+                    INSERT INTO daily_papers(
+                        source, paper_id, canonical_id, version,
+                        first_seen_at, last_seen_at, run_id, paper_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source, paper_id) DO UPDATE SET
+                        canonical_id = excluded.canonical_id,
+                        version = excluded.version,
+                        last_seen_at = excluded.last_seen_at,
+                        paper_json = excluded.paper_json
+                    """,
+                    (
+                        normalized_source,
+                        paper.paper_id,
+                        paper.canonical_id or paper.paper_id,
+                        paper.version or 0,
+                        candidate_seen_at,
+                        candidate_seen_at,
+                        run_id,
+                        json.dumps(paper.to_dict(), ensure_ascii=False),
+                    ),
+                )
+                registered += 1
+        return registered
+
+    @staticmethod
+    def _pending_row_sort_key(row: sqlite3.Row, paper: "PaperMetadata") -> tuple:
+        failed_or_retried = bool(row["retry_count"]) or any(
+            row[field] == "failed"
+            for field in ("score_status", "translation_status", "analysis_status")
+        )
+        first_seen = DailyResearchStore._parse_checkpoint_timestamp(row["first_seen_at"])
+        first_seen_key = first_seen.timestamp() if first_seen is not None else float("inf")
+        published = paper.published_date
+        if published.tzinfo is None:
+            published = published.astimezone()
+        published_key = published.timestamp()
+        return (
+            0 if failed_or_retried else 1,
+            first_seen_key,
+            published_key,
+            row["source"],
+            row["canonical_id"],
+            int(row["version"] or 0),
+            row["paper_id"],
+        )
+
+    def select_pending_papers(
+        self, enabled_sources: list[str], limit: int = 0
+    ) -> tuple[Dict[str, list["PaperMetadata"]], int]:
+        """Return the deterministic pending queue and its total size.
+
+        ``limit == 0`` means all pending papers.  Failed/retried records are
+        attempted first, followed by older queued records and publication time.
+        Only currently enabled report sources are selected; disabling a source
+        preserves its backlog without processing it unexpectedly.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("daily paper limit must be a non-negative integer")
+        sources = sorted(
+            {str(source).strip().lower() for source in enabled_sources if str(source).strip()}
+        )
+        if not sources:
+            return {}, 0
+        placeholders = ", ".join("?" for _ in sources)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT daily_papers.*
+                FROM daily_papers
+                WHERE daily_papers.source IN ("""
+                + placeholders
+                + """)
+                  AND daily_papers.completed_at IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM paper_deliveries
+                      WHERE paper_deliveries.source = daily_papers.source
+                        AND paper_deliveries.canonical_id = daily_papers.canonical_id
+                        AND paper_deliveries.version = daily_papers.version
+                  )
+                """,
+                sources,
+            ).fetchall()
+
+        pending = []
+        identities = set()
+        for row in rows:
+            try:
+                payload = json.loads(row["paper_json"])
+                from sources.base_source import PaperMetadata
+
+                paper = PaperMetadata.from_dict(payload)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    "SQLite 待处理论文元数据损坏，已停止运行以避免漏报: "
+                    f"{row['source']}:{row['paper_id']}"
+                ) from exc
+            expected_identity = (
+                row["source"],
+                row["canonical_id"],
+                int(row["version"] or 0),
+            )
+            actual_identity = (
+                paper.source,
+                paper.canonical_id or paper.paper_id,
+                paper.version or 0,
+            )
+            if paper.paper_id != row["paper_id"] or actual_identity != expected_identity:
+                raise RuntimeError(
+                    "SQLite 待处理论文身份不一致，已停止运行以避免错误交付: "
+                    f"{row['source']}:{row['paper_id']}"
+                )
+            if expected_identity in identities:
+                raise RuntimeError(
+                    "SQLite 待处理队列包含重复论文版本: "
+                    f"{row['source']}:{row['canonical_id']}v{row['version']}"
+                )
+            identities.add(expected_identity)
+            pending.append((row, paper))
+
+        pending.sort(key=lambda item: self._pending_row_sort_key(*item))
+        total_pending = len(pending)
+        if limit:
+            pending = pending[:limit]
+
+        selected: Dict[str, list["PaperMetadata"]] = {}
+        for row, paper in pending:
+            selected.setdefault(row["source"], []).append(paper)
+        return selected, total_pending
 
     def upsert_paper_seen(
         self,

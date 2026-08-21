@@ -33,6 +33,7 @@ from utils.deep_analysis_contract import (
     is_pdf_grounded_analysis,
 )
 from utils.safe_url import safe_http_url
+from utils.source_registry import source_display_names
 from .modules.base_module import FormatHelper
 from .modules.renderers import ModuleRendererFactory
 
@@ -91,7 +92,8 @@ class Reporter:
 
     def get_source_display_name(self, source: str) -> str:
         """获取数据源的显示名称"""
-        return SOURCE_DISPLAY_NAMES.get(source, source.upper())
+        configured = source_display_names(getattr(settings, "EXTRA_SOURCE_DEFINITIONS", []))
+        return configured.get(source, SOURCE_DISPLAY_NAMES.get(source, source.upper()))
 
     @staticmethod
     def _write_text_atomic(filepath: Path, content: str) -> Path:

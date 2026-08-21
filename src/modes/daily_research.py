@@ -484,7 +484,15 @@ def _add_paper_delivery_context(
 ):
     """Attach retry/revision metadata consumed by report renderers."""
     if existing_record is not None and existing_record["completed_at"] is None:
-        scored["is_retry"] = True
+        # Every fetched candidate is now registered before the per-run queue
+        # limit is applied.  A pristine pending row is therefore not itself a
+        # retry; only prior stage work/failure should receive that label.
+        was_attempted = bool(existing_record["retry_count"]) or any(
+            existing_record[field] != "pending"
+            for field in ("score_status", "translation_status", "analysis_status")
+        )
+        if was_attempted:
+            scored["is_retry"] = True
 
     previous_version = None
     previous_pushed_at = None
@@ -505,32 +513,6 @@ def _add_paper_delivery_context(
             "previous_version": previous_version,
             "previous_pushed_at": previous_pushed_at,
         }
-
-
-def _mark_completed_papers(
-    search_agent, store, run_id, scored_papers_by_source, analyses_by_source
-):
-    """Mark papers as processed only after all required work succeeds."""
-    for source, scored_papers in scored_papers_by_source.items():
-        analyzed_ids = {item["paper_id"] for item in analyses_by_source.get(source, [])}
-        for paper_info in scored_papers:
-            paper_id = paper_info["paper_id"]
-            paper_meta = paper_info.get("paper_metadata")
-            requires_analysis = (
-                settings.DAILY_ENABLE_DEEP_ANALYSIS
-                and paper_info["score_response"].is_qualified
-                and paper_meta
-                and paper_meta.has_pdf_access()
-            )
-            if requires_analysis and paper_id not in analyzed_ids:
-                logger.info(f"保留未完成深度分析的论文，等待下次恢复: {paper_id}")
-                continue
-
-            if store and not requires_analysis:
-                store.mark_analysis_not_required(run_id, source, paper_id)
-            search_agent.mark_as_processed(paper_id, source)
-            if store:
-                store.mark_completed(run_id, source, paper_id)
 
 
 def _delivered_papers_for_finalization(
@@ -629,24 +611,27 @@ class DailyResearchPipeline:
             if settings.TOKEN_TRACKING_ENABLED:
                 token_counter.reset()
 
-            if settings.DAILY_RESEARCH_PERSISTENCE_ENABLED:
-                store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
-                run_id = store.start_run(0)
-                logger.info(f"论文级持久化已启用: {settings.DAILY_RESEARCH_DB_PATH}")
+            # SQLite is the authoritative daily-research ledger. It stores
+            # exact versions, resumable stages, scan checkpoints and atomic
+            # delivery state; falling back to JSON would discard those
+            # guarantees on an upgraded installation.
+            store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
+            run_id = store.start_run(0)
+            logger.info(f"每日研究 SQLite 状态库已启用: {settings.DAILY_RESEARCH_DB_PATH}")
 
-                # WebDAV is non-critical post-report maintenance.  Retry old
-                # uploads before the long scan without letting a remote outage
-                # affect this run's paper identity or delivery state.
-                try:
-                    sync_summary = deliver_pending_after_report_syncs(store, logger)
-                    if sync_summary["claimed"]:
-                        logger.info(
-                            "已补发待处理 WebDAV 同步: 完成 %s，延后 %s",
-                            sync_summary["completed"],
-                            sync_summary["deferred"],
-                        )
-                except Exception as exc:
-                    logger.warning("待补发 WebDAV 同步检查失败，将继续生成日报: %s", exc)
+            # WebDAV is non-critical post-report maintenance. Retry old
+            # uploads before the long scan without letting a remote outage
+            # affect this run's paper identity or delivery state.
+            try:
+                sync_summary = deliver_pending_after_report_syncs(store, logger)
+                if sync_summary["claimed"]:
+                    logger.info(
+                        "已补发待处理 WebDAV 同步: 完成 %s，延后 %s",
+                        sync_summary["completed"],
+                        sync_summary["deferred"],
+                    )
+            except Exception as exc:
+                logger.warning("待补发 WebDAV 同步检查失败，将继续生成日报: %s", exc)
 
             # Notification retries are independent from the current paper scan.
             # Do this before processing so an old failed webhook is not delayed
@@ -736,10 +721,10 @@ class DailyResearchPipeline:
                 openalex_api_key=settings.OPENALEX_API_KEY,
                 enable_semantic_scholar=settings.ENABLE_SEMANTIC_SCHOLAR_TLDR,
                 semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
-                # The persistent exact-version delivery ledger is stronger
-                # than legacy JSON history.  Let it see every candidate so a
-                # stale historical marker cannot make unfinished work vanish.
-                use_legacy_history_filter=store is None,
+                extra_source_definitions=getattr(settings, "EXTRA_SOURCE_DEFINITIONS", []),
+                # SQLite is the sole daily-history authority. Legacy JSON files
+                # are neither read as a filter nor updated after delivery.
+                use_legacy_history_filter=False,
             )
 
             # Semantic Scholar is optional enrichment, but a synchronous
@@ -882,22 +867,27 @@ class DailyResearchPipeline:
                     store.fail_run(run_id, error_detail)
                 return fetch_fail_result
 
-            if store:
-                # SQLite is the authoritative delivery ledger.  The JSON history
-                # exists for compatibility and may fail to flush after a valid
-                # transaction; do not let that make an already delivered version
-                # appear as a fresh paper on the next run.
-                papers_by_source = _exclude_sqlite_delivered_papers(store, papers_by_source)
+            # SQLite is the only authoritative delivery ledger. Filter exact
+            # source/version deliveries before registering new queue entries.
+            papers_by_source = _exclude_sqlite_delivered_papers(store, papers_by_source)
 
             papers_by_source = _exclude_cross_source_arxiv_mirrors(
                 store, papers_by_source
             )
 
+            registered_candidate_count = store.register_paper_candidates(
+                run_id, papers_by_source
+            )
+            papers_by_source, pending_paper_count = store.select_pending_papers(
+                search_agent.get_enabled_sources(),
+                int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0)),
+            )
             total_papers_count = sum(len(papers) for papers in papers_by_source.values())
+            deferred_paper_count = pending_paper_count - total_papers_count
 
             if total_papers_count == 0:
-                logger.info("未找到新论文。")
-                print("\n未找到新论文，程序退出。")
+                logger.info("未找到新的或待恢复的论文。")
+                print("\n未找到新的或待恢复的论文，程序退出。")
                 no_papers_result = RunResult(
                     run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), success=True
                 )
@@ -918,7 +908,13 @@ class DailyResearchPipeline:
                 return no_papers_result
 
             logger.info(
-                f"成功抓取 {total_papers_count} 篇新论文（来自 {len(papers_by_source)} 个数据源）"
+                "完整扫描发现 %s 篇未交付候选；SQLite 当前待处理 %s 篇，"
+                "本次处理 %s 篇，留待后续 %s 篇（%s 个数据源）",
+                registered_candidate_count,
+                pending_paper_count,
+                total_papers_count,
+                deferred_paper_count,
+                len(papers_by_source),
             )
 
             if store and run_id:
@@ -1294,18 +1290,6 @@ class DailyResearchPipeline:
                     [maintenance_entry] if maintenance_entry is not None else [],
                 )
                 report_delivery_committed = True
-                try:
-                    search_agent.mark_many_as_processed(
-                        {
-                            source: [paper_info["paper_id"] for paper_info in scored_papers]
-                            for source, scored_papers in scored_papers_by_source.items()
-                        }
-                    )
-                except Exception as exc:
-                    # JSON history is a compatibility cache. SQLite already
-                    # committed the authoritative delivery state above, and is
-                    # checked on the next scan to prevent duplicate reports.
-                    logger.error("兼容历史文件同步失败，SQLite 仍会防止重复日报: %s", exc)
 
                 # Report delivery has already committed.  A WebDAV failure now
                 # only reschedules its own outbox row and can never make this
@@ -1320,12 +1304,6 @@ class DailyResearchPipeline:
                         )
                 except Exception as exc:
                     logger.error("报告后 WebDAV 同步调度异常，已保留待补发状态: %s", exc)
-            else:
-                _mark_completed_papers(
-                    search_agent, store, run_id, scored_papers_by_source, analyses_by_source
-                )
-                report_delivery_committed = True
-
             # ==================== 阶段7: 关键词趋势处理 ====================
             if settings.KEYWORD_TRACKER_ENABLED and settings.KEYWORD_NORMALIZATION_ENABLED:
                 logger.info(">>> 阶段7: 运行每日关键词标准化...")

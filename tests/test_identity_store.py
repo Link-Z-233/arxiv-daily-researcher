@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from sources.arxiv_source import ArxivSource  # noqa: E402
 from sources.base_source import HistoryLoadError  # noqa: E402
 from sources.base_source import PaperMetadata, split_arxiv_version  # noqa: E402
+from sources.search_agent import SearchAgent  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from report.daily.reporter import Reporter  # noqa: E402
 from agents.analysis_agent import WeightedScoreResponse  # noqa: E402
@@ -59,6 +60,77 @@ def _source_receipt(source: str, status: str = "succeeded") -> dict:
 
 
 class IdentityStoreTests(unittest.TestCase):
+    def test_pending_queue_limit_preserves_exact_arxiv_versions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(0)
+            v1 = _paper("2501.12345v1")
+            v2 = _paper("2501.12345v2")
+            v3 = _paper("2501.12345v3")
+
+            registered = store.register_paper_candidates(
+                run_id, {"arxiv": [v3, v1, v2]}
+            )
+            selected, total = store.select_pending_papers(["arxiv"], limit=2)
+
+            self.assertEqual(registered, 3)
+            self.assertEqual(total, 3)
+            self.assertEqual(
+                [paper.paper_id for paper in selected["arxiv"]],
+                ["2501.12345v3", "2501.12345v1"],
+            )
+            self.assertEqual(
+                [row["version"] for row in store.get_version_records("arxiv", "2501.12345")],
+                [1, 2, 3],
+            )
+
+    def test_candidate_batch_registration_is_atomic(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(0)
+            valid = _paper("2501.12345v1")
+            invalid = _paper("2501.12346v1")
+            invalid.source = "prl"
+
+            with self.assertRaisesRegex(ValueError, "source mismatch"):
+                store.register_paper_candidates(run_id, {"arxiv": [valid, invalid]})
+
+            self.assertIsNone(store.get_paper_record("arxiv", valid.paper_id))
+
+    def test_sqlite_daily_agent_does_not_read_legacy_json_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_dir = Path(temp_dir)
+            (history_dir / "arxiv_history.json").write_text("{broken", encoding="utf-8")
+
+            agent = SearchAgent(
+                history_dir,
+                enabled_sources=["arxiv"],
+                arxiv_domains=["quant-ph"],
+                enable_semantic_scholar=False,
+                use_legacy_history_filter=False,
+            )
+
+            source = agent.sources["arxiv"]
+            self.assertEqual(source.history, {})
+            self.assertIsNone(source._history_load_error)
+            self.assertFalse(source.history_filtering_enabled)
+
+    def test_pending_queue_survives_completed_scan_and_prioritizes_failures(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(0)
+            papers = [_paper(f"2501.1234{index}v1") for index in range(3)]
+            store.prepare_scan(run_id, 1, ["arxiv"])
+            store.record_scan_receipt(run_id, "arxiv", _source_receipt("arxiv"))
+            store.register_paper_candidates(run_id, {"arxiv": papers})
+            store.update_error(run_id, "arxiv", papers[2].paper_id, "temporary", stage="score")
+            store.complete_run(run_id)
+
+            selected, total = store.select_pending_papers(["arxiv"], limit=1)
+
+            self.assertEqual(total, 3)
+            self.assertEqual(selected["arxiv"][0].paper_id, papers[2].paper_id)
+
     def test_scan_receipts_are_run_scoped_durable_and_visible_in_recent_runs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "daily.db")
