@@ -47,7 +47,11 @@ def render(_env_values: dict, config_values: dict):
     if not db_path.exists():
         st.info(t("fav_mark_empty"))
         return
-    store = DailyResearchStore(db_path)
+    try:
+        store = DailyResearchStore(db_path)
+    except Exception as exc:
+        st.error(f"{t('fav_load_failed')}: {exc}")
+        return
 
     # ==================== 论文标注 ====================
     st.markdown(

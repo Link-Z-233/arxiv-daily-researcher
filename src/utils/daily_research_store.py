@@ -39,6 +39,22 @@ class DailyResearchStore:
         self._lock = threading.Lock()
         self._init_db()
 
+    @staticmethod
+    def _paper_identity_or_none():
+        """Migration-time identity helper; None in the thin WebUI image.
+
+        The Streamlit image deliberately ships no paper-source modules.  The
+        canonical-id backfill below then runs on the worker's next connect
+        instead — the schema columns are still added here, so nothing
+        diverges.
+        """
+        try:
+            from sources.base_source import paper_identity
+
+            return paper_identity
+        except ImportError:
+            return None
+
     def _connect(self):
         conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
@@ -303,7 +319,9 @@ class DailyResearchStore:
                 "ALTER TABLE daily_papers ADD COLUMN version INTEGER NOT NULL DEFAULT 0"
             )
 
-        from sources.base_source import paper_identity
+        paper_identity = DailyResearchStore._paper_identity_or_none()
+        if paper_identity is None:
+            return
 
         rows = conn.execute(
             "SELECT source, paper_id, canonical_id, version FROM daily_papers"
@@ -390,7 +408,9 @@ class DailyResearchStore:
             if name not in columns:
                 conn.execute(f"ALTER TABLE paper_deliveries ADD COLUMN {name} {definition}")
 
-        from sources.base_source import paper_identity
+        paper_identity = DailyResearchStore._paper_identity_or_none()
+        if paper_identity is None:
+            return
 
         rows = conn.execute(
             "SELECT delivery_id, source, paper_id, canonical_id, version FROM paper_deliveries"

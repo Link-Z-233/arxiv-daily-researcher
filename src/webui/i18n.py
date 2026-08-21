@@ -68,6 +68,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "暂无用量数据——完成一次每日研究或趋势分析后，这里会出现统计。",
         "en": "No usage yet — complete a daily or trend run and stats appear here.",
     },
+    "usage_load_failed": {
+        "zh": "用量数据读取失败",
+        "en": "Failed to load usage data",
+    },
     "usage_heatmap_title": {
         "zh": "每日用量热力图（近一年）",
         "en": "Daily usage heatmap (last year)",
@@ -116,6 +120,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Matched primary keywords (from liked paper titles)",
     },
     "fav_no_marks": {"zh": "还没有任何标记。", "en": "No marks yet."},
+    "fav_load_failed": {
+        "zh": "收藏数据读取失败",
+        "en": "Failed to load favorites data",
+    },
     "fav_no_keyword_hits": {
         "zh": "已喜欢的论文标题中没有命中主要关键词。",
         "en": "No primary keyword hits in liked paper titles.",

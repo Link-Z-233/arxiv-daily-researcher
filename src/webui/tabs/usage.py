@@ -146,8 +146,8 @@ def render(_env_values: dict, config_values: dict):
     try:
         store = DailyResearchStore(db_path)
         daily = _load_daily_totals(store)
-    except Exception:
-        st.info(t("usage_empty"))
+    except Exception as exc:
+        st.error(f"{t('usage_load_failed')}: {exc}")
         return
 
     if not daily:
