@@ -69,6 +69,19 @@ class _FakeStreamlit:
         self.calls.append(("button", args, kwargs))
         return False
 
+    def toggle(self, *args, **kwargs):
+        # 测试走静态渲染路径（不经过 fragment 装饰器）。
+        self.calls.append(("toggle", args, kwargs))
+        return False
+
+    class _SessionState(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+    @property
+    def session_state(self):
+        return self._SessionState()
+
     def dataframe(self, *args, **kwargs):
         self.calls.append(("dataframe", args, kwargs))
 

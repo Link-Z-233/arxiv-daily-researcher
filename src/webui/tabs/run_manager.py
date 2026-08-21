@@ -179,6 +179,69 @@ def _enqueue_worker_trigger(mode: str, **args) -> tuple[bool, str]:
         return False, str(e)
 
 
+def _latest_run_log() -> Optional[Path]:
+    """最新一次运行日志（手动/定时/趋势任一），用于运行中实时尾部。"""
+    groups = _scan_all_logs()
+    for key in ("manual", "daily", "trend"):
+        if groups.get(key):
+            return groups[key][0]
+    return None
+
+
+def _render_live_status_body() -> None:
+    """实时状态渲染体：运行锁 + 触发状态 + 活跃日志尾部。
+
+    作为普通函数被完整渲染调用一次，或被 fragment 以 5 秒周期调用。
+    """
+    active_locks = _get_all_running_locks()
+    is_running = bool(active_locks)
+
+    if is_running:
+        lock_info = ", ".join(
+            f"`{f.name}`" + (f" PID={pid}" if pid is not None else "")
+            for f, pid in active_locks
+        )
+        st.info(f"🟢 {t('rm_status_running')} — {lock_info}")
+        log = _latest_run_log()
+        if log is not None:
+            tail = _read_log_tail(log, max_lines=12)
+            with st.expander(
+                f"📜 {log.name} · {t('rm_live_tail_hint')}", expanded=True
+            ):
+                st.code(tail)
+        return
+
+    trigger_age = _trigger_age_seconds()
+    trigger_pending = trigger_age is not None and trigger_age <= 30
+    if trigger_pending:
+        st.caption(t("rm_trigger_pending_short"))
+        return
+
+    status = _latest_trigger_status()
+    if status and status.get("state") in {"failed", "rejected", "interrupted"}:
+        # The worker-owned status may contain an exception string.
+        # Keep that detail in the worker log: local WebUI feedback
+        # only needs the terminal state and a safe numeric exit code.
+        return_code = status.get("return_code")
+        suffix = (
+            f" (exit {return_code})"
+            if isinstance(return_code, int) and not isinstance(return_code, bool)
+            else ""
+        )
+        st.warning(f"最近一次 WebUI 请求 {status['state']}{suffix}；请查看运行日志。")
+    else:
+        _show_last_run_hint()
+
+
+if hasattr(st, "fragment"):
+    @st.fragment(run_every="5s")
+    def _live_status_fragment() -> None:
+        _render_live_status_body()
+else:  # Streamlit < 1.37：退化为静态渲染，功能不缺失。
+    def _live_status_fragment() -> None:
+        _render_live_status_body()
+
+
 def _render_run_control() -> None:
     trigger_age   = _trigger_age_seconds()
     trigger_stale   = trigger_age is not None and trigger_age > 30
@@ -208,29 +271,16 @@ def _render_run_control() -> None:
             type="primary", use_container_width=True, disabled=not can_run,
         )
     with col_status:
-        if is_running:
-            lock_info = ", ".join(
-                f"`{f.name}`" + (f" PID={pid}" if pid is not None else "")
-                for f, pid in active_locks
-            )
-            st.info(f"🟢 {t('rm_status_running')} — {lock_info}")
-        elif trigger_pending:
-            st.caption(t("rm_trigger_pending_short"))
+        auto_refresh = st.toggle(
+            t("rm_auto_refresh"),
+            value=st.session_state.get("rm_auto_refresh_on", True),
+            key="rm_auto_refresh_on",
+            help=t("rm_auto_refresh_help"),
+        )
+        if auto_refresh:
+            _live_status_fragment()
         else:
-            status = _latest_trigger_status()
-            if status and status.get("state") in {"failed", "rejected", "interrupted"}:
-                # The worker-owned status may contain an exception string.
-                # Keep that detail in the worker log: local WebUI feedback
-                # only needs the terminal state and a safe numeric exit code.
-                return_code = status.get("return_code")
-                suffix = (
-                    f" (exit {return_code})"
-                    if isinstance(return_code, int) and not isinstance(return_code, bool)
-                    else ""
-                )
-                st.warning(f"最近一次 WebUI 请求 {status['state']}{suffix}；请查看运行日志。")
-            else:
-                _show_last_run_hint()
+            _render_live_status_body()
 
     if run_clicked:
         if _IS_DOCKER_WEBUI:

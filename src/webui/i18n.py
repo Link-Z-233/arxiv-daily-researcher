@@ -58,6 +58,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tab_trend_runner": {"zh": "趋势分析", "en": "Trend Analysis"},
     "tab_usage": {"zh": "用量统计", "en": "Usage"},
     "nav_label": {"zh": "导航", "en": "Navigation"},
+    "rm_auto_refresh": {"zh": "自动刷新", "en": "Auto refresh"},
+    "rm_auto_refresh_help": {
+        "zh": "开启后运行状态与日志尾部每 5 秒自动刷新，无需手动刷新页面。",
+        "en": "When on, run status and the log tail refresh every 5 seconds.",
+    },
+    "rm_live_tail_hint": {
+        "zh": "尾部 12 行 · 每 5 秒自动刷新",
+        "en": "last 12 lines · auto-refreshes every 5s",
+    },
     # ── usage.py ────────────────────────────────────────────────────────
     "usage_title": {"zh": "LLM Token 用量", "en": "LLM Token Usage"},
     "usage_hint": {

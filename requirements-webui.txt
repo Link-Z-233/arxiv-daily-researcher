@@ -2,5 +2,5 @@
 # Streamlit itself brings the data/visualisation dependencies it needs.
 json5==0.13.0
 requests==2.32.5
-streamlit>=1.30.0
+streamlit>=1.37.0  # st.fragment(run_every=...) for live run status
 webdavclient3>=3.14.0
