@@ -167,7 +167,13 @@ with st.sidebar:
         st.session_state["lang"] = "en" if st.session_state["lang"] == "zh" else "zh"
         st.rerun()
 
-    st.caption("v3.2 | Powered by Streamlit")
+    version_file = _project_root / "VERSION"
+    app_version = (
+        version_file.read_text(encoding="utf-8").strip()
+        if version_file.exists()
+        else "unknown"
+    )
+    st.caption(f"v{app_version} | Powered by Streamlit")
 
 
 # ==================== Main Content ====================
