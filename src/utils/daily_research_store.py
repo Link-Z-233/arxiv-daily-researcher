@@ -212,6 +212,18 @@ class DailyResearchStore:
                 "CREATE INDEX IF NOT EXISTS idx_daily_scan_receipts_run "
                 "ON daily_scan_receipts(run_id, receipt_id)"
             )
+            # Small key/value scratch state for cross-run decisions such as
+            # "this remote version was already announced". Values are opaque
+            # strings owned by the caller; nothing here is ever deleted.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
 
     @staticmethod
     def _migrate_run_scan_state(conn):
@@ -701,6 +713,29 @@ class DailyResearchStore:
             receipt["recorded_at"] = row["recorded_at"]
             receipts.append(receipt)
         return receipts
+
+    def get_app_state(self, key: str) -> Optional[str]:
+        """Return a persisted scratch value, or None when the key is unset."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM app_state WHERE key = ?", (key,)
+            ).fetchone()
+        return row["value"] if row else None
+
+    def set_app_state(self, key: str, value: str) -> None:
+        """Persist a scratch value; existing values are overwritten, never dropped."""
+        now = datetime.now().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO app_state (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value, now),
+            )
 
     def get_recent_runs(self, limit: int = 20) -> list[Dict[str, Any]]:
         """Return recent run summaries plus receipts for local observability."""

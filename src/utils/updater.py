@@ -13,6 +13,7 @@ from pathlib import Path
 REPO_URL = "https://github.com/yzr278892/arxiv-daily-researcher"
 GITHUB_API_LATEST = "https://api.github.com/repos/yzr278892/arxiv-daily-researcher/releases/latest"
 VERSION_FILE = Path(__file__).resolve().parent.parent.parent / "VERSION"
+_NOTIFIED_STATE_KEY = "update_notified_version"
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "configs" / "templates"
 
 
@@ -223,6 +224,34 @@ def check_and_update(logger=None) -> bool:
         return False
 
 
+def _update_already_notified(remote_version: str) -> bool:
+    """该远端版本是否已经通过通知渠道提醒过。
+
+    状态不可用（库无法打开等）时返回 False，退回每次提醒的旧行为，
+    保证用户不会因为状态故障而永远收不到更新提醒。
+    """
+    try:
+        from config import settings
+        from utils.daily_research_store import DailyResearchStore
+
+        store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
+        return store.get_app_state(_NOTIFIED_STATE_KEY) == remote_version
+    except Exception:
+        return False
+
+
+def _mark_update_notified(remote_version: str) -> None:
+    """记录已提醒的远端版本；失败只影响去重，不影响主流程。"""
+    try:
+        from config import settings
+        from utils.daily_research_store import DailyResearchStore
+
+        store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
+        store.set_app_state(_NOTIFIED_STATE_KEY, remote_version)
+    except Exception:
+        pass
+
+
 def _check_version_via_api(logger=None) -> bool:
     """
     通过 GitHub API 检查最新版本，如果有新版本则通过通知系统发送更新提醒。
@@ -270,8 +299,14 @@ def _check_version_via_api(logger=None) -> bool:
             log(f"当前版本 {local_version} 不低于远程 {remote_version}，已是最新")
             return True
 
+        # 同一个远端版本只提醒一次；重复运行不反复打扰所有通知渠道。
+        if _update_already_notified(remote_version):
+            log(f"新版本 {remote_version} 此前已提醒过，跳过重复通知")
+            return True
+
         log(f"发现新版本: {remote_version}（当前: {local_version}）")
         _send_update_notification(local_version, remote_version, release_url, release_body, logger)
+        _mark_update_notified(remote_version)
         return True
 
     except Exception as e:
