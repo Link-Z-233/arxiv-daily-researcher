@@ -33,6 +33,7 @@ EXPORT_SCHEMA = "arxiv-daily-researcher-score-review-v1"
 LABEL_SCHEMA = "arxiv-daily-researcher-score-label-v1"
 EVALUATION_SCHEMA = "arxiv-daily-researcher-score-evaluation-v1"
 DIAGNOSTICS_SCHEMA = "arxiv-daily-researcher-diagnostics-v1"
+SCAN_OBSERVABILITY_SCHEMA = "arxiv-daily-researcher-scan-observability-v1"
 ALLOWED_LABELS = frozenset({"relevant", "not_relevant", "unsure"})
 _BINARY_LABELS = frozenset({"relevant", "not_relevant"})
 _PUBLIC_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
@@ -1223,6 +1224,270 @@ def _scan_summary(
         "runs_with_corrupt_scan_plan": plan_corrupt_runs,
         "sources": source_rows,
         "anomalies": sorted(anomalies, key=lambda item: (item["kind"], item["source"])),
+    }
+
+
+def _safe_observability_timestamp(value: Any) -> Optional[str]:
+    """Return a canonical timestamp or omit untrusted persisted text.
+
+    Run and receipt timestamps are normally generated locally, but this
+    diagnostic surface must still avoid reflecting arbitrary corrupt database
+    text into a browser.  A canonical ISO representation is both useful and
+    bounded; timezone-naive legacy values deliberately remain naive instead
+    of pretending their timezone is known.
+    """
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw or len(raw) > 80:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.isoformat(timespec="seconds")
+
+
+def _safe_run_status(value: Any) -> str:
+    if isinstance(value, str) and value in {"running", "completed", "failed"}:
+        return value
+    return "unknown"
+
+
+def _safe_receipt_status(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value in {"succeeded", "failed"}:
+        return value
+    return None
+
+
+def _safe_domain_receipt_summary(value: Any) -> Optional[dict[str, Any]]:
+    """Select bounded arXiv evidence while intentionally dropping errors/query text."""
+    if not isinstance(value, Mapping):
+        return None
+    queries = value.get("queries")
+    query_summaries: dict[str, dict[str, Optional[int]]] = {}
+    if isinstance(queries, Mapping):
+        # The only public arXiv query kinds currently owned by this project.
+        # Ignore arbitrary future/corrupt keys rather than reflecting them.
+        for query_kind in ("submitted", "updated"):
+            query = queries.get(query_kind)
+            if not isinstance(query, Mapping):
+                continue
+            query_summaries[query_kind] = {
+                field: _safe_nonnegative_int(query.get(field))
+                for field in (
+                    "api_entries_checked",
+                    "window_entries",
+                    "pages_observed",
+                    "attempts",
+                )
+            }
+
+    raw_status = value.get("status")
+    status = raw_status if raw_status in {"succeeded", "failed"} else "unknown"
+    return {
+        "domain": _safe_public_identifier(value.get("domain"), fallback="unknown_domain"),
+        "status": status,
+        "queries": query_summaries,
+        "new_candidates": _safe_nonnegative_int(value.get("new_candidates")),
+        "skipped_legacy_history": _safe_nonnegative_int(
+            value.get("skipped_legacy_history")
+        ),
+        "skipped_already_collected": _safe_nonnegative_int(
+            value.get("skipped_already_collected")),
+        "deduplicated_within_domain": _safe_nonnegative_int(
+            value.get("deduplicated_within_domain")),
+    }
+
+
+def _safe_receipt_observability_summary(row: sqlite3.Row) -> dict[str, Any]:
+    """Convert one receipt row to a browser-safe, non-secret summary.
+
+    The durable receipt intentionally preserves source-owned error details for
+    server-side recovery logs.  This function is a different contract: it
+    exports only status, counters, timestamps, and fixed arXiv query metrics.
+    """
+    source_key = _source_key(row["source"])
+    source = _safe_public_identifier(source_key, fallback="invalid_source")
+    db_status = _safe_receipt_status(row["status"])
+    try:
+        payload = json.loads(row["receipt_json"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = None
+
+    valid = (
+        isinstance(payload, Mapping)
+        and _source_key(payload.get("source")) == source_key
+        and payload.get("status") == db_status
+        and db_status is not None
+        and isinstance(payload.get("domain_receipts", []), list)
+    )
+    if not valid:
+        return {
+            "source": source,
+            "status": "corrupt",
+            "scanned_at": None,
+            "candidate_count": None,
+            "domain_receipts": [],
+            "window": {},
+        }
+
+    raw_candidate_count = payload.get("total_new_candidates")
+    candidate_count = _safe_nonnegative_int(raw_candidate_count)
+    if raw_candidate_count is not None and candidate_count is None:
+        return {
+            "source": source,
+            "status": "corrupt",
+            "scanned_at": None,
+            "candidate_count": None,
+            "domain_receipts": [],
+            "window": {},
+        }
+
+    domain_summaries = []
+    for domain_receipt in payload.get("domain_receipts", []):
+        summary = _safe_domain_receipt_summary(domain_receipt)
+        if summary is not None:
+            domain_summaries.append(summary)
+
+    # Only explicit numeric/time-window evidence is surfaced.  This keeps the
+    # generic source-summary receipts compact while retaining the arXiv proof
+    # that is useful when investigating a suspected coverage gap.
+    window = {
+        "requested_days": _safe_nonnegative_int(payload.get("requested_scan_days")),
+        "announcement_lookback_grace_days": _safe_nonnegative_int(
+            payload.get("announcement_lookback_grace_days")
+        ),
+        "effective_days": _safe_nonnegative_int(payload.get("effective_days")),
+        "start": _safe_observability_timestamp(payload.get("window_start")),
+        "end": _safe_observability_timestamp(payload.get("window_end")),
+    }
+    return {
+        "source": source,
+        "status": db_status,
+        "scanned_at": _safe_observability_timestamp(payload.get("scanned_at")),
+        # A failed source may have fetched a partial list before it failed.
+        # Do not present that number as a trustworthy coverage count.
+        "candidate_count": candidate_count if db_status == "succeeded" else None,
+        "domain_receipts": domain_summaries,
+        "window": window,
+    }
+
+
+def build_recent_scan_receipt_summaries(
+    db_path: Path,
+    *,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Read recent scan evidence without changing the production SQLite ledger.
+
+    This is deliberately a narrower public contract than
+    :class:`DailyResearchStore`: it opens SQLite with ``mode=ro``, does not run
+    schema migrations, and never returns raw errors, source query text, URLs,
+    report paths, paper content, notification payloads, or credentials.  It
+    is intended for the local WebUI and can also be used by tests/diagnostic
+    tooling that need per-run evidence rather than only aggregates.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
+        raise ScoringEvaluationError("scan receipt limit 必须是 1 到 200 的整数")
+
+    conn = _open_readonly_database(db_path)
+    try:
+        tables = _database_table_columns(conn)
+        run_columns = _require_database_columns(
+            tables, "daily_runs", {"run_id", "started_at", "status"}
+        )
+        run_query = ", ".join(
+            [
+                "run_id",
+                "started_at",
+                "status",
+                _column_or_null(run_columns, "scan_started_at"),
+                _column_or_null(run_columns, "scan_days"),
+                _column_or_null(run_columns, "scanned_sources_json"),
+            ]
+        )
+        try:
+            run_rows = conn.execute(
+                f"SELECT {run_query} FROM daily_runs "
+                "ORDER BY started_at DESC, run_id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            raise ScoringEvaluationError(f"无法读取日报运行记录: {exc}") from exc
+
+        receipt_columns = tables.get("daily_scan_receipts")
+        receipt_table_available = receipt_columns is not None and {
+            "run_id",
+            "source",
+            "status",
+            "receipt_json",
+        }.issubset(receipt_columns)
+        receipt_rows: list[sqlite3.Row] = []
+        if receipt_table_available and run_rows:
+            run_ids = [str(row["run_id"]) for row in run_rows]
+            placeholders = ", ".join("?" for _ in run_ids)
+            try:
+                receipt_rows = conn.execute(
+                    "SELECT run_id, source, status, receipt_json FROM daily_scan_receipts "
+                    f"WHERE run_id IN ({placeholders}) ORDER BY source ASC",
+                    run_ids,
+                ).fetchall()
+            except sqlite3.Error as exc:
+                raise ScoringEvaluationError(f"无法读取扫描收据: {exc}") from exc
+    finally:
+        conn.close()
+
+    # Keep raw normalized source keys only inside this function so a planned
+    # source without a durable receipt can be represented explicitly in the
+    # returned safe view.  The final public payload never exposes the raw DB
+    # value; it uses _safe_public_identifier below.
+    receipts_by_run: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in receipt_rows:
+        run_receipts = receipts_by_run.setdefault(str(row["run_id"]), {})
+        run_receipts[_source_key(row["source"])] = _safe_receipt_observability_summary(row)
+
+    runs = []
+    for row in run_rows:
+        planned_sources, valid_plan = _parse_scan_plan(row["scanned_sources_json"])
+        if valid_plan:
+            plan_state = "available"
+        elif row["scanned_sources_json"] is None and row["scan_days"] is None:
+            plan_state = "not_recorded"
+        else:
+            plan_state = "corrupt"
+        receipt_map = dict(receipts_by_run.get(str(row["run_id"]), {}))
+        if valid_plan:
+            for source in planned_sources:
+                receipt_map.setdefault(
+                    source,
+                    {
+                        "source": _safe_public_identifier(source, fallback="invalid_source"),
+                        "status": "missing",
+                        "scanned_at": None,
+                        "candidate_count": None,
+                        "domain_receipts": [],
+                        "window": {},
+                    },
+                )
+        receipts = [receipt_map[key] for key in sorted(receipt_map)]
+        runs.append(
+            {
+                "started_at": _safe_observability_timestamp(row["started_at"]),
+                "scan_started_at": _safe_observability_timestamp(row["scan_started_at"]),
+                "status": _safe_run_status(row["status"]),
+                "scan_days": _safe_nonnegative_int(row["scan_days"]),
+                "scan_plan_state": plan_state,
+                "planned_source_count": len(planned_sources) if valid_plan else None,
+                "receipts": receipts,
+            }
+        )
+
+    return {
+        "schema": SCAN_OBSERVABILITY_SCHEMA,
+        "read_only": True,
+        "receipt_table_available": receipt_table_available,
+        "runs": runs,
     }
 
 

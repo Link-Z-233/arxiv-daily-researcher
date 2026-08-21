@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import datetime
-import json
 import os
 import re
 import subprocess
@@ -22,7 +21,11 @@ from typing import Optional
 import streamlit as st
 
 from utils.run_lock import is_lock_held
-from utils.daily_research_store import DailyResearchStore
+from utils.scoring_evaluation import (
+    ScoringEvaluationError,
+    build_operational_diagnostics,
+    build_recent_scan_receipt_summaries,
+)
 from utils.webui_trigger import enqueue_trigger, trigger_directory
 from webui.i18n import t
 
@@ -122,8 +125,10 @@ def _read_log_tail(log_path: Path, max_lines: int = 300) -> str:
                 f"... (省略前 {len(lines) - max_lines} 行，仅显示最后 {max_lines} 行) ..."
             ] + lines[-max_lines:]
         return "\n".join(lines)
-    except Exception as e:
-        return f"读取日志失败: {e}"
+    except Exception:
+        # A filesystem/decoder exception can reveal host paths.  The selected
+        # log remains local, but the UI only needs a generic read failure.
+        return "读取日志失败"
 
 
 def _get_all_running_locks() -> list[tuple[Path, Optional[int]]]:
@@ -214,19 +219,27 @@ def _render_run_control() -> None:
         else:
             status = _latest_trigger_status()
             if status and status.get("state") in {"failed", "rejected", "interrupted"}:
-                detail = status.get("error") or status.get("return_code") or status["state"]
-                st.warning(f"最近一次 WebUI 请求 {status['state']}: {detail}")
+                # The worker-owned status may contain an exception string.
+                # Keep that detail in the worker log: local WebUI feedback
+                # only needs the terminal state and a safe numeric exit code.
+                return_code = status.get("return_code")
+                suffix = (
+                    f" (exit {return_code})"
+                    if isinstance(return_code, int) and not isinstance(return_code, bool)
+                    else ""
+                )
+                st.warning(f"最近一次 WebUI 请求 {status['state']}{suffix}；请查看运行日志。")
             else:
                 _show_last_run_hint()
 
     if run_clicked:
         if _IS_DOCKER_WEBUI:
-            ok, err = _enqueue_worker_trigger("daily_research")
+            ok, _ = _enqueue_worker_trigger("daily_research")
             if ok:
                 st.toast(t("rm_trigger_sent_short"), icon="✅")
                 st.rerun()
             else:
-                st.error(f"{t('rm_trigger_failed')}: {err}")
+                st.error(t("rm_trigger_failed"))
         else:
             _LOCK_DIR.mkdir(parents=True, exist_ok=True)
             log_file = _LOGS_DIR / f"manual_{datetime.datetime.now():%Y%m%d_%H%M%S}.log"
@@ -240,8 +253,8 @@ def _render_run_control() -> None:
                 st.toast(f"✅ {t('process_started')} (PID={proc.pid})", icon="✅")
                 time.sleep(0.5)
                 st.rerun()
-            except Exception as e:
-                st.error(f"启动失败: {e}")
+            except Exception:
+                st.error(t("rm_launch_failed"))
 
 def _show_last_run_hint() -> None:
     log_groups  = _scan_all_logs()
@@ -259,9 +272,15 @@ def _show_last_run_hint() -> None:
 
 
 def _format_scan_time(value: object) -> str:
-    """Render stored ISO timestamps compactly without assuming timezone shape."""
-    text = str(value or "").strip()
-    return text.replace("T", " ")[:19] if text else "—"
+    """Render the already-sanitized timestamp returned by read-only diagnostics."""
+    if not isinstance(value, str):
+        return "—"
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00")).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    except ValueError:
+        return "—"
 
 
 def _daily_db_path_from_config(config_values: dict) -> Path:
@@ -286,22 +305,59 @@ def _daily_db_path_from_config(config_values: dict) -> Path:
         return _DEFAULT_DAILY_DB_PATH
 
 
+def _display_nonnegative_count(value: object) -> str:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return str(value)
+    return "—"
+
+
 def _receipt_query_summary(query: object) -> str:
     if not isinstance(query, dict):
         return "—"
-    checked = query.get("api_entries_checked", 0)
-    window_entries = query.get("window_entries", 0)
-    pages = query.get("pages_observed", 0)
-    attempts = query.get("attempts", 0)
+    checked = _display_nonnegative_count(query.get("api_entries_checked"))
+    window_entries = _display_nonnegative_count(query.get("window_entries"))
+    pages = _display_nonnegative_count(query.get("pages_observed"))
+    attempts = _display_nonnegative_count(query.get("attempts"))
     return f"checked {checked} · in window {window_entries} · pages {pages} · attempts {attempts}"
 
 
-def _render_scan_receipts(config_values: dict) -> None:
-    """Show durable arXiv scan evidence, not an inferred report count.
+def _receipt_window_summary(receipt: dict, fallback_days: object) -> str:
+    """Render bounded arXiv window evidence without reflecting raw receipt text."""
+    window = receipt.get("window")
+    if not isinstance(window, dict):
+        window = {}
+    requested_days = window.get("requested_days")
+    if not isinstance(requested_days, int) or isinstance(requested_days, bool):
+        requested_days = fallback_days
+    grace_days = window.get("announcement_lookback_grace_days")
+    effective_days = window.get("effective_days")
+    requested = _display_nonnegative_count(requested_days)
+    grace = _display_nonnegative_count(grace_days)
+    effective = _display_nonnegative_count(effective_days)
+    if requested == "—":
+        return "—"
+    if grace == "—":
+        grace = "0"
+    if effective == "—":
+        effective = requested
+    return f"{requested} + {grace} = {effective} {t('rm_scan_receipt_days')}"
 
-    This remains local-only UI observability.  An unavailable/corrupt database
-    is stated plainly and never changes scheduler, history, or delivery state.
-    """
+
+def _run_receipt_counts(receipts: list[dict]) -> tuple[int, int, int]:
+    succeeded = sum(1 for receipt in receipts if receipt.get("status") == "succeeded")
+    failed = sum(1 for receipt in receipts if receipt.get("status") != "succeeded")
+    candidates = sum(
+        value
+        for receipt in receipts
+        if isinstance((value := receipt.get("candidate_count")), int)
+        and not isinstance(value, bool)
+        and value >= 0
+    )
+    return succeeded, failed, candidates
+
+
+def _render_scan_receipts(config_values: dict) -> None:
+    """Show all source scan evidence through a read-only, non-secret contract."""
     st.markdown(
         f'<p class="section-title">🔎 {t("rm_scan_receipts_title")}</p>',
         unsafe_allow_html=True,
@@ -314,86 +370,258 @@ def _render_scan_receipts(config_values: dict) -> None:
         return
 
     try:
-        runs = DailyResearchStore(database_path).get_recent_runs(limit=10)
-    except Exception as exc:
-        st.warning(f"{t('rm_scan_receipts_load_error')}: {exc}")
+        snapshot = build_recent_scan_receipt_summaries(database_path, limit=10)
+    except ScoringEvaluationError:
+        # Database/query exception text may contain a filesystem path or a
+        # driver error.  Keep it in server logs instead of reflecting it into
+        # a browser; the diagnostic contract itself contains no raw errors.
+        st.warning(t("rm_scan_receipts_load_error"))
         return
 
-    arxiv_runs = [
-        run for run in runs if any(receipt.get("source") == "arxiv" for receipt in run["receipts"])
-    ]
-    if not arxiv_runs:
+    if not snapshot.get("receipt_table_available"):
+        st.info(t("rm_scan_receipts_legacy"))
+        return
+    runs = [run for run in snapshot.get("runs", []) if run.get("receipts")]
+    if not runs:
         st.info(t("rm_scan_receipts_empty"))
         return
 
-    for index, run in enumerate(arxiv_runs):
-        arxiv_receipt = next(
-            receipt for receipt in run["receipts"] if receipt.get("source") == "arxiv"
-        )
-        receipt_status = arxiv_receipt.get("status", "unknown")
+    for index, run in enumerate(runs):
+        receipts = [receipt for receipt in run.get("receipts", []) if isinstance(receipt, dict)]
+        succeeded, failed, candidates = _run_receipt_counts(receipts)
+        planned_source_count = run.get("planned_source_count")
+        planned_text = _display_nonnegative_count(planned_source_count)
         label = (
             f"{_format_scan_time(run.get('scan_started_at') or run.get('started_at'))} · "
             f"{t('rm_scan_receipt_run')}: {run.get('status', 'unknown')} · "
-            f"ArXiv: {receipt_status}"
+            f"{t('rm_scan_receipt_sources')}: {succeeded}/{len(receipts)}"
         )
         with st.expander(label, expanded=index == 0):
-            requested_days = arxiv_receipt.get("requested_scan_days", run.get("scan_days"))
-            grace_days = arxiv_receipt.get("announcement_lookback_grace_days", 0)
-            effective_days = arxiv_receipt.get("effective_days", requested_days)
-            domains = arxiv_receipt.get("domains", [])
-            col1, col2, col3 = st.columns(3)
-            col1.metric(t("rm_scan_receipt_window"), f"{requested_days} + {grace_days} = {effective_days} {t('rm_scan_receipt_days')}")
-            col2.metric(t("rm_scan_receipt_candidates"), arxiv_receipt.get("total_new_candidates", 0))
-            col3.metric(t("rm_scan_receipt_domains"), len(domains) if isinstance(domains, list) else 0)
-            st.caption(
-                f"{t('rm_scan_receipt_window_range')}: "
-                f"{_format_scan_time(arxiv_receipt.get('window_start'))} → "
-                f"{_format_scan_time(arxiv_receipt.get('window_end'))}"
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric(
+                t("rm_scan_receipt_window"),
+                _display_nonnegative_count(run.get("scan_days")),
             )
-            if run.get("error"):
-                st.error(f"{t('rm_scan_receipt_run_error')}: {run['error']}")
+            col2.metric(t("rm_scan_receipt_candidates"), candidates)
+            col3.metric(t("rm_scan_receipt_sources"), f"{succeeded}/{len(receipts)}")
+            col4.metric(t("rm_scan_receipt_plan"), planned_text)
+            if failed:
+                st.warning(t("rm_scan_receipt_failed_sources").format(n=failed))
 
-            domain_rows = []
-            for domain in arxiv_receipt.get("domain_receipts", []):
-                if not isinstance(domain, dict):
+            source_rows = [
+                {
+                    t("rm_scan_receipt_source"): receipt.get("source", "unknown"),
+                    t("rm_scan_receipt_status"): receipt.get("status", "unknown"),
+                    t("rm_scan_receipt_candidates"): _display_nonnegative_count(
+                        receipt.get("candidate_count")
+                    ),
+                    t("rm_scan_receipt_scanned_at"): _format_scan_time(
+                        receipt.get("scanned_at")
+                    ),
+                    t("rm_scan_receipt_detail"): (
+                        t("rm_scan_receipt_domain_detail")
+                        if receipt.get("domain_receipts")
+                        else t("rm_scan_receipt_source_detail")
+                    ),
+                }
+                for receipt in receipts
+            ]
+            st.dataframe(source_rows, hide_index=True, use_container_width=True)
+
+            for receipt in receipts:
+                domain_receipts = receipt.get("domain_receipts")
+                if not isinstance(domain_receipts, list) or not domain_receipts:
                     continue
-                queries = domain.get("queries", {})
-                domain_rows.append(
-                    {
-                        t("rm_scan_receipt_domain"): domain.get("domain", "—"),
-                        t("rm_scan_receipt_status"): domain.get("status", "unknown"),
-                        t("rm_scan_receipt_submitted"): _receipt_query_summary(
-                            queries.get("submitted") if isinstance(queries, dict) else None
-                        ),
-                        t("rm_scan_receipt_updated"): _receipt_query_summary(
-                            queries.get("updated") if isinstance(queries, dict) else None
-                        ),
-                        t("rm_scan_receipt_new"): domain.get("new_candidates", 0),
-                        t("rm_scan_receipt_history_skip"): domain.get(
-                            "skipped_legacy_history", 0
-                        ),
-                        t("rm_scan_receipt_dedup"): (
-                            int(domain.get("deduplicated_within_domain", 0))
-                            + int(domain.get("skipped_already_collected", 0))
-                        ),
-                    }
+                st.caption(
+                    f"{receipt.get('source', 'arxiv')} · "
+                    f"{t('rm_scan_receipt_window')}: "
+                    f"{_receipt_window_summary(receipt, run.get('scan_days'))}"
                 )
-                if domain.get("error"):
-                    st.warning(
-                        f"{domain.get('domain', '—')}: {domain['error']}"
+                window = receipt.get("window")
+                if isinstance(window, dict) and (window.get("start") or window.get("end")):
+                    st.caption(
+                        f"{t('rm_scan_receipt_window_range')}: "
+                        f"{_format_scan_time(window.get('start'))} → "
+                        f"{_format_scan_time(window.get('end'))}"
                     )
-            if domain_rows:
-                st.dataframe(domain_rows, hide_index=True, use_container_width=True)
-            else:
-                st.caption(t("rm_scan_receipts_no_domain_detail"))
+                domain_rows = []
+                for domain in domain_receipts:
+                    if not isinstance(domain, dict):
+                        continue
+                    queries = domain.get("queries", {})
+                    domain_rows.append(
+                        {
+                            t("rm_scan_receipt_domain"): domain.get("domain", "—"),
+                            t("rm_scan_receipt_status"): domain.get("status", "unknown"),
+                            t("rm_scan_receipt_submitted"): _receipt_query_summary(
+                                queries.get("submitted") if isinstance(queries, dict) else None
+                            ),
+                            t("rm_scan_receipt_updated"): _receipt_query_summary(
+                                queries.get("updated") if isinstance(queries, dict) else None
+                            ),
+                            t("rm_scan_receipt_new"): _display_nonnegative_count(
+                                domain.get("new_candidates")
+                            ),
+                            t("rm_scan_receipt_history_skip"): _display_nonnegative_count(
+                                domain.get("skipped_legacy_history")
+                            ),
+                            t("rm_scan_receipt_dedup"): _display_nonnegative_count(
+                                sum(
+                                    value
+                                    for value in (
+                                        domain.get("deduplicated_within_domain"),
+                                        domain.get("skipped_already_collected"),
+                                    )
+                                    if isinstance(value, int)
+                                    and not isinstance(value, bool)
+                                    and value >= 0
+                                )
+                            ),
+                        }
+                    )
+                if domain_rows:
+                    st.dataframe(domain_rows, hide_index=True, use_container_width=True)
 
-            # Raw receipt is intentionally opt-in, and contains only source
-            # query counters/configured category names (never credentials).
-            with st.expander(t("rm_scan_receipt_raw"), expanded=False):
-                st.code(
-                    json.dumps(arxiv_receipt, ensure_ascii=False, indent=2, sort_keys=True),
-                    language="json",
-                )
+
+def _format_percentage(value: object) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1:
+        return f"{value:.1%}"
+    return "—"
+
+
+def _diagnostic_count(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return 0
+
+
+def _render_operational_health(config_values: dict) -> None:
+    """Render aggregate score/delivery health from the read-only diagnostics API."""
+    st.markdown(
+        f'<p class="section-title">🩺 {t("rm_health_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption(t("rm_health_hint"))
+
+    database_path = _daily_db_path_from_config(config_values)
+    if not database_path.is_file():
+        st.info(t("rm_health_empty"))
+        return
+    try:
+        diagnostics = build_operational_diagnostics(
+            database_path, recent_runs=10, baseline_runs=20
+        )
+    except ScoringEvaluationError:
+        st.warning(t("rm_health_load_error"))
+        return
+
+    recent = diagnostics.get("windows", {}).get("recent", {})
+    runs = recent.get("runs", {}) if isinstance(recent, dict) else {}
+    papers = recent.get("papers", {}) if isinstance(recent, dict) else {}
+    scoring = papers.get("scoring", {}) if isinstance(papers, dict) else {}
+    run_states = runs.get("status_counts", {}) if isinstance(runs, dict) else {}
+    notifications = diagnostics.get("outbox", {}).get("notifications", {})
+    available = _diagnostic_count(runs.get("available_run_count"))
+    requested = _diagnostic_count(runs.get("requested_run_count"))
+    completed = _diagnostic_count(run_states.get("completed")) if isinstance(run_states, dict) else 0
+    failed = _diagnostic_count(run_states.get("failed")) if isinstance(run_states, dict) else 0
+    open_notifications = _diagnostic_count(
+        notifications.get("open_rows") if isinstance(notifications, dict) else None
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(t("rm_health_recent_runs"), f"{available}/{requested}")
+    col2.metric(t("rm_health_run_states"), f"{completed}/{failed}")
+    col3.metric(
+        t("rm_health_qualification_rate"),
+        _format_percentage(scoring.get("qualification_rate") if isinstance(scoring, dict) else None),
+    )
+    col4.metric(t("rm_health_notification_backlog"), open_notifications)
+
+    scans = recent.get("scans", {}) if isinstance(recent, dict) else {}
+    source_rows = scans.get("sources", []) if isinstance(scans, dict) else []
+    if source_rows:
+        st.caption(t("rm_health_source_evidence"))
+        st.dataframe(
+            [
+                {
+                    t("rm_scan_receipt_source"): row.get("source", "unknown"),
+                    t("rm_health_source_success"): _diagnostic_count(
+                        row.get("succeeded_receipts")
+                    ),
+                    t("rm_health_source_failed"): _diagnostic_count(row.get("failed_receipts")),
+                    t("rm_health_source_missing"): _diagnostic_count(row.get("missing_receipts")),
+                    t("rm_health_source_candidates"): _diagnostic_count(row.get("candidate_total")),
+                    t("rm_health_source_retries"): _diagnostic_count(row.get("retried_queries")),
+                }
+                for row in source_rows
+                if isinstance(row, dict)
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+    anomalies = scans.get("anomalies", []) if isinstance(scans, dict) else []
+    if anomalies:
+        st.warning(t("rm_health_anomaly_hint"))
+        st.dataframe(
+            [
+                {
+                    t("rm_health_anomaly_kind"): item.get("kind", "unknown"),
+                    t("rm_scan_receipt_source"): item.get("source", "—"),
+                    t("rm_health_anomaly_count"): _diagnostic_count(item.get("count")),
+                }
+                for item in anomalies
+                if isinstance(item, dict)
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+    stage_states = papers.get("stage_status_counts", {}) if isinstance(papers, dict) else {}
+    if stage_states:
+        stage_rows = []
+        for stage in ("score", "translation", "analysis"):
+            states = stage_states.get(stage, {}) if isinstance(stage_states, dict) else {}
+            if not isinstance(states, dict):
+                continue
+            stage_rows.append(
+                {
+                    t("rm_health_stage"): stage,
+                    t("rm_health_stage_succeeded"): _diagnostic_count(states.get("succeeded")),
+                    t("rm_health_stage_failed"): _diagnostic_count(states.get("failed")),
+                    t("rm_health_stage_pending"): _diagnostic_count(states.get("pending")),
+                }
+            )
+        if stage_rows:
+            st.caption(t("rm_health_stage_evidence"))
+            st.dataframe(stage_rows, hide_index=True, use_container_width=True)
+
+    outboxes = diagnostics.get("outbox", {})
+    outbox_rows = []
+    if isinstance(outboxes, dict):
+        for name in ("notifications", "maintenance"):
+            summary = outboxes.get(name)
+            if not isinstance(summary, dict):
+                continue
+            outbox_rows.append(
+                {
+                    t("rm_health_outbox"): name,
+                    t("rm_health_outbox_available"): (
+                        t("rm_health_yes") if summary.get("available") else t("rm_health_no")
+                    ),
+                    t("rm_health_outbox_open"): _diagnostic_count(summary.get("open_rows")),
+                    t("rm_health_outbox_retrying"): _diagnostic_count(
+                        summary.get("retrying_rows")
+                    ),
+                    t("rm_health_outbox_attempts"): _diagnostic_count(
+                        summary.get("max_attempts")
+                    ),
+                }
+            )
+    if outbox_rows:
+        st.caption(t("rm_health_outbox_evidence"))
+        st.dataframe(outbox_rows, hide_index=True, use_container_width=True)
 
 
 # ─── 状态面板 ────────────────────────────────────────────────────────────────
@@ -581,6 +809,10 @@ def render(_env_values: dict, config_values: dict) -> None:
     st.divider()
 
     _render_scan_receipts(config_values)
+
+    st.divider()
+
+    _render_operational_health(config_values)
 
     st.divider()
 
