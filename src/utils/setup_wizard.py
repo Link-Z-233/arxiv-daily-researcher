@@ -9,6 +9,7 @@ with a step-by-step terminal wizard.
 """
 
 import sys
+import json
 from pathlib import Path
 
 # Add src to path: src/utils/ -> src/ (which contains utils/)
@@ -38,6 +39,7 @@ from utils.config_io import (
     flatten_config_dict,
     validate_llm_connection,
 )
+from utils.source_registry import validate_source_definitions
 
 console = Console()
 
@@ -327,6 +329,36 @@ def section_data_sources(existing_config: dict) -> dict:
 
     result = {"enabled_sources": enabled}
 
+    extra_enabled = questionary.confirm(
+        "Enable declarative extra sources?",
+        default=bool(flat.get("extra_sources_enabled", False)),
+        style=WIZARD_STYLE,
+    ).ask()
+    if extra_enabled is None:
+        raise KeyboardInterrupt
+    result["extra_sources_enabled"] = extra_enabled
+    if extra_enabled:
+        existing_definitions = json.dumps(
+            flat.get("extra_source_definitions", []), ensure_ascii=False
+        )
+        raw_definitions = questionary.text(
+            "Extra source JSON array:",
+            default=existing_definitions,
+            validate=lambda value: _validate_extra_source_json(value),
+            style=WIZARD_STYLE,
+        ).ask()
+        if raw_definitions is None:
+            raise KeyboardInterrupt
+        result["extra_source_definitions"] = validate_source_definitions(
+            json.loads(raw_definitions)
+        )
+    else:
+        # Turning the source group off should be reversible: retain the JSON
+        # declarations so re-enabling it does not require re-entering them.
+        result["extra_source_definitions"] = flat.get(
+            "extra_source_definitions", []
+        )
+
     # ArXiv domains
     if "arxiv" in enabled:
         domains_str = questionary.text(
@@ -338,7 +370,10 @@ def section_data_sources(existing_config: dict) -> dict:
             raise KeyboardInterrupt
         result["domains"] = [d.strip() for d in domains_str.split(",") if d.strip()]
 
-    if "huggingface_papers" in enabled:
+    extra_codes = {
+        item["code"] for item in result.get("extra_source_definitions", [])
+    }
+    if "huggingface_papers" in extra_codes:
         console.print(
             "[yellow]Hugging Face Papers is a curated supplementary feed, not a complete arXiv source.[/]"
         )
@@ -907,6 +942,14 @@ def _is_float(x: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _validate_extra_source_json(value: str):
+    try:
+        validate_source_definitions(json.loads(value or "[]"))
+        return True
+    except (ValueError, json.JSONDecodeError) as exc:
+        return str(exc)
 
 
 def _is_positive_int(x: str) -> bool:

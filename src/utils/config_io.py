@@ -11,6 +11,11 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from utils.source_registry import (
+    CORE_SOURCE_CODES,
+    definitions_for_builtin_codes,
+    validate_source_definitions,
+)
 
 # ==================== Path Constants ====================
 
@@ -96,31 +101,33 @@ def validate_config_document(config: object) -> Dict[str, Any]:
             from utils.webdav_sync import validate_cron_schedule
 
             validate_cron_schedule(str(webdav.get("cron_schedule", "")))
+
+    daily_research = config.get("daily_research")
+    if daily_research is not None:
+        if not isinstance(daily_research, dict):
+            raise ValueError("daily_research 配置段必须是对象")
+        limit = daily_research.get("max_papers_per_run", 0)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError(
+                "daily_research.max_papers_per_run 必须是非负整数（0 表示不限）"
+            )
+    data_sources = config.get("data_sources")
+    if data_sources is not None:
+        if not isinstance(data_sources, dict):
+            raise ValueError("data_sources 配置段必须是对象")
+        extra_sources = data_sources.get("extra_sources", {})
+        if extra_sources is None:
+            extra_sources = {}
+        if not isinstance(extra_sources, dict):
+            raise ValueError("data_sources.extra_sources 必须是对象")
+        if not isinstance(extra_sources.get("enabled", False), bool):
+            raise ValueError("data_sources.extra_sources.enabled 必须是布尔值")
+        validate_source_definitions(extra_sources.get("definitions", []))
     return config
 
 # ==================== Data Source Options ====================
 
-ALL_DATA_SOURCES = [
-    "arxiv",
-    "huggingface_papers",
-    "prl",
-    "pra",
-    "prb",
-    "prc",
-    "prd",
-    "pre",
-    "prx",
-    "prxq",
-    "rmp",
-    "nature",
-    "nature_physics",
-    "nature_communications",
-    "science",
-    "science_advances",
-    "npj_quantum_information",
-    "quantum",
-    "new_journal_of_physics",
-]
+ALL_DATA_SOURCES = list(CORE_SOURCE_CODES)
 
 # ==================== LLM Provider Presets ====================
 
@@ -483,6 +490,8 @@ def build_config_dict(
     max_results_per_source: Optional[Dict[str, int]] = None,
     enabled_sources: Optional[List[str]] = None,
     journals: Optional[List[str]] = None,
+    extra_sources_enabled: bool = False,
+    extra_source_definitions: Optional[List[Dict[str, Any]]] = None,
     reports_by_source: bool = True,
     arxiv_fetch_timeout_seconds: int = 180,
     arxiv_announcement_lookback_grace_days: int = 2,
@@ -548,6 +557,7 @@ def build_config_dict(
     llm_request_pool_log_slow_wait_seconds: float = 5.0,
     daily_research_persistence_enabled: bool = True,
     daily_research_db_path: str = "data/daily_research/daily_research.db",
+    daily_max_papers_per_run: int = 0,
     daily_enable_deep_analysis: bool = True,
     pdf_parser_mode: str = "mineru",
     mineru_model_version: str = "pipeline",
@@ -588,6 +598,59 @@ def build_config_dict(
 ) -> Dict[str, Any]:
     """Build a nested config.json dict from flat parameters."""
 
+    if (
+        isinstance(daily_max_papers_per_run, bool)
+        or not isinstance(daily_max_papers_per_run, int)
+        or daily_max_papers_per_run < 0
+    ):
+        raise ValueError(
+            "daily_research.max_papers_per_run 必须是非负整数（0 表示不限）"
+        )
+
+    if not isinstance(extra_sources_enabled, bool):
+        raise ValueError("extra_sources_enabled 必须是布尔值")
+    raw_enabled = enabled_sources if enabled_sources is not None else ["arxiv"]
+    if not isinstance(raw_enabled, list):
+        raise ValueError("enabled_sources 必须是列表")
+    normalized_enabled = []
+    legacy_extra_codes = []
+    for source in [*raw_enabled, *(journals or [])]:
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("enabled_sources 中的数据源代码必须是非空字符串")
+        source_code = source.strip().lower()
+        if source_code in CORE_SOURCE_CODES:
+            if source_code not in normalized_enabled:
+                normalized_enabled.append(source_code)
+        elif source_code not in legacy_extra_codes:
+            legacy_extra_codes.append(source_code)
+
+    definitions_were_explicit = extra_source_definitions is not None
+    normalized_definitions = validate_source_definitions(extra_source_definitions or [])
+    definition_codes = {item["code"] for item in normalized_definitions}
+    missing_legacy_codes = [code for code in legacy_extra_codes if code not in definition_codes]
+    if missing_legacy_codes and definitions_were_explicit:
+        raise ValueError(
+            "enabled_sources 包含未定义的额外来源: "
+            + ", ".join(missing_legacy_codes)
+        )
+    if missing_legacy_codes:
+        normalized_definitions.extend(definitions_for_builtin_codes(missing_legacy_codes))
+        # Calls made with the old flat contract have no explicit definitions;
+        # infer the former built-in selections once. In the v4 contract an
+        # explicit False always wins, even if stale source codes remain in the
+        # incoming enabled list.
+        extra_sources_enabled = True
+    if extra_sources_enabled:
+        # The enabled list is intentionally a complete, portable source scope:
+        # a worker launched without the WebUI can reproduce exactly which
+        # declarative sources were selected.  Definitions themselves remain
+        # available even when the extra-source switch is later turned off.
+        normalized_enabled.extend(
+            item["code"]
+            for item in normalized_definitions
+            if item["code"] not in normalized_enabled
+        )
+
     config = {
         "search_settings": {
             "search_days": search_days,
@@ -596,8 +659,11 @@ def build_config_dict(
             # Preserve an explicit empty list so the worker can reject it
             # visibly.  Replacing it with a hidden default changes a user's
             # intended source scope at save time.
-            "enabled": enabled_sources if enabled_sources is not None else ["arxiv"],
-            "journals": journals or [],
+            "enabled": normalized_enabled,
+            "extra_sources": {
+                "enabled": extra_sources_enabled,
+                "definitions": normalized_definitions,
+            },
             "reports_by_source": reports_by_source,
             "arxiv": {
                 "fetch_timeout_seconds": arxiv_fetch_timeout_seconds,
@@ -722,7 +788,7 @@ def build_config_dict(
         },
         "daily_research": {
             "enable_deep_analysis": daily_enable_deep_analysis,
-            "persistence_enabled": daily_research_persistence_enabled,
+            "max_papers_per_run": daily_max_papers_per_run,
             "db_path": daily_research_db_path,
         },
         "pdf_parser": {
@@ -810,8 +876,55 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
 
     # Data sources
     ds = config.get("data_sources", {})
-    flat["enabled_sources"] = ds.get("enabled", ["arxiv"])
-    flat["journals"] = ds.get("journals", [])
+    raw_enabled = ds.get("enabled", ["arxiv"])
+    raw_journals = ds.get("journals", [])
+    if not isinstance(raw_enabled, list):
+        raw_enabled = []
+    if not isinstance(raw_journals, list):
+        raw_journals = []
+    flat["enabled_sources"] = [
+        source.strip().lower()
+        for source in raw_enabled
+        if isinstance(source, str) and source.strip()
+    ]
+    flat["journals"] = [
+        source.strip().lower()
+        for source in raw_journals
+        if isinstance(source, str) and source.strip()
+    ]
+    has_extra_sources = "extra_sources" in ds
+    extra_sources = ds.get("extra_sources", {})
+    if not isinstance(extra_sources, dict):
+        extra_sources = {}
+    definitions = validate_source_definitions(extra_sources.get("definitions", []))
+    definition_codes = {item["code"] for item in definitions}
+    legacy_codes = []
+    for source in [*raw_enabled, *raw_journals]:
+        if isinstance(source, str):
+            source_code = source.strip().lower()
+            if source_code and source_code not in CORE_SOURCE_CODES and source_code not in definition_codes:
+                legacy_codes.append(source_code)
+                definition_codes.add(source_code)
+    if legacy_codes and not has_extra_sources:
+        definitions.extend(definitions_for_builtin_codes(legacy_codes))
+    flat["extra_sources_enabled"] = (
+        bool(extra_sources.get("enabled", False))
+        if has_extra_sources
+        else bool(legacy_codes)
+    )
+    core_enabled = []
+    for source in [*raw_enabled, *raw_journals]:
+        if isinstance(source, str):
+            source_code = source.strip().lower()
+            if source_code in CORE_SOURCE_CODES and source_code not in core_enabled:
+                core_enabled.append(source_code)
+    flat["enabled_sources"] = core_enabled
+    if flat["extra_sources_enabled"]:
+        for definition in definitions:
+            code = definition["code"]
+            if code not in flat["enabled_sources"]:
+                flat["enabled_sources"].append(code)
+    flat["extra_source_definitions"] = definitions
     flat["reports_by_source"] = ds.get("reports_by_source", True)
     flat["arxiv_fetch_timeout_seconds"] = ds.get("arxiv", {}).get("fetch_timeout_seconds", 180)
     flat["arxiv_announcement_lookback_grace_days"] = ds.get("arxiv", {}).get(
@@ -947,7 +1060,11 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     # Daily research
     dr = config.get("daily_research", {})
     flat["daily_enable_deep_analysis"] = dr.get("enable_deep_analysis", True)
-    flat["daily_research_persistence_enabled"] = dr.get("persistence_enabled", True)
+    # Kept in the flat compatibility contract so older callers may still pass
+    # the argument back to build_config_dict; SQLite itself is no longer
+    # optional and new config files omit the obsolete switch.
+    flat["daily_research_persistence_enabled"] = True
+    flat["daily_max_papers_per_run"] = dr.get("max_papers_per_run", 0)
     flat["daily_research_db_path"] = dr.get(
         "db_path", "data/daily_research/daily_research.db"
     )

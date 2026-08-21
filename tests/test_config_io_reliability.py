@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -178,13 +179,15 @@ class ConfigIOReliabilityTests(unittest.TestCase):
             self.assertEqual(oct(config_path.stat().st_mode & 0o777), "0o640")
 
     def test_legacy_daily_result_caps_are_not_written_or_exposed(self):
-        """Daily scans must never regain an item budget through config saves."""
+        """Legacy fetch caps stay ignored; the new limit is downstream only."""
         config = build_config_dict(
             search_days=3,
             max_results=1,
             max_results_per_source={"arxiv": 1},
+            daily_max_papers_per_run=5,
         )
         self.assertEqual(config["search_settings"], {"search_days": 3})
+        self.assertEqual(config["daily_research"]["max_papers_per_run"], 5)
 
         legacy_flat = flatten_config_dict(
             {
@@ -198,6 +201,44 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         self.assertEqual(legacy_flat["search_days"], 3)
         self.assertNotIn("max_results", legacy_flat)
         self.assertNotIn("max_results_per_source", legacy_flat)
+        self.assertEqual(legacy_flat["daily_max_papers_per_run"], 0)
+
+    def test_daily_queue_limit_round_trips_and_sqlite_is_mandatory(self):
+        config = build_config_dict(
+            daily_max_papers_per_run=10,
+            daily_research_persistence_enabled=False,
+        )
+        self.assertEqual(config["daily_research"]["max_papers_per_run"], 10)
+        self.assertNotIn("persistence_enabled", config["daily_research"])
+
+        flat = flatten_config_dict(
+            {
+                "daily_research": {
+                    "max_papers_per_run": 7,
+                    "persistence_enabled": False,
+                }
+            }
+        )
+        self.assertEqual(flat["daily_max_papers_per_run"], 7)
+        self.assertTrue(flat["daily_research_persistence_enabled"])
+
+        for invalid in (-1, True, "5"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "非负整数"):
+                    build_config_dict(daily_max_papers_per_run=invalid)
+                with self.assertRaisesRegex(ValueError, "非负整数"):
+                    validate_config_document(
+                        {"daily_research": {"max_papers_per_run": invalid}}
+                    )
+
+    def test_runtime_rejects_negative_daily_queue_limit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            path.write_text(
+                "{daily_research: {max_papers_per_run: -1}}", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ConfigurationLoadError, "非负整数"):
+                Settings().load_from_search_config(path)
 
     def test_explicit_empty_source_or_domain_lists_are_not_replaced_by_defaults(self):
         config = build_config_dict(enabled_sources=[], domains=[])
@@ -246,6 +287,131 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         self.assertEqual(flat["huggingface_papers_request_timeout_seconds"], 45)
         self.assertEqual(flat["huggingface_papers_request_interval_seconds"], 0.5)
         self.assertTrue(flat["proxy_huggingface_papers"])
+
+    def test_declarative_extra_sources_round_trip_without_executable_fields(self):
+        definitions = [
+            {
+                "type": "openalex_journal",
+                "code": "custom_physics",
+                "display_name": "Custom Phys.",
+                "full_name": "Custom Physics Journal",
+                "issn": ["1234-567X"],
+            }
+        ]
+        config = build_config_dict(
+            enabled_sources=["arxiv", "prl"],
+            extra_sources_enabled=True,
+            extra_source_definitions=definitions,
+        )
+
+        self.assertEqual(
+            config["data_sources"]["enabled"],
+            ["arxiv", "prl", "custom_physics"],
+        )
+        self.assertEqual(
+            config["data_sources"]["extra_sources"],
+            {"enabled": True, "definitions": definitions},
+        )
+        flat = flatten_config_dict(config)
+        self.assertTrue(flat["extra_sources_enabled"])
+        self.assertEqual(flat["extra_source_definitions"], definitions)
+
+        unsafe = [
+            {
+                **definitions[0],
+                "python": "__import__('os').system('id')",
+            }
+        ]
+        with self.assertRaisesRegex(ValueError, "不支持字段"):
+            validate_config_document(
+                {
+                    "data_sources": {
+                        "extra_sources": {"enabled": True, "definitions": unsafe}
+                    }
+                }
+            )
+
+    def test_disabled_extra_source_definitions_are_retained_but_not_enabled(self):
+        definitions = [
+            {
+                "type": "openalex_journal",
+                "code": "custom_physics",
+                "display_name": "Custom Phys.",
+                "full_name": "Custom Physics Journal",
+                "issn": ["1234-567X"],
+            }
+        ]
+        config = build_config_dict(
+            enabled_sources=["arxiv"],
+            extra_sources_enabled=False,
+            extra_source_definitions=definitions,
+        )
+
+        self.assertEqual(config["data_sources"]["enabled"], ["arxiv"])
+        self.assertEqual(
+            config["data_sources"]["extra_sources"]["definitions"], definitions
+        )
+
+    def test_explicit_extra_source_switch_cannot_be_bypassed_by_stale_codes(self):
+        definitions = [
+            {
+                "type": "openalex_journal",
+                "code": "custom_physics",
+                "display_name": "Custom Phys.",
+                "full_name": "Custom Physics Journal",
+                "issn": ["1234-567X"],
+            }
+        ]
+        document = {
+            "data_sources": {
+                "enabled": ["arxiv", "custom_physics"],
+                "journals": ["pra"],
+                "extra_sources": {
+                    "enabled": False,
+                    "definitions": definitions,
+                },
+            }
+        }
+
+        flat = flatten_config_dict(document)
+        self.assertFalse(flat["extra_sources_enabled"])
+        self.assertEqual(flat["enabled_sources"], ["arxiv"])
+        self.assertEqual(flat["extra_source_definitions"], definitions)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            runtime = Settings()
+            runtime.load_from_search_config(path)
+
+        self.assertEqual(runtime.ENABLED_SOURCES, ["arxiv"])
+        self.assertEqual(runtime.TARGET_JOURNALS, [])
+        self.assertFalse(runtime.EXTRA_SOURCES_ENABLED)
+
+    def test_extra_source_definition_order_is_stable_at_runtime(self):
+        definitions = [
+            {
+                "type": "openalex_journal",
+                "code": code,
+                "display_name": code.upper(),
+                "full_name": f"{code.upper()} Journal",
+                "issn": [issn],
+            }
+            for code, issn in (("source_b", "1234-567X"), ("source_a", "2345-678X"))
+        ]
+        document = {
+            "data_sources": {
+                "enabled": ["prl"],
+                "extra_sources": {"enabled": True, "definitions": definitions},
+            }
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            runtime = Settings()
+            runtime.load_from_search_config(path)
+
+        self.assertEqual(runtime.ENABLED_SOURCES, ["prl", "source_b", "source_a"])
 
     def test_webdav_proxy_scope_round_trips_independently(self):
         config = build_config_dict(proxy_webdav=True, proxy_notifications=False)
