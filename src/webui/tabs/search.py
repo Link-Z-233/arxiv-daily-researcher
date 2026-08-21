@@ -210,45 +210,63 @@ def render(_env_values: dict, config_values: dict):
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:
-    """Collect current values from session state. Returns config updates."""
-    # Collect enabled sources
+    """Collect current values from session state. Returns config updates.
+
+    Only the active page renders, so unvisited pages have no session state;
+    fall back to the values already on disk before defaults.
+    """
+    flat = _config_values or {}
+
+    def current(key: str, default):
+        return st.session_state.get(key, flat.get(key, default))
+
+    configured_sources = flat.get("enabled_sources", [])
+    if not isinstance(configured_sources, list):
+        configured_sources = []
     enabled = [
-        src for src in CORE_DATA_SOURCES if st.session_state.get(f"source_{src}", False)
+        src
+        for src in CORE_DATA_SOURCES
+        if st.session_state.get(f"source_{src}", src in configured_sources)
     ]
-    # Collect domains
-    domains = list(st.session_state.get("arxiv_domains", ["quant-ph"]))
+
+    configured_domains = flat.get("domains", ["quant-ph"])
+    if not isinstance(configured_domains, list) or not configured_domains:
+        configured_domains = ["quant-ph"]
+    domains = list(st.session_state.get("arxiv_domains", configured_domains))
     custom = st.session_state.get("custom_domains", "")
     if custom:
         domains.extend(d.strip() for d in custom.split(",") if d.strip())
 
-    raw_extra = st.session_state.get("extra_source_definitions_json", "[]")
+    configured_extra = flat.get("extra_source_definitions", [])
+    raw_extra = st.session_state.get(
+        "extra_source_definitions_json",
+        json.dumps(configured_extra if isinstance(configured_extra, list) else []),
+    )
     try:
         extra_definitions = validate_source_definitions(json.loads(raw_extra or "[]"))
     except (ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"额外来源配置无效: {exc}") from exc
 
     return {
-        "search_days": st.session_state.get("search_days", 7),
+        "search_days": current("search_days", 7),
         "enabled_sources": enabled,
-        "extra_sources_enabled": bool(
-            st.session_state.get("extra_sources_enabled", False)
-        ),
+        "extra_sources_enabled": bool(current("extra_sources_enabled", False)),
         "extra_source_definitions": extra_definitions,
-        "reports_by_source": st.session_state.get("reports_by_source", True),
-        "arxiv_fetch_timeout_seconds": st.session_state.get("arxiv_fetch_timeout_seconds", 180),
-        "arxiv_announcement_lookback_grace_days": st.session_state.get(
+        "reports_by_source": current("reports_by_source", True),
+        "arxiv_fetch_timeout_seconds": current("arxiv_fetch_timeout_seconds", 180),
+        "arxiv_announcement_lookback_grace_days": current(
             "arxiv_announcement_lookback_grace_days", 2
         ),
-        "huggingface_papers_availability_lag_days": st.session_state.get(
+        "huggingface_papers_availability_lag_days": current(
             "huggingface_papers_availability_lag_days", 2
         ),
-        "huggingface_papers_lookback_grace_days": st.session_state.get(
+        "huggingface_papers_lookback_grace_days": current(
             "huggingface_papers_lookback_grace_days", 2
         ),
-        "huggingface_papers_request_timeout_seconds": st.session_state.get(
+        "huggingface_papers_request_timeout_seconds": current(
             "huggingface_papers_request_timeout_seconds", 30
         ),
-        "huggingface_papers_request_interval_seconds": st.session_state.get(
+        "huggingface_papers_request_interval_seconds": current(
             "huggingface_papers_request_interval_seconds", 0.25
         ),
         "domains": domains,

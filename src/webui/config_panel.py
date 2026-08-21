@@ -203,37 +203,32 @@ tab_labels = [
     t("tab_proxy"),  # 网络代理
     t("tab_advanced"),  # 高级设置
 ]
-tabs = st.tabs(tab_labels)
 
-with tabs[0]:
-    run_manager.render(env_values, config_values)
+# 侧边栏导航：每次只渲染当前页面。st.tabs 会在每次交互时渲染全部
+# 页面的控件（实测页面上同时存在几十个 switch），既慢又让各页面的
+# 会话状态互相干扰。按页渲染后，collect() 对未访问页面回退到磁盘
+# 现值，保存行为与之前保持一致。
+pages = [
+    run_manager.render,
+    reports.render,
+    trend_runner.render,
+    keywords.render,
+    search.render,
+    scoring.render,
+    notifications.render,
+    data_management.render,
+    llm.render,
+    proxy.render,
+    advanced.render,
+]
 
-with tabs[1]:
-    reports.render(env_values, config_values)
+with st.sidebar:
+    selected_index = st.radio(
+        t("nav_label"),
+        range(len(tab_labels)),
+        format_func=lambda i: tab_labels[i],
+        key="nav_page_index",
+        label_visibility="collapsed",
+    )
 
-with tabs[2]:
-    trend_runner.render(env_values, config_values)
-
-with tabs[3]:
-    keywords.render(env_values, config_values)
-
-with tabs[4]:
-    search.render(env_values, config_values)
-
-with tabs[5]:
-    scoring.render(env_values, config_values)
-
-with tabs[6]:
-    notifications.render(env_values, config_values)
-
-with tabs[7]:
-    data_management.render(env_values, config_values)
-
-with tabs[8]:
-    llm.render(env_values, config_values)
-
-with tabs[9]:
-    proxy.render(env_values, config_values)
-
-with tabs[10]:
-    advanced.render(env_values, config_values)
+pages[selected_index](env_values, config_values)

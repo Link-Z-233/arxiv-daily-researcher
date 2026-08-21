@@ -237,16 +237,28 @@ def render(env_values: dict, config_values: dict):
 
 def collect(env_values: dict, _config_values: dict) -> tuple:
     """Collect values. Returns (env_updates, config_updates)."""
+    def current_env(session_key: str, env_key: str, default):
+        # 未访问的页面没有会话状态；回退到 .env 现值，避免保存时清空。
+        if session_key in st.session_state:
+            return st.session_state[session_key]
+        value = env_values.get(env_key)
+        return value if value not in (None, "") else default
+
+    configured_tls = current_env("smtp_use_tls", "SMTP_USE_TLS", "true")
     env_updates = {
-        "SMTP_HOST": st.session_state.get("smtp_host", ""),
-        "SMTP_PORT": st.session_state.get("smtp_port", "587"),
-        "SMTP_USER": st.session_state.get("smtp_user", ""),
+        "SMTP_HOST": current_env("smtp_host", "SMTP_HOST", ""),
+        "SMTP_PORT": current_env("smtp_port", "SMTP_PORT", "587"),
+        "SMTP_USER": current_env("smtp_user", "SMTP_USER", ""),
         "SMTP_PASSWORD": resolve_secret_value(
             env_values, "SMTP_PASSWORD", "smtp_password", st.session_state
         ),
-        "SMTP_FROM": st.session_state.get("smtp_from", ""),
-        "SMTP_TO": st.session_state.get("smtp_to", ""),
-        "SMTP_USE_TLS": "true" if st.session_state.get("smtp_use_tls", True) else "false",
+        "SMTP_FROM": current_env("smtp_from", "SMTP_FROM", ""),
+        "SMTP_TO": current_env("smtp_to", "SMTP_TO", ""),
+        "SMTP_USE_TLS": (
+            ("true" if st.session_state["smtp_use_tls"] else "false")
+            if "smtp_use_tls" in st.session_state
+            else ("true" if str(configured_tls).lower() != "false" else "false")
+        ),
         "WECHAT_WEBHOOK_URL": resolve_secret_value(
             env_values, "WECHAT_WEBHOOK_URL", "wechat_webhook_url", st.session_state
         ),
@@ -259,7 +271,7 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         "TELEGRAM_BOT_TOKEN": resolve_secret_value(
             env_values, "TELEGRAM_BOT_TOKEN", "telegram_bot_token", st.session_state
         ),
-        "TELEGRAM_CHAT_ID": st.session_state.get("telegram_chat_id", ""),
+        "TELEGRAM_CHAT_ID": current_env("telegram_chat_id", "TELEGRAM_CHAT_ID", ""),
         "SLACK_WEBHOOK_URL": resolve_secret_value(
             env_values, "SLACK_WEBHOOK_URL", "slack_webhook_url", st.session_state
         ),
@@ -268,18 +280,23 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         ),
     }
 
+    flat = _config_values or {}
+
+    def current_cfg(key: str, default):
+        return st.session_state.get(key, flat.get(key, default))
+
     config_updates = {
-        "notifications_enabled": st.session_state.get("notifications_enabled", False),
-        "notify_on_success": st.session_state.get("notify_on_success", True),
-        "notify_on_failure": st.session_state.get("notify_on_failure", True),
-        "notify_attach_reports": st.session_state.get("notify_attach_reports", False),
-        "notification_top_n": st.session_state.get("notification_top_n", 5),
-        "notify_email_enabled": st.session_state.get("notify_email_enabled", False),
-        "notify_wechat_enabled": st.session_state.get("notify_wechat_enabled", False),
-        "notify_dingtalk_enabled": st.session_state.get("notify_dingtalk_enabled", False),
-        "notify_telegram_enabled": st.session_state.get("notify_telegram_enabled", False),
-        "notify_slack_enabled": st.session_state.get("notify_slack_enabled", False),
-        "notify_generic_webhook_enabled": st.session_state.get(
+        "notifications_enabled": current_cfg("notifications_enabled", False),
+        "notify_on_success": current_cfg("notify_on_success", True),
+        "notify_on_failure": current_cfg("notify_on_failure", True),
+        "notify_attach_reports": current_cfg("notify_attach_reports", False),
+        "notification_top_n": current_cfg("notification_top_n", 5),
+        "notify_email_enabled": current_cfg("notify_email_enabled", False),
+        "notify_wechat_enabled": current_cfg("notify_wechat_enabled", False),
+        "notify_dingtalk_enabled": current_cfg("notify_dingtalk_enabled", False),
+        "notify_telegram_enabled": current_cfg("notify_telegram_enabled", False),
+        "notify_slack_enabled": current_cfg("notify_slack_enabled", False),
+        "notify_generic_webhook_enabled": current_cfg(
             "notify_generic_webhook_enabled", False
         ),
     }

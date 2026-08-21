@@ -859,12 +859,19 @@ def render(_env_values: dict, config_values: dict) -> None:
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:
-    """从 session_state 收集每日研究设置。"""
+    """从 session_state 收集每日研究设置。
+
+    每次只渲染当前页面，未访问过的页面没有会话状态；此时回退到
+    配置文件里的现有值，而不是默认值，避免保存时改写未浏览的设置。
+    """
+    flat = _config_values or {}
+
+    def current(key: str, default):
+        return st.session_state.get(key, flat.get(key, default))
+
     return {
-        "enable_html_report": st.session_state.get("enable_html_report", True),
-        "enable_markdown_report": st.session_state.get("enable_markdown_report", True),
-        "include_all_in_report": st.session_state.get("include_all_in_report", True),
-        "daily_max_papers_per_run": int(
-            st.session_state.get("daily_max_papers_per_run", 0)
-        ),
+        "enable_html_report": current("enable_html_report", True),
+        "enable_markdown_report": current("enable_markdown_report", True),
+        "include_all_in_report": current("include_all_in_report", True),
+        "daily_max_papers_per_run": int(current("daily_max_papers_per_run", 0)),
     }

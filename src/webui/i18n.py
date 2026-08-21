@@ -56,6 +56,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tab_reports": {"zh": "报告查看", "en": "Reports"},
     "tab_run_manager": {"zh": "每日推送", "en": "Daily Push"},
     "tab_trend_runner": {"zh": "趋势分析", "en": "Trend Analysis"},
+    "nav_label": {"zh": "导航", "en": "Navigation"},
     # ── llm.py ───────────────────────────────────────────────────────────
     "cheap_llm_title": {
         "zh": "低成本 LLM (CHEAP_LLM)",

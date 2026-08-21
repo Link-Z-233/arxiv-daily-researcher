@@ -138,21 +138,35 @@ def render(_env_values: dict, config_values: dict):
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:
-    """Collect current values from session state. Returns config updates."""
-    kw_text = st.session_state.get("primary_keywords_text", "")
+    """Collect current values from session state. Returns config updates.
+
+    Only the active page renders, so unvisited pages have no session state;
+    fall back to the values already on disk before defaults.
+    """
+    flat = _config_values or {}
+
+    def current(key: str, default):
+        return st.session_state.get(key, flat.get(key, default))
+
+    configured_keywords = flat.get("primary_keywords", [])
+    if not isinstance(configured_keywords, list):
+        configured_keywords = []
+    kw_text = st.session_state.get(
+        "primary_keywords_text", "\n".join(str(k) for k in configured_keywords)
+    )
     keywords = [k.strip() for k in kw_text.split("\n") if k.strip()]
 
     return {
         "primary_keywords": keywords,
-        "primary_keyword_weight": st.session_state.get("primary_keyword_weight", 1.0),
-        "enable_reference_extraction": st.session_state.get("enable_reference_extraction", False),
-        "max_reference_keywords": st.session_state.get("max_reference_keywords", 10),
-        "similarity_threshold": st.session_state.get("similarity_threshold", 0.75),
-        "ref_weight_high": st.session_state.get("ref_weight_high", 1.0),
-        "ref_count_high": st.session_state.get("ref_count_high", 3),
-        "ref_weight_medium": st.session_state.get("ref_weight_medium", 0.2),
-        "ref_count_medium": st.session_state.get("ref_count_medium", 5),
-        "ref_weight_low": st.session_state.get("ref_weight_low", 0.1),
-        "ref_count_low": st.session_state.get("ref_count_low", 2),
-        "research_context": st.session_state.get("research_context", ""),
+        "primary_keyword_weight": current("primary_keyword_weight", 1.0),
+        "enable_reference_extraction": current("enable_reference_extraction", False),
+        "max_reference_keywords": current("max_reference_keywords", 10),
+        "similarity_threshold": current("similarity_threshold", 0.75),
+        "ref_weight_high": current("ref_weight_high", 1.0),
+        "ref_count_high": current("ref_count_high", 3),
+        "ref_weight_medium": current("ref_weight_medium", 0.2),
+        "ref_count_medium": current("ref_count_medium", 5),
+        "ref_weight_low": current("ref_weight_low", 0.1),
+        "ref_count_low": current("ref_count_low", 2),
+        "research_context": current("research_context", ""),
     }

@@ -302,19 +302,44 @@ def render(_env_values: dict, config_values: dict) -> None:
 
 def collect(_env_values: dict, _config_values: dict) -> dict:
     """从 session_state 收集趋势分析配置，保存到 config.json。"""
+    flat = _config_values or {}
+
+    def current(key: str, default):
+        return st.session_state.get(key, flat.get(key, default))
+
+    configured_skills = flat.get("trend_enabled_skills", [])
+    if not isinstance(configured_skills, list):
+        configured_skills = []
     enabled_skills = [
         skill_id
         for skill_id in ALL_TREND_SKILL_IDS
-        if st.session_state.get(f"skill_{skill_id}", False)
+        if st.session_state.get(f"skill_{skill_id}", skill_id in configured_skills)
     ]
 
+    configured_formats = flat.get("trend_output_formats", ["markdown", "html"])
+    if not isinstance(configured_formats, list) or not configured_formats:
+        configured_formats = ["markdown", "html"]
+
+    def current_formats() -> list[str]:
+        """两个输出格式 toggle 的值；未渲染时回退到配置文件现值。"""
+        formats = []
+        if st.session_state.get(
+            "trend_output_md", "markdown" in configured_formats
+        ):
+            formats.append("markdown")
+        if st.session_state.get(
+            "trend_output_html", "html" in configured_formats
+        ):
+            formats.append("html")
+        return formats
+
     return {
-        "trend_default_date_range_days": st.session_state.get("trend_default_date_range_days", 365),
-        "trend_max_results": st.session_state.get("trend_max_results", 500),
-        "trend_sort_order": st.session_state.get("trend_sort_order", "ascending"),
-        "trend_report_position": st.session_state.get("trend_report_position", "end"),
-        "trend_generate_tldr": st.session_state.get("trend_generate_tldr", True),
-        "trend_tldr_batch_size": st.session_state.get("trend_tldr_batch_size", 10),
-        "trend_output_formats": _build_output_formats(),
+        "trend_default_date_range_days": current("trend_default_date_range_days", 365),
+        "trend_max_results": current("trend_max_results", 500),
+        "trend_sort_order": current("trend_sort_order", "ascending"),
+        "trend_report_position": current("trend_report_position", "end"),
+        "trend_generate_tldr": current("trend_generate_tldr", True),
+        "trend_tldr_batch_size": current("trend_tldr_batch_size", 10),
+        "trend_output_formats": current_formats(),
         "trend_enabled_skills": enabled_skills,
     }

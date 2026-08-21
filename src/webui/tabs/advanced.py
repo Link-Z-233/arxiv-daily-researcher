@@ -289,42 +289,43 @@ def render(_env_values: dict, config_values: dict):
 def collect(_env_values: dict, _config_values: dict) -> dict:
     """从 session_state 收集当前值，返回 config 更新字典。"""
     # 注意：趋势分析的配置已移至 trend_runner.py，这里不再收集趋势分析相关设置。
+    flat = _config_values or {}
+
+    def current(key: str, default):
+        return st.session_state.get(key, flat.get(key, default))
+
+    configured_pdf_mb = int(
+        flat.get("pdf_download_max_bytes", 50 * 1024 * 1024)
+    ) // (1024 * 1024)
+
     return {
-        "pdf_parser_mode": st.session_state.get("pdf_parser_mode", "mineru"),
-        "mineru_model_version": st.session_state.get("mineru_model_version", "pipeline"),
+        "pdf_parser_mode": current("pdf_parser_mode", "mineru"),
+        "mineru_model_version": current("mineru_model_version", "pipeline"),
         "pdf_download_max_bytes": int(
-            st.session_state.get("pdf_download_max_mb", 50)
+            current("pdf_download_max_mb", configured_pdf_mb)
         ) * 1024 * 1024,
-        "concurrency_enabled": st.session_state.get("concurrency_enabled", False),
-        "concurrency_workers": st.session_state.get("concurrency_workers", 3),
-        "llm_request_pool_enabled": st.session_state.get("llm_request_pool_enabled", True),
-        "llm_requests_per_minute": st.session_state.get("llm_requests_per_minute", 30),
-        "llm_request_pool_log_slow_wait_seconds": st.session_state.get(
-            "llm_request_pool_log_slow_wait_seconds", 5.0
-        ),
+        "concurrency_enabled": current("concurrency_enabled", False),
+        "concurrency_workers": current("concurrency_workers", 3),
+        "llm_request_pool_enabled": current("llm_request_pool_enabled", True),
+        "llm_requests_per_minute": current("llm_requests_per_minute", 30),
+        "llm_request_pool_log_slow_wait_seconds": current("llm_request_pool_log_slow_wait_seconds", 5.0),
         "daily_research_persistence_enabled": True,
-        "daily_research_db_path": st.session_state.get(
-            "daily_research_db_path", "data/daily_research/daily_research.db"
-        ),
-        "daily_enable_deep_analysis": st.session_state.get("daily_enable_deep_analysis", True),
-        "token_tracking_enabled": st.session_state.get("token_tracking_enabled", True),
-        "auto_update_enabled": st.session_state.get("auto_update_enabled", True),
-        "keyword_tracker_enabled": st.session_state.get("keyword_tracker_enabled", True),
-        "keyword_normalization_enabled": st.session_state.get(
-            "keyword_normalization_enabled", True
-        ),
-        "keyword_normalization_batch_size": st.session_state.get(
-            "keyword_normalization_batch_size", 25
-        ),
-        "keyword_trend_default_days": st.session_state.get("keyword_trend_default_days", 30),
-        "keyword_chart_top_n": st.session_state.get("keyword_chart_top_n", 15),
-        "keyword_trend_top_n": st.session_state.get("keyword_trend_top_n", 5),
-        "keyword_report_enabled": st.session_state.get("keyword_report_enabled", True),
-        "keyword_report_frequency": st.session_state.get("keyword_report_frequency", "weekly"),
-        "retry_max_attempts": st.session_state.get("retry_max_attempts", 3),
-        "retry_min_wait": st.session_state.get("retry_min_wait", 2),
-        "retry_max_wait": st.session_state.get("retry_max_wait", 30),
-        "run_lock_max_age_hours": st.session_state.get("run_lock_max_age_hours", 12),
-        "log_rotation_type": st.session_state.get("log_rotation_type", "time"),
-        "log_keep_days": st.session_state.get("log_keep_days", 30),
+        "daily_research_db_path": current("daily_research_db_path", "data/daily_research/daily_research.db"),
+        "daily_enable_deep_analysis": current("daily_enable_deep_analysis", True),
+        "token_tracking_enabled": current("token_tracking_enabled", True),
+        "auto_update_enabled": current("auto_update_enabled", True),
+        "keyword_tracker_enabled": current("keyword_tracker_enabled", True),
+        "keyword_normalization_enabled": current("keyword_normalization_enabled", True),
+        "keyword_normalization_batch_size": current("keyword_normalization_batch_size", 25),
+        "keyword_trend_default_days": current("keyword_trend_default_days", 30),
+        "keyword_chart_top_n": current("keyword_chart_top_n", 15),
+        "keyword_trend_top_n": current("keyword_trend_top_n", 5),
+        "keyword_report_enabled": current("keyword_report_enabled", True),
+        "keyword_report_frequency": current("keyword_report_frequency", "weekly"),
+        "retry_max_attempts": current("retry_max_attempts", 3),
+        "retry_min_wait": current("retry_min_wait", 2),
+        "retry_max_wait": current("retry_max_wait", 30),
+        "run_lock_max_age_hours": current("run_lock_max_age_hours", 12),
+        "log_rotation_type": current("log_rotation_type", "time"),
+        "log_keep_days": current("log_keep_days", 30),
     }

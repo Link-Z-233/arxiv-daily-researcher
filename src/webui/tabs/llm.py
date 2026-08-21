@@ -263,21 +263,35 @@ def render(env_values: dict, _config_values: dict):
 
 
 def collect(env_values: dict, _config_values: dict) -> dict:
-    """从 session_state 收集当前值，返回 env 更新字典。"""
+    """从 session_state 收集当前值，返回 env 更新字典。
+
+    未访问的页面没有会话状态；非密钥项回退到 .env 现值，避免保存时清空。
+    """
+
+    def current_env(session_key: str, env_key: str, default=""):
+        if session_key in st.session_state:
+            return st.session_state[session_key]
+        value = env_values.get(env_key)
+        return value if value not in (None, "") else default
+
     return {
         "CHEAP_LLM__API_KEY": resolve_secret_value(
             env_values, "CHEAP_LLM__API_KEY", "cheap_api_key", st.session_state
         ),
-        "CHEAP_LLM__BASE_URL": st.session_state.get("cheap_base_url", ""),
-        "CHEAP_LLM__MODEL_NAME": st.session_state.get("cheap_model_name", ""),
-        "CHEAP_LLM__TEMPERATURE": str(st.session_state.get("cheap_temperature", 0.3)),
+        "CHEAP_LLM__BASE_URL": current_env("cheap_base_url", "CHEAP_LLM__BASE_URL"),
+        "CHEAP_LLM__MODEL_NAME": current_env("cheap_model_name", "CHEAP_LLM__MODEL_NAME"),
+        "CHEAP_LLM__TEMPERATURE": current_env(
+            "cheap_temperature", "CHEAP_LLM__TEMPERATURE", "0.3"
+        ),
         "SMART_LLM__API_KEY": resolve_secret_value(
             env_values, "SMART_LLM__API_KEY", "smart_api_key", st.session_state
         ),
-        "SMART_LLM__BASE_URL": st.session_state.get("smart_base_url", ""),
-        "SMART_LLM__MODEL_NAME": st.session_state.get("smart_model_name", ""),
-        "SMART_LLM__TEMPERATURE": str(st.session_state.get("smart_temperature", 0.3)),
-        "OPENALEX_EMAIL": st.session_state.get("openalex_email", ""),
+        "SMART_LLM__BASE_URL": current_env("smart_base_url", "SMART_LLM__BASE_URL"),
+        "SMART_LLM__MODEL_NAME": current_env("smart_model_name", "SMART_LLM__MODEL_NAME"),
+        "SMART_LLM__TEMPERATURE": current_env(
+            "smart_temperature", "SMART_LLM__TEMPERATURE", "0.3"
+        ),
+        "OPENALEX_EMAIL": current_env("openalex_email", "OPENALEX_EMAIL"),
         "OPENALEX_API_KEY": resolve_secret_value(
             env_values, "OPENALEX_API_KEY", "openalex_key", st.session_state
         ),

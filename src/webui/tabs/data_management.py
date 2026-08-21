@@ -197,25 +197,37 @@ def render(env_values: dict, config_values: dict):
 
 def collect(env_values: dict, _config_values: dict) -> tuple:
     """收集数据管理 Tab 的配置值。返回 (env_updates, config_updates)。"""
+    def current_env(session_key: str, env_key: str, default=""):
+        # 未访问的页面没有会话状态；回退到 .env 现值，避免保存时清空。
+        if session_key in st.session_state:
+            return st.session_state[session_key]
+        value = env_values.get(env_key)
+        return value if value not in (None, "") else default
+
     env_updates = {
-        "WEBDAV_URL": st.session_state.get("webdav_url", ""),
-        "WEBDAV_USERNAME": st.session_state.get("webdav_username", ""),
+        "WEBDAV_URL": current_env("webdav_url", "WEBDAV_URL"),
+        "WEBDAV_USERNAME": current_env("webdav_username", "WEBDAV_USERNAME"),
         "WEBDAV_PASSWORD": resolve_secret_value(
             env_values, "WEBDAV_PASSWORD", "webdav_password", st.session_state
         ),
     }
 
+    flat = _config_values or {}
+
+    def current_cfg(key: str, default):
+        return st.session_state.get(key, flat.get(key, default))
+
     config_updates = {
-        "webdav_enabled": st.session_state.get("webdav_enabled", False),
-        "webdav_remote_path": st.session_state.get(
+        "webdav_enabled": current_cfg("webdav_enabled", False),
+        "webdav_remote_path": current_cfg(
             "webdav_remote_path", "/arxiv-daily-researcher/"
         ),
-        "webdav_sync_mode": st.session_state.get("webdav_sync_mode", "after_report"),
-        "webdav_cron_schedule": st.session_state.get("webdav_cron_schedule", "0 23 * * *"),
-        "webdav_sync_configs": st.session_state.get("webdav_sync_configs", True),
-        "webdav_sync_history": st.session_state.get("webdav_sync_history", True),
-        "webdav_sync_keywords": st.session_state.get("webdav_sync_keywords", True),
-        "webdav_sync_reports": st.session_state.get("webdav_sync_reports", False),
+        "webdav_sync_mode": current_cfg("webdav_sync_mode", "after_report"),
+        "webdav_cron_schedule": current_cfg("webdav_cron_schedule", "0 23 * * *"),
+        "webdav_sync_configs": current_cfg("webdav_sync_configs", True),
+        "webdav_sync_history": current_cfg("webdav_sync_history", True),
+        "webdav_sync_keywords": current_cfg("webdav_sync_keywords", True),
+        "webdav_sync_reports": current_cfg("webdav_sync_reports", False),
     }
 
     return env_updates, config_updates
