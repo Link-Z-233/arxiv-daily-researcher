@@ -31,7 +31,7 @@ from utils.config_io import (
 
 from webui.styles import CUSTOM_CSS
 from webui.tabs import llm, search, keywords, scoring, notifications, advanced, reports
-from webui.tabs import run_manager, trend_runner, proxy, data_management
+from webui.tabs import run_manager, trend_runner, proxy, data_management, usage
 from webui.i18n import t
 from webui.secret_fields import clear_secret_field_state
 
@@ -202,6 +202,7 @@ tab_labels = [
     t("tab_llm"),  # API
     t("tab_proxy"),  # 网络代理
     t("tab_advanced"),  # 高级设置
+    t("tab_usage"),  # 用量统计
 ]
 
 # 侧边栏导航：每次只渲染当前页面。st.tabs 会在每次交互时渲染全部
@@ -220,6 +221,7 @@ pages = [
     llm.render,
     proxy.render,
     advanced.render,
+    usage.render,
 ]
 
 with st.sidebar:

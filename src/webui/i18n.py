@@ -56,7 +56,36 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tab_reports": {"zh": "报告查看", "en": "Reports"},
     "tab_run_manager": {"zh": "每日推送", "en": "Daily Push"},
     "tab_trend_runner": {"zh": "趋势分析", "en": "Trend Analysis"},
+    "tab_usage": {"zh": "用量统计", "en": "Usage"},
     "nav_label": {"zh": "导航", "en": "Navigation"},
+    # ── usage.py ────────────────────────────────────────────────────────
+    "usage_title": {"zh": "LLM Token 用量", "en": "LLM Token Usage"},
+    "usage_hint": {
+        "zh": "统计每次运行结束落库的真实 token 消耗；数据永久保留、永不删除。",
+        "en": "Real token usage persisted at the end of every run; kept forever.",
+    },
+    "usage_empty": {
+        "zh": "暂无用量数据——完成一次每日研究或趋势分析后，这里会出现统计。",
+        "en": "No usage yet — complete a daily or trend run and stats appear here.",
+    },
+    "usage_heatmap_title": {
+        "zh": "每日用量热力图（近一年）",
+        "en": "Daily usage heatmap (last year)",
+    },
+    "usage_heatmap_less": {"zh": "少", "en": "Less"},
+    "usage_heatmap_more": {"zh": "多", "en": "More"},
+    "usage_trend_title": {"zh": "用量趋势", "en": "Usage trend"},
+    "usage_range_label": {"zh": "时间段", "en": "Time range"},
+    "usage_range_7": {"zh": "近7天", "en": "7 days"},
+    "usage_range_30": {"zh": "近30天", "en": "30 days"},
+    "usage_range_90": {"zh": "近90天", "en": "90 days"},
+    "usage_range_365": {"zh": "近365天", "en": "365 days"},
+    "usage_range_all": {"zh": "全部", "en": "All"},
+    "usage_prompt_tokens": {"zh": "输入 tokens", "en": "Prompt tokens"},
+    "usage_completion_tokens": {"zh": "输出 tokens", "en": "Completion tokens"},
+    "usage_total_tokens": {"zh": "总 tokens", "en": "Total tokens"},
+    "usage_by_model_title": {"zh": "按模型汇总", "en": "By model"},
+    "usage_model": {"zh": "模型", "en": "Model"},
     # ── llm.py ───────────────────────────────────────────────────────────
     "cheap_llm_title": {
         "zh": "低成本 LLM (CHEAP_LLM)",

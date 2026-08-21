@@ -115,6 +115,14 @@ CUSTOM_CSS = """
     display: inline-block;
 }
 
+.subsection-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #2c3e50;
+    margin-top: 1.2rem;
+    margin-bottom: 0.4rem;
+}
+
 /* ==================== Info Hint ==================== */
 .hint-text {
     color: #6c757d;
