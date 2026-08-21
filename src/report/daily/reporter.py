@@ -27,6 +27,11 @@ from scoring_policy import (
     uses_core_relevance_v2,
 )
 from utils.safe_markdown import markdown_table_cell, markdown_text
+from utils.deep_analysis_contract import (
+    FULL_TEXT_TLDR_FIELD,
+    analysis_source_label,
+    is_pdf_grounded_analysis,
+)
 from utils.safe_url import safe_http_url
 from .modules.base_module import FormatHelper
 from .modules.renderers import ModuleRendererFactory
@@ -849,25 +854,60 @@ class Reporter:
             paper_id = paper_meta.paper_id if paper_meta else paper.get("paper_id")
             analysis = analysis_map.get(paper_id)
             if analysis and isinstance(analysis, dict):
-                parts.append("<details><summary>深度分析</summary>")
-                parts.append('<div class="analysis-content">')
-                for key, value in analysis.items():
-                    if value is None:
+                renderable_fields = []
+                modules = sorted(
+                    [
+                        module
+                        for module in self.deep_template.get("modules", [])
+                        if isinstance(module, dict) and module.get("enabled", True)
+                    ],
+                    key=lambda module: module.get("order", 999),
+                )
+                for module in modules:
+                    key = module.get("id")
+                    if not isinstance(key, str) or not key:
                         continue
-                    label = key.replace("_", " ").title()
-                    if isinstance(value, list):
-                        parts.append(f"<p><strong>{h(label)}:</strong></p><ul>")
-                        for item in value:
-                            parts.append(f"<li>{self._hm(str(item))}</li>")
-                        parts.append("</ul>")
-                    elif isinstance(value, dict):
-                        parts.append(f"<p><strong>{h(label)}:</strong></p><ul>")
-                        for k, v in value.items():
-                            parts.append(f"<li><strong>{h(k)}:</strong> {self._hm(str(v))}</li>")
-                        parts.append("</ul>")
-                    else:
-                        parts.append(f"<p><strong>{h(label)}:</strong> {self._hm(str(value))}</p>")
-                parts.append("</div></details>")
+                    if key == FULL_TEXT_TLDR_FIELD and not is_pdf_grounded_analysis(analysis):
+                        continue
+                    value = analysis.get(key)
+                    if not value:
+                        continue
+                    label = module.get("label", module.get("name", key.replace("_", " ").title()))
+                    renderable_fields.append((label, value))
+
+                # A malformed/legacy template should not make an existing
+                # report entirely blank. Keep a metadata-free fallback, while
+                # retaining the provenance guard for the full-text field.
+                if not modules:
+                    for key, value in analysis.items():
+                        if key == "__meta" or value is None:
+                            continue
+                        if key == FULL_TEXT_TLDR_FIELD and not is_pdf_grounded_analysis(analysis):
+                            continue
+                        renderable_fields.append((key.replace("_", " ").title(), value))
+
+                if renderable_fields:
+                    source_label = analysis_source_label(analysis)
+                    heading = "深度分析"
+                    if source_label:
+                        heading += f"（{source_label}）"
+                    parts.append(f"<details><summary>{h(heading)}</summary>")
+                    parts.append('<div class="analysis-content">')
+                    for label, value in renderable_fields:
+                        label = str(label)
+                        if isinstance(value, list):
+                            parts.append(f"<p><strong>{h(label)}:</strong></p><ul>")
+                            for item in value:
+                                parts.append(f"<li>{self._hm(str(item))}</li>")
+                            parts.append("</ul>")
+                        elif isinstance(value, dict):
+                            parts.append(f"<p><strong>{h(label)}:</strong></p><ul>")
+                            for k, v in value.items():
+                                parts.append(f"<li><strong>{h(k)}:</strong> {self._hm(str(v))}</li>")
+                            parts.append("</ul>")
+                        else:
+                            parts.append(f"<p><strong>{h(label)}:</strong> {self._hm(str(value))}</p>")
+                    parts.append("</div></details>")
 
             parts.append("</div>")  # card
 

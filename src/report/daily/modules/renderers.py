@@ -7,6 +7,11 @@
 from typing import List, Dict, Any, Optional
 from config import settings
 from scoring_policy import qualification_threshold_for, ranking_score_for, uses_core_relevance_v2
+from utils.deep_analysis_contract import (
+    FULL_TEXT_TLDR_FIELD,
+    analysis_source_label,
+    is_pdf_grounded_analysis,
+)
 from utils.safe_markdown import markdown_link, markdown_text
 
 from .base_module import BaseModuleRenderer, FormatHelper
@@ -459,11 +464,6 @@ class DeepAnalysisRenderer(BaseModuleRenderer):
         if not analysis:
             return []
 
-        lines = []
-        section_title = self.deep_template.get('layout', {}).get('section_title', '深度分析')
-        lines.append(f"**{markdown_text(section_title, multiline=False)}**:")
-        lines.append("")
-
         # 获取模块配置并按order排序
         modules = self.deep_template.get('modules', [])
         enabled_modules = sorted(
@@ -471,10 +471,23 @@ class DeepAnalysisRenderer(BaseModuleRenderer):
             key=lambda x: x.get('order', 999)
         )
 
+        module_lines = []
         for module in enabled_modules:
             module_id = module.get('id')
-            module_lines = self._render_module(module_id, analysis, module)
-            lines.extend(module_lines)
+            module_lines.extend(self._render_module(module_id, analysis, module))
+
+        # A PDF fallback may deliberately suppress a full-text TL;DR. Avoid
+        # emitting an empty "deep analysis" heading when no other module has
+        # content to render.
+        if not module_lines:
+            return []
+
+        section_title = self.deep_template.get('layout', {}).get('section_title', '深度分析')
+        source_label = analysis_source_label(analysis)
+        if source_label:
+            section_title = f"{section_title}（{source_label}）"
+        lines = [f"**{markdown_text(section_title, multiline=False)}**:", ""]
+        lines.extend(module_lines)
 
         return lines
 
@@ -495,6 +508,12 @@ class DeepAnalysisRenderer(BaseModuleRenderer):
         返回:
             List[str]: 渲染后的行列表
         """
+        if module_id == FULL_TEXT_TLDR_FIELD and not is_pdf_grounded_analysis(analysis):
+            # ``full_text_tldr`` is a provenance-sensitive field. A model may
+            # still emit it despite an abstract fallback, but it must never be
+            # presented as a conclusion based on the full paper.
+            return []
+
         content = analysis.get(module_id)
         if not content:
             return []

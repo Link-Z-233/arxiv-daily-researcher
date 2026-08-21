@@ -22,7 +22,7 @@
 | LLM 阶段状态 | 评分、翻译、深度分析分阶段持久化，输出无效或空内容不再被误记为成功；输入变化会失效未交付缓存 | 阶段状态与 fingerprint 测试 |
 | 报告/通知 | 报告原子写入，通知/WebDAV 使用独立 outbox，失败不会让论文次日再次成为新论文 | 报告与 outbox 测试 |
 | 本地 WebUI | 配置写入原子化、触发请求参数化、报告预览隔离、动态 Markdown/HTML/URL 安全化；仍可直接导出配置 | WebUI 与安全测试 |
-| 状态闭锁 | 运行只允许 `running -> completed/failed`；损坏分析缓存会被清除并重试；损坏水位线/扫描计划会终止本轮并保留恢复窗口 | `470cf93`、`b0a574d`；全量 192 项测试 |
+| 状态闭锁 | 运行只允许 `running -> completed/failed`；损坏分析缓存会被清除并重试；损坏水位线/扫描计划会终止本轮并保留恢复窗口 | `470cf93`、`b0a574d`；全量 195 项测试 |
 
 当前设计仍有意保留的边界是：容器常驻调度模型没有在本轮改动。将来如迁移为 systemd timer/cron 触发的“运行一次即退出”任务，应作为单独的运维迁移设计，不能与可靠性状态迁移混在一起。
 
@@ -78,7 +78,7 @@ V2 将把四个概念分离，而不是继续把所有内容累加进 `total_sco
 
 | Fork/分支 | 可复用的想法 | 处理决定与边界 |
 | --- | --- | --- |
-| [brilliantrough/arxiv-daily-researcher](https://github.com/brilliantrough/arxiv-daily-researcher/tree/feat/full-text-tldr) | 将全文 TL;DR 从评分阶段移到深度分析，并用 `content_source=pdf/abstract_fallback` 区分来源；报告渲染只显示有真实全文依据的 TL;DR | 作为后续独立功能吸收“来源标识 + 统一解析器”；不移除现有评分 TL;DR 兼容字段，也不让 PDF 失败时的摘要降级结果冒充全文结论 |
+| [brilliantrough/arxiv-daily-researcher](https://github.com/brilliantrough/arxiv-daily-researcher/tree/feat/full-text-tldr) | 将全文 TL;DR 从评分阶段移到深度分析，并用 `content_source=pdf/abstract_fallback` 区分来源；报告渲染只显示有真实全文依据的 TL;DR | 已作为 P4.1 独立吸收：保留评分 TL;DR 兼容字段，深度分析来源由本地代码断言；摘要降级不会请求或展示全文 TL;DR |
 | [PeriodBLUE/arxiv-daily-researcher](https://github.com/PeriodBLUE/arxiv-daily-researcher) | 将趋势模式的关键词查询从 AND 改为 OR | 不直接合并：当前日报扫描使用 `cat:<domain>` 的提交/更新双查询，未按关键词截断；OR 只适用于趋势检索，若未来开放趋势模式默认策略，须增加 AND/OR 配置和结果质量测试 |
 | [fj5fj52010/arxiv-daily-researcher](https://github.com/fj5fj52010/arxiv-daily-researcher) | 兼容 `chat.completions` 内容数组、reasoning 字段和 Responses API 的文本提取 | 可吸收解析层与观测日志；拒绝其“LLM 失败返回 `{}`/空字符串后继续”的语义，生产失败必须保留为可重试错误 |
 | [Akiq2016/arxiv-daily-researcher](https://github.com/Akiq2016/arxiv-daily-researcher)、[luckly06/arxiv-daily-researcher](https://github.com/luckly06/arxiv-daily-researcher/tree/dev) | Run Manager、数据库检索和运行状态 UI | 当前主线已有运行管理、扫描收据和本地触发队列；只挑选可观测性字段，不重复引入旧的状态/锁实现 |
@@ -119,7 +119,7 @@ V2 将把四个概念分离，而不是继续把所有内容累加进 `total_sco
 - 深度分析提示词为列表/inline 模块明确输出 JSON 数组；保留旧的可渲染字符串缓存兼容，并用新的分析 fingerprint 只重跑未交付的旧契约缓存。
 - 继续沿用现有不含密钥的评分审计字段（模型、策略、fingerprint）；响应形态只参与内存中的统一解析，不持久化原始响应或任何凭据，并用 fixture 覆盖不同 SDK 响应形态。
 
-**验收：** 每种支持的响应形态均能恢复正文；空/非法响应均能触发可观测重试；现有 192 项回归测试保持通过。
+**验收：** 每种支持的响应形态均能恢复正文；空/非法响应均能触发可观测重试；现有 195 项回归测试保持通过。
 
 ### P3 — 数据源扩展（每个来源一个独立提交）
 
@@ -142,10 +142,10 @@ OpenReview API V2 支持 invitation、时间水位和分页，技术上适合“
 
 再根据实际需求评估 DBLP/PapersWithCode。拒绝 Google Scholar 无官方 API 的抓取方案；不引入任何结果上限、部分失败返回部分结果或“空列表降级成功”的实现。
 
-### P4 — 可选的深度复核与个性化（后续设计，不预先承诺）
+### P4 — 可选的深度复核与个性化（P4.1 已实现，其余后续设计）
 
 - 在 P1 标签足够且 P2 已稳定后，才评估全量、限速的二次 LLM 复核。
-- P4.1 可先交付“全文 TL;DR 来源标识”：深度分析模板增加 `full_text_tldr`，分析结果带 `__meta.content_source`，日报统一解析器只在来源为 PDF 时展示；此功能不改变论文是否进入日报的资格规则。
+- P4.1 已交付“全文 TL;DR 来源标识”：深度分析模板新增默认关闭的 `full_text_tldr`；本地代码为结果写入 `__meta.content_source=pdf/abstract_fallback`，PDF 解析失败时不会向模型请求该字段，Markdown/HTML 也只在 `pdf` 时渲染它。普通深度分析会醒目显示其 PDF 全文或摘要降级来源，内部元数据不进入报告；该功能不改变论文是否进入日报的资格规则。新 fingerprint 只使未交付的旧分析契约重跑。
 - 可从人工反馈学习个人偏好，但必须保留可解释的硬相关性门槛，且不能把私有标注上传到外部服务。
 - 定期产出漂移报告：通过率、评分分布、模型变更、关键词/策略变更、源端缺口和失败重试状况。
 

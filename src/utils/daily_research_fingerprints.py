@@ -184,10 +184,10 @@ def build_stage_input_fingerprints(
         },
         "model": _model_settings(settings.SMART_LLM, settings.SMART_LLM.temperature),
         "template": dict(deep_template),
-        # v2 tells list/inline template modules to return JSON arrays instead
-        # of the old blanket string example.  Incomplete cached analysis must
-        # be regenerated against that corrected output contract.
-        "prompt_revision": "daily-deep-analysis-v2",
+        # v3 adds locally asserted PDF/abstract provenance and the optional
+        # full-text TL;DR contract. Incomplete cache entries must be
+        # regenerated so a fallback result can never masquerade as PDF-based.
+        "prompt_revision": "daily-deep-analysis-v3",
     }
 
     return {

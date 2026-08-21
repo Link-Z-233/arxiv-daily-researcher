@@ -33,10 +33,22 @@
       "prompt": "请用200-300字概括论文的主要内容，包括研究背景、方法和结论。",
     },
     {
+      "id": "full_text_tldr",
+      "name": "全文 TL;DR",
+      "enabled": false,  // 仅在已成功解析 PDF 全文时渲染
+      "order": 3,
+      "format": "quote",
+      "format_options": ["quote", "admonition", "plain"],
+      "admonition_type": "abstract",
+      "collapsible": false,
+      "label": "全文 TL;DR（基于 PDF）",
+      "prompt": "仅根据提供的论文全文，用2-3句话概括研究问题、方法和主要结果；不要把摘要中的推测扩展为全文结论。",
+    },
+    {
       "id": "innovations",
       "name": "创新点",
       "enabled": true,
-      "order": 3,
+      "order": 4,
       "format": "list",  // 可选: "list" | "admonition" | "quote"
       "format_options": ["list", "admonition", "quote"],
       "list_style": "bullet",
@@ -49,7 +61,7 @@
       "id": "methodology",
       "name": "研究方法",
       "enabled": true,
-      "order": 4,
+      "order": 5,
       "format": "admonition",  // 可选: "admonition" | "quote" | "plain"
       "format_options": ["admonition", "quote", "plain"],
       "admonition_type": "info",
@@ -62,7 +74,7 @@
       "id": "key_results",
       "name": "关键结果",
       "enabled": true,
-      "order": 5,
+      "order": 6,
       "format": "list",  // 可选: "list" | "quote" | "plain"
       "format_options": ["list", "quote", "plain"],
       "list_style": "bullet",
@@ -74,7 +86,7 @@
       "id": "tech_stack",
       "name": "技术栈",
       "enabled": true,
-      "order": 6,
+      "order": 7,
       "format": "inline",  // 可选: "inline" | "list" | "table"
       "format_options": ["inline", "list", "table"],
       "collapsible": false,
@@ -85,7 +97,7 @@
       "id": "strengths",
       "name": "优点",
       "enabled": true,
-      "order": 7,
+      "order": 8,
       "format": "list",  // 可选: "list" | "admonition"
       "format_options": ["list", "admonition"],
       "list_style": "bullet",
@@ -99,7 +111,7 @@
       "id": "limitations",
       "name": "局限性",
       "enabled": true,
-      "order": 8,
+      "order": 9,
       "format": "list",  // 可选: "list" | "admonition"
       "format_options": ["list", "admonition"],
       "list_style": "bullet",
@@ -113,7 +125,7 @@
       "id": "relevance_to_keywords",
       "name": "关键词相关性",
       "enabled": true,
-      "order": 9,
+      "order": 10,
       "format": "quote",  // 可选: "quote" | "plain"
       "format_options": ["quote", "plain"],
       "collapsible": false,
@@ -124,7 +136,7 @@
       "id": "future_work",
       "name": "未来工作",
       "enabled": false,  // 默认禁用
-      "order": 10,
+      "order": 11,
       "format": "list",  // 可选: "list" | "quote"
       "format_options": ["list", "quote"],
       "list_style": "bullet",
@@ -137,7 +149,7 @@
       "id": "custom_questions",
       "name": "自定义问题",
       "enabled": false,  // 默认禁用
-      "order": 11,
+      "order": 12,
       "format": "qa",  // 可选: "qa" | "list"
       "format_options": ["qa", "list"],
       "collapsible": true,

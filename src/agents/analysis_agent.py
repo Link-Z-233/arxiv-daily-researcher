@@ -17,6 +17,13 @@ from config import settings
 from parsers.mineru_parser import MineruParser
 from utils.llm_request_pool import call_chat_completion, call_responses
 from utils.safe_download import download_external_bytes
+from utils.deep_analysis_contract import (
+    ANALYSIS_META_KEY,
+    CONTENT_SOURCE_ABSTRACT_FALLBACK,
+    CONTENT_SOURCE_KEY,
+    CONTENT_SOURCE_PDF,
+    FULL_TEXT_TLDR_FIELD,
+)
 from scoring_policy import (
     CORE_RELEVANCE_V2,
     LEGACY_WEIGHTED_KEYWORD_V1,
@@ -129,6 +136,7 @@ class Stage2Response(BaseModel):
     relevance_to_keywords: Optional[str] = None
     future_work: Optional[Union[List[str], str]] = None
     custom_answers: Optional[Dict[str, str]] = None
+    full_text_tldr: Optional[str] = None
 
 
 def _has_usable_analysis_content(value: Any) -> bool:
@@ -1032,13 +1040,17 @@ class AnalysisAgent:
         返回:
             Optional[Dict]: 分析结果字典，失败时返回None
         """
-        # 尝试下载并解析PDF
+        # 尝试下载并解析PDF。来源标记必须由本地代码写入，不能相信
+        # 模型自行声明的 ``content_source``；它决定全文 TL;DR 是否能
+        # 出现在日报中。
         pdf_text = self._download_and_parse_pdf(pdf_url)
+        content_source = CONTENT_SOURCE_PDF
 
         if not pdf_text:
             if fallback_to_abstract:
                 logger.warning(f"PDF解析失败 [{title[:50]}]，使用摘要作为降级方案")
                 pdf_text = abstract
+                content_source = CONTENT_SOURCE_ABSTRACT_FALLBACK
             else:
                 logger.error(f"PDF解析失败 [{title[:50]}]，且未启用降级方案")
                 return None
@@ -1049,6 +1061,15 @@ class AnalysisAgent:
 
         # 获取启用的模块
         enabled_modules = [m for m in modules if m.get("enabled", True)]
+        if content_source != CONTENT_SOURCE_PDF:
+            # Do not ask the model to manufacture a full-text conclusion from
+            # an abstract fallback.  The renderer has the same guard for old
+            # or provider-injected fields as a defense in depth.
+            enabled_modules = [
+                module
+                for module in enabled_modules
+                if module.get("id") != FULL_TEXT_TLDR_FIELD
+            ]
 
         # 构建字段提示词字符串
         field_prompts_lines = []
@@ -1140,6 +1161,10 @@ class AnalysisAgent:
                 raise
 
             result = validate_deep_analysis_payload(result, self.deep_template)
+            # Override any provider-supplied metadata after validation. This
+            # is a provenance assertion about locally observed PDF parsing,
+            # not an LLM claim.
+            result[ANALYSIS_META_KEY] = {CONTENT_SOURCE_KEY: content_source}
 
             logger.info(f"深度分析完成 [{title[:50]}]")
             return result
