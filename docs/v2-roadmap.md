@@ -103,6 +103,25 @@ V2 将把四个概念分离，而不是继续把所有内容累加进 `total_sco
 
 **验收：** `0b13a39` 已实现上述导出、标签校验、阈值扫描与报告；同一数据库和同一标签集重复运行得到一致指标，损坏/重复标签不会静默被接受，导出/评测不读取或打印 `.env`。
 
+### P1.1 — 评分漂移与运行健康诊断（已实现，独立提交）
+
+- 新增只读 CLI：
+
+  ```bash
+  PYTHONPATH=src venv/bin/python -m utils.scoring_evaluation diagnose \
+    --db data/daily_research/daily_research.db \
+    --recent-runs 14 --baseline-runs 28 \
+    --json-output data/diagnostics/daily-research.json \
+    --markdown-output data/diagnostics/daily-research.md
+  ```
+
+- 按“最近运行窗口 / 更早基线窗口”比较资格率、评分分布（均值、中位数、四分位和固定分箱）、`core_relevance_v2` 的内容相关度与 legacy 总分，并显式显示样本不足而非补造结论。
+- 汇总评分策略、policy fingerprint、模型名/温度的组合变化；不安全或损坏的标识只以短 fingerprint 表示。它只揭示策略变化，不读取或导出研究上下文、关键词原文、API 地址或凭据。
+- 汇总运行状态、当前 `daily_papers` 的阶段状态、持久化重试计数、扫描收据、来源候选量、失败/缺失/损坏收据和 outbox 堆积；不输出论文内容、原始错误、arXiv 查询、报告路径、通知载荷、Webhook 或密码。
+- 工具用 SQLite `mode=ro` + 单一只读快照工作，不创建/迁移数据库，不会触发评分、通知或重试。`daily_papers` 是可恢复的当前状态账本而不是逐次事件表，因此报告明确将重试数标为持久化总计；缺失扫描收据只意味着覆盖证据不足，不单独断言抓取失败。
+
+**验收：** 有策略/模型和分数变化时可重现差异；失败扫描与重试查询进入聚合观察；诊断 JSON/Markdown 不包含刻意注入的私密 audit、错误或 outbox 字段；CLI 和 API 均由回归测试覆盖。
+
 ### P2 — 新的默认资格/排序策略（已实现，独立提交）
 
 - 已引入 `core_relevance_v2` 与 `legacy_weighted_keyword_v1`。旧配置未声明策略时继续使用 legacy；新生成的配置可显式选择 V2，并可在 WebUI 回退比较。
@@ -147,7 +166,7 @@ OpenReview API V2 支持 invitation、时间水位和分页，技术上适合“
 - 在 P1 标签足够且 P2 已稳定后，才评估全量、限速的二次 LLM 复核。
 - P4.1 已交付“全文 TL;DR 来源标识”：深度分析模板新增默认关闭的 `full_text_tldr`；本地代码为结果写入 `__meta.content_source=pdf/abstract_fallback`，PDF 解析失败时不会向模型请求该字段，Markdown/HTML 也只在 `pdf` 时渲染它。普通深度分析会醒目显示其 PDF 全文或摘要降级来源，内部元数据不进入报告；该功能不改变论文是否进入日报的资格规则。新 fingerprint 只使未交付的旧分析契约重跑。
 - 可从人工反馈学习个人偏好，但必须保留可解释的硬相关性门槛，且不能把私有标注上传到外部服务。
-- 定期产出漂移报告：通过率、评分分布、模型变更、关键词/策略变更、源端缺口和失败重试状况。
+- P1.1 已提供本地、只读的漂移报告：通过率、评分分布、模型/策略变更、来源收据缺口和失败重试状况。只有标注评测证明有改进时，才改变生产资格规则。
 
 ## 操作与审计建议
 
