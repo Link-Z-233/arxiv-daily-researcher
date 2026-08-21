@@ -1,4 +1,6 @@
 import json
+import errno
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -151,6 +153,24 @@ class ConfigIOReliabilityTests(unittest.TestCase):
                     _atomic_write_text(path, '{"new": true}\n')
 
             self.assertEqual(path.read_text(encoding="utf-8"), '{"old": true}\n')
+            self.assertEqual(list(Path(temp_dir).glob(".*.tmp")), [])
+
+    def test_bind_mounted_file_is_rewritten_in_place_when_replace_is_busy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / ".env"
+            path.write_text("OLD=value\n", encoding="utf-8")
+            inode_before = path.stat().st_ino
+            os.chmod(path, 0o600)
+
+            busy = OSError(errno.EBUSY, "Device or resource busy")
+            with patch("utils.config_io.os.replace", side_effect=busy):
+                _atomic_write_text(path, "NEW=value\n")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "NEW=value\n")
+            # The mounted inode must survive: renaming it away would unmount
+            # the host file inside the container.
+            self.assertEqual(path.stat().st_ino, inode_before)
+            self.assertEqual(oct(path.stat().st_mode & 0o777), "0o600")
             self.assertEqual(list(Path(temp_dir).glob(".*.tmp")), [])
 
     def test_config_and_env_writes_are_atomic_and_keep_expected_permissions(self):

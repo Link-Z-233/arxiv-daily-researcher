@@ -4,6 +4,7 @@ Config I/O module - shared read/write logic for .env and configs/config.json.
 Used by: src/utils/setup_wizard.py, src/webui/config_panel.py
 """
 
+import errno
 import json
 import json5
 import os
@@ -281,9 +282,22 @@ def _atomic_write_text(
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-        temporary_path = None
-        os.chmod(path, desired_mode)
+        try:
+            os.replace(temporary_path, path)
+        except OSError as exc:
+            if exc.errno not in (errno.EBUSY, errno.EPERM, errno.EXDEV):
+                raise
+            # Single-file bind mounts (e.g. Docker ``-v ./.env:/app/.env``)
+            # reject rename() onto the mount point with EBUSY.  Rewrite the
+            # mounted file in place instead; the inode survives, so the host
+            # ownership and mode stay untouched.
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        else:
+            temporary_path = None
+            os.chmod(path, desired_mode)
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
