@@ -161,21 +161,29 @@ def render(_env_values: dict, config_values: dict):
 
 def collect(_env_values: dict, _config_values: dict) -> dict:
     """Collect current values from session state. Returns config updates."""
+    # Widgets only render for the active strategy, so session state may not
+    # hold keys owned by the other branch.  Fall back to the values already
+    # on disk before defaults; otherwise saving an unrelated tab would
+    # silently rewrite the user's tuned formula.  config_values arrives
+    # already flattened by load_config().
+    flat = _config_values or {}
+
+    def current(key: str, default):
+        return st.session_state.get(key, flat.get(key, default))
+
     result = {
-        "score_strategy": st.session_state.get("score_strategy", "core_relevance_v2"),
+        "score_strategy": current("score_strategy", "core_relevance_v2"),
         # Once the user visits and saves the scoring tab, their selected
         # strategy becomes explicit.  Untouched legacy files remain legacy
         # because config_panel preserves the flat marker until this update.
         "score_strategy_explicit": True,
-        "core_relevance_threshold": st.session_state.get("core_relevance_threshold", 6.0),
-        "core_keyword_min_score": st.session_state.get("core_keyword_min_score", 7.0),
-        "reference_ranking_weight": st.session_state.get("reference_ranking_weight", 0.25),
-        "passing_score_base": st.session_state.get("passing_score_base", 5.0),
-        "passing_score_weight_coefficient": st.session_state.get(
-            "passing_score_weight_coefficient", 3.0
-        ),
-        "max_score_per_keyword": st.session_state.get("max_score_per_keyword", 10),
-        "enable_author_bonus": st.session_state.get("enable_author_bonus", False),
+        "core_relevance_threshold": current("core_relevance_threshold", 6.0),
+        "core_keyword_min_score": current("core_keyword_min_score", 7.0),
+        "reference_ranking_weight": current("reference_ranking_weight", 0.25),
+        "passing_score_base": current("passing_score_base", 5.0),
+        "passing_score_weight_coefficient": current("passing_score_weight_coefficient", 3.0),
+        "max_score_per_keyword": current("max_score_per_keyword", 10),
+        "enable_author_bonus": current("enable_author_bonus", False),
     }
 
     if result["enable_author_bonus"]:
