@@ -415,6 +415,27 @@ class IdentityStoreTests(unittest.TestCase):
             self.assertEqual(record["retry_count"], 1)
             self.assertIn("缓存无效", record["last_error"])
 
+    def test_nonrenderable_analysis_cache_is_cleared_and_marked_retryable(self):
+        """A provider metadata/error object is not a completed analysis."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            paper = _paper("2501.12345v1")
+            run_id = store.start_run(1)
+            store.upsert_paper_seen(run_id, "arxiv", paper)
+            store.update_analysis(run_id, "arxiv", paper.paper_id, {"summary": "analysis"})
+            with store._connect() as conn:
+                conn.execute(
+                    "UPDATE daily_papers SET analysis_json = ? WHERE source = ? AND paper_id = ?",
+                    ('{"provider_error": "empty output"}', "arxiv", paper.paper_id),
+                )
+
+            self.assertIsNone(store.hydrate_analysis(store.get_paper_record("arxiv", paper.paper_id)))
+            record = store.get_paper_record("arxiv", paper.paper_id)
+            self.assertEqual(record["analysis_status"], "failed")
+            self.assertIsNone(record["analysis_json"])
+            self.assertEqual(record["retry_count"], 1)
+            self.assertIn("可渲染内容", record["last_error"])
+
     def test_changed_score_input_invalidates_all_incomplete_downstream_stages(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "daily.db")

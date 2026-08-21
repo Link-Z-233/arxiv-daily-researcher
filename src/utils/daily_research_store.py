@@ -1828,10 +1828,17 @@ class DailyResearchStore:
             # Validate known fields while preserving unknown template fields.
             # Future/custom report modules may add keys that Stage2Response does
             # not know yet, so returning model_dump() here would silently lose
-            # them during retry hydration.
-            from agents.analysis_agent import Stage2Response
+            # them during retry hydration.  The shared validator additionally
+            # rejects a nonempty metadata/error object that contains no
+            # renderable enabled module; treating that as success used to hide
+            # a failed deep-analysis call behind an empty report section.
+            from agents.analysis_agent import validate_deep_analysis_payload
+            from config import settings
 
-            Stage2Response.model_validate(payload)
+            validate_deep_analysis_payload(
+                payload,
+                settings.load_report_template("deep_analysis_template.json"),
+            )
         except Exception as exc:
             # A successful status with unreadable data is a recoverable cache
             # corruption, not a valid result.  Clear it and mark the stage

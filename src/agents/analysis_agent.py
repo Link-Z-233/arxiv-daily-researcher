@@ -7,7 +7,7 @@ import threading
 import unicodedata
 import requests
 import fitz  # pymupdf
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Mapping, Union
 from pathlib import Path
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
@@ -15,7 +15,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 
 from config import settings
 from parsers.mineru_parser import MineruParser
-from utils.llm_request_pool import call_chat_completion
+from utils.llm_request_pool import call_chat_completion, call_responses
 from utils.safe_download import download_external_bytes
 from scoring_policy import (
     CORE_RELEVANCE_V2,
@@ -32,6 +32,10 @@ class ScoreValidationError(ValueError):
     persisted.  The daily pipeline can then retry that exact version without
     reporting an arbitrary recommendation.
     """
+
+
+class LLMResponseError(RuntimeError):
+    """Raised when an LLM provider returned no usable response text."""
 
 
 def _normalized_person_name(value: Any) -> str:
@@ -112,15 +116,86 @@ class Stage2Response(BaseModel):
 
     chinese_title: Optional[str] = None
     summary: Optional[str] = None
-    innovations: Optional[List[str]] = None
+    # List-oriented template fields historically appeared as a single string
+    # because the old prompt rendered every field as ``"..."``.  Preserve
+    # those renderable historical values while new prompts explicitly request
+    # arrays for list/inline modules.
+    innovations: Optional[Union[List[str], str]] = None
     methodology: Optional[str] = None
-    key_results: Optional[str] = None
-    tech_stack: Optional[List[str]] = None
-    strengths: Optional[List[str]] = None
-    limitations: Optional[List[str]] = None
+    key_results: Optional[Union[List[str], str]] = None
+    tech_stack: Optional[Union[List[str], str]] = None
+    strengths: Optional[Union[List[str], str]] = None
+    limitations: Optional[Union[List[str], str]] = None
     relevance_to_keywords: Optional[str] = None
-    future_work: Optional[str] = None
+    future_work: Optional[Union[List[str], str]] = None
     custom_answers: Optional[Dict[str, str]] = None
+
+
+def _has_usable_analysis_content(value: Any) -> bool:
+    """Whether one deep-analysis field contains renderable, nonempty data."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        return bool(value) and all(
+            isinstance(item, str) and bool(item.strip()) for item in value
+        )
+    if isinstance(value, dict):
+        return bool(value) and all(
+            isinstance(key, str)
+            and bool(key.strip())
+            and isinstance(item, str)
+            and bool(item.strip())
+            for key, item in value.items()
+        )
+    return False
+
+
+def validate_deep_analysis_payload(
+    payload: Any, deep_template: Optional[Mapping[str, Any]] = None
+) -> Dict[str, Any]:
+    """Validate a persisted or fresh deep-analysis result without dropping custom fields.
+
+    ``Stage2Response`` validates the built-in field types, while report templates
+    can introduce future/custom module IDs.  Keep those IDs intact, but require
+    at least one enabled module to have usable content.  Otherwise a gateway's
+    ``{\"error\": ...}``/metadata object can be marked as successful analysis and
+    later render as an apparently missing analysis.
+
+    Historical partial analyses remain readable: an enabled module does not
+    need every sibling field to be present, but a result with no usable report
+    field is never accepted as a completed stage.
+    """
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("深度分析必须是非空 JSON 对象")
+
+    Stage2Response.model_validate(payload)
+
+    modules = deep_template.get("modules", []) if isinstance(deep_template, Mapping) else []
+    enabled_ids = set()
+    for module in modules:
+        if not isinstance(module, Mapping) or not module.get("enabled", True):
+            continue
+        module_id = module.get("id")
+        if not isinstance(module_id, str) or not module_id.strip():
+            continue
+        # A custom-question module without questions is intentionally absent
+        # from the generated prompt and therefore cannot produce a response.
+        if module_id == "custom_questions" and not module.get("questions"):
+            continue
+        enabled_ids.add(module_id)
+
+    # Old templates and unit-test fixtures may not list modules.  In that
+    # case known Stage2 fields still provide a stable backward-compatible
+    # definition of renderable analysis content.
+    candidate_ids = enabled_ids or set(Stage2Response.model_fields)
+    if not any(
+        field_id in payload and _has_usable_analysis_content(payload[field_id])
+        for field_id in candidate_ids
+    ):
+        expected = ", ".join(sorted(candidate_ids)) or "已启用模板字段"
+        raise ValueError(f"深度分析未包含可渲染内容（期望字段: {expected}）")
+
+    return payload
 
 
 class AnalysisAgent:
@@ -154,6 +229,177 @@ class AnalysisAgent:
     # 带重试的 LLM / HTTP 调用封装
     # ======================================================================
 
+    @staticmethod
+    def _text_from_parts(value: Any) -> Optional[str]:
+        """Extract text from SDK strings, content arrays, or typed objects."""
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        if isinstance(value, dict):
+            candidate = value.get("text")
+            return candidate.strip() if isinstance(candidate, str) and candidate.strip() else None
+        if not isinstance(value, (list, tuple)):
+            return None
+
+        parts = []
+        for part in value:
+            if isinstance(part, dict):
+                candidate = part.get("text")
+            else:
+                candidate = getattr(part, "text", None)
+            if isinstance(candidate, str) and candidate.strip():
+                parts.append(candidate.strip())
+        return "\n".join(parts).strip() or None
+
+    @classmethod
+    def _extract_chat_text(cls, response: Any) -> Optional[str]:
+        """Extract final text from a chat-completions response."""
+        choices = response.get("choices") if isinstance(response, dict) else getattr(response, "choices", None)
+        if not isinstance(choices, (list, tuple)) or not choices:
+            return None
+        message = choices[0].get("message") if isinstance(choices[0], dict) else getattr(choices[0], "message", None)
+        if message is None and isinstance(choices[0], dict):
+            message = choices[0].get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            reasoning = message.get("reasoning_content")
+        else:
+            content = getattr(message, "content", None)
+            reasoning = getattr(message, "reasoning_content", None)
+
+        text = cls._text_from_parts(content)
+        if text:
+            return text
+        # A few reasoning-model gateways expose the only generated text under
+        # reasoning_content.  It is still validated by the caller (JSON/schema
+        # parsing), so it cannot silently become a successful fake result.
+        return cls._text_from_parts(reasoning)
+
+    @classmethod
+    def _extract_responses_text(cls, response: Any) -> Optional[str]:
+        """Extract text from the OpenAI Responses API and compatible gateways."""
+        output_text = response.get("output_text") if isinstance(response, dict) else getattr(response, "output_text", None)
+        text = cls._text_from_parts(output_text)
+        if text:
+            return text
+
+        output = response.get("output") if isinstance(response, dict) else getattr(response, "output", None)
+        if not isinstance(output, (list, tuple)):
+            return None
+        parts = []
+        for item in output:
+            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+            item_text = cls._text_from_parts(content)
+            if item_text:
+                parts.append(item_text)
+        return "\n".join(parts).strip() or None
+
+    @staticmethod
+    def _usage_value(usage: Any, *names: str) -> Optional[int]:
+        if usage is None:
+            return None
+        for name in names:
+            value = usage.get(name) if isinstance(usage, dict) else getattr(usage, name, None)
+            if isinstance(value, bool):
+                continue
+            try:
+                if value is not None:
+                    return max(0, int(value))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _response_usage(response: Any) -> Any:
+        return response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+
+    @classmethod
+    def _record_token_usage(cls, model_name: str, estimated_prompt_tokens: int, usage: Any) -> None:
+        if not settings.TOKEN_TRACKING_ENABLED or usage is None:
+            return
+        from utils.token_counter import token_counter
+
+        prompt_tokens = cls._usage_value(usage, "prompt_tokens", "input_tokens")
+        completion_tokens = cls._usage_value(usage, "completion_tokens", "output_tokens")
+        token_counter.add(
+            model_name,
+            estimated_prompt_tokens if prompt_tokens is None else prompt_tokens,
+            0 if completion_tokens is None else completion_tokens,
+        )
+
+    def _call_llm_with_fallback(
+        self,
+        client: Any,
+        model: str,
+        prompt: str,
+        temperature: Optional[float],
+        response_format: Optional[Dict[str, str]] = None,
+    ) -> tuple[str, Any]:
+        """Call chat completions, then an optional Responses API.
+
+        Provider-specific response shapes are normalized here.  A provider
+        that returns no text remains a hard failure so the surrounding retry
+        policy can persist a failed stage instead of accepting a placeholder.
+        """
+        last_error: Optional[BaseException] = None
+        chat_kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if temperature is not None:
+            chat_kwargs["temperature"] = temperature
+        if response_format is not None:
+            chat_kwargs["response_format"] = response_format
+
+        try:
+            response = call_chat_completion(client, **chat_kwargs)
+            text = self._extract_chat_text(response)
+            if text:
+                return text, self._response_usage(response)
+            last_error = LLMResponseError("chat.completions 返回空正文")
+        except Exception as exc:
+            last_error = exc
+
+        responses = getattr(client, "responses", None)
+        if responses is not None and callable(getattr(responses, "create", None)):
+            response_kwargs = {"model": model, "input": prompt}
+            if temperature is not None:
+                response_kwargs["temperature"] = temperature
+            if response_format is not None:
+                # Responses API names the equivalent of chat.com's
+                # ``response_format`` as ``text.format``.
+                response_kwargs["text"] = {"format": response_format}
+            try:
+                response = call_responses(client, **response_kwargs)
+                text = self._extract_responses_text(response)
+                if text:
+                    return text, self._response_usage(response)
+                last_error = LLMResponseError("Responses API 返回空正文")
+            except TypeError as exc:
+                # Some compatible gateways accept the endpoint but reject
+                # optional OpenAI parameters. Retry once with only the
+                # portable model/input shape; a real empty response remains a
+                # failure for the outer retry policy.
+                last_error = exc
+                minimal_response_kwargs = {
+                    key: value
+                    for key, value in response_kwargs.items()
+                    if key not in {"temperature", "text"}
+                }
+                if minimal_response_kwargs != response_kwargs:
+                    try:
+                        response = call_responses(client, **minimal_response_kwargs)
+                        text = self._extract_responses_text(response)
+                        if text:
+                            return text, self._response_usage(response)
+                        last_error = LLMResponseError("Responses API 返回空正文")
+                    except Exception as retry_exc:
+                        last_error = retry_exc
+            except Exception as exc:
+                last_error = exc
+
+        raise LLMResponseError("LLM 未返回可用正文") from last_error
+
     def _call_cheap_llm(self, prompt: str) -> str:
         """调用低成本LLM（JSON模式），带自动重试。"""
         estimated_prompt_tokens = len(prompt) // 4
@@ -166,12 +412,12 @@ class AnalysisAgent:
         )
         def _do_call():
             try:
-                resp = call_chat_completion(
+                content, usage = self._call_llm_with_fallback(
                     self.cheap_client,
-                    model=settings.CHEAP_LLM.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=settings.CHEAP_LLM.temperature,
-                    response_format={"type": "json_object"},
+                    settings.CHEAP_LLM.model_name,
+                    prompt,
+                    settings.CHEAP_LLM.temperature,
+                    {"type": "json_object"},
                 )
             except Exception:
                 if settings.TOKEN_TRACKING_ENABLED:
@@ -179,15 +425,10 @@ class AnalysisAgent:
 
                     token_counter.add(settings.CHEAP_LLM.model_name, estimated_prompt_tokens, 0)
                 raise
-            if settings.TOKEN_TRACKING_ENABLED and resp.usage:
-                from utils.token_counter import token_counter
-
-                token_counter.add(
-                    settings.CHEAP_LLM.model_name,
-                    resp.usage.prompt_tokens,
-                    resp.usage.completion_tokens,
-                )
-            return resp.choices[0].message.content
+            self._record_token_usage(
+                settings.CHEAP_LLM.model_name, estimated_prompt_tokens, usage
+            )
+            return content
 
         return _do_call()
 
@@ -203,11 +444,11 @@ class AnalysisAgent:
         )
         def _do_call():
             try:
-                resp = call_chat_completion(
+                content, usage = self._call_llm_with_fallback(
                     self.cheap_client,
-                    model=settings.CHEAP_LLM.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
+                    settings.CHEAP_LLM.model_name,
+                    prompt,
+                    0.3,
                 )
             except Exception:
                 if settings.TOKEN_TRACKING_ENABLED:
@@ -215,15 +456,10 @@ class AnalysisAgent:
 
                     token_counter.add(settings.CHEAP_LLM.model_name, estimated_prompt_tokens, 0)
                 raise
-            if settings.TOKEN_TRACKING_ENABLED and resp.usage:
-                from utils.token_counter import token_counter
-
-                token_counter.add(
-                    settings.CHEAP_LLM.model_name,
-                    resp.usage.prompt_tokens,
-                    resp.usage.completion_tokens,
-                )
-            return resp.choices[0].message.content.strip()
+            self._record_token_usage(
+                settings.CHEAP_LLM.model_name, estimated_prompt_tokens, usage
+            )
+            return content.strip()
 
         return _do_call()
 
@@ -239,12 +475,12 @@ class AnalysisAgent:
         )
         def _do_call():
             try:
-                resp = call_chat_completion(
+                content, usage = self._call_llm_with_fallback(
                     self.smart_client,
-                    model=settings.SMART_LLM.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=settings.SMART_LLM.temperature,
-                    response_format={"type": "json_object"},
+                    settings.SMART_LLM.model_name,
+                    prompt,
+                    settings.SMART_LLM.temperature,
+                    {"type": "json_object"},
                 )
             except Exception:
                 if settings.TOKEN_TRACKING_ENABLED:
@@ -252,15 +488,10 @@ class AnalysisAgent:
 
                     token_counter.add(settings.SMART_LLM.model_name, estimated_prompt_tokens, 0)
                 raise
-            if settings.TOKEN_TRACKING_ENABLED and resp.usage:
-                from utils.token_counter import token_counter
-
-                token_counter.add(
-                    settings.SMART_LLM.model_name,
-                    resp.usage.prompt_tokens,
-                    resp.usage.completion_tokens,
-                )
-            return resp.choices[0].message.content
+            self._record_token_usage(
+                settings.SMART_LLM.model_name, estimated_prompt_tokens, usage
+            )
+            return content
 
         return _do_call()
 
@@ -840,7 +1071,15 @@ class AnalysisAgent:
             else:
                 # 普通模块
                 field_prompts_lines.append(f"\n{module_id}: {module_prompt}")
-                output_fields.append(f'  "{module_id}": "..."')
+                # The renderer supports list values for both list and inline
+                # modules.  Tell the model that explicitly; the former
+                # blanket string example made valid list-oriented content
+                # needlessly ambiguous and could later disappear on cache
+                # hydration after a restart.
+                if module.get("format") in {"list", "inline"}:
+                    output_fields.append(f'  "{module_id}": ["...", "..."]')
+                else:
+                    output_fields.append(f'  "{module_id}": "..."')
 
         fields_str = ",\n".join(output_fields)
         field_prompts_str = "\n".join(field_prompts_lines)
@@ -860,6 +1099,10 @@ class AnalysisAgent:
                 ),
                 field_prompts=field_prompts_str,
             )
+            # The default template lists field instructions but not an actual
+            # JSON shape.  Include one here so list/inline modules cannot be
+            # mistaken for the old blanket string contract.
+            prompt += f"\n\n输出 JSON 对象字段示例:\n{{\n{fields_str}\n}}"
         else:
             # 备用格式
             prompt = f"""论文标题: {title}
@@ -879,6 +1122,9 @@ class AnalysisAgent:
 }}
 """
 
+        if isinstance(system_prompt, str) and system_prompt.strip():
+            prompt = f"{system_prompt.strip()}\n\n{prompt}"
+
         # 添加输出格式说明
         prompt += f"\n\n{prompts_config.get('field_output_format', '使用JSON格式输出。')}"
 
@@ -893,14 +1139,13 @@ class AnalysisAgent:
                 logger.error(f"原始内容（前500字符）: {content[:500]}")
                 raise
 
+            result = validate_deep_analysis_payload(result, self.deep_template)
+
             logger.info(f"深度分析完成 [{title[:50]}]")
             return result
 
         except Exception as e:
             logger.error(f"深度分析失败 [{title[:50]}]: {e}")
-            import traceback
-
-            traceback.print_exc()
             return None
 
     def _download_and_parse_pdf(self, pdf_url: str) -> Optional[str]:

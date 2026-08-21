@@ -56,6 +56,11 @@ class LLMRequestPool:
         self._wait_for_slot()
         return client.chat.completions.create(**kwargs)
 
+    def call_responses(self, client: Any, **kwargs):
+        """Call an optional Responses API through the same global limiter."""
+        self._wait_for_slot()
+        return client.responses.create(**kwargs)
+
 
 llm_request_pool = LLMRequestPool()
 
@@ -63,3 +68,8 @@ llm_request_pool = LLMRequestPool()
 def call_chat_completion(client: Any, **kwargs):
     """Convenience wrapper for callers that do not need the pool instance."""
     return llm_request_pool.call_chat_completion(client, **kwargs)
+
+
+def call_responses(client: Any, **kwargs):
+    """Convenience wrapper for clients exposing ``responses.create``."""
+    return llm_request_pool.call_responses(client, **kwargs)

@@ -184,7 +184,10 @@ def build_stage_input_fingerprints(
         },
         "model": _model_settings(settings.SMART_LLM, settings.SMART_LLM.temperature),
         "template": dict(deep_template),
-        "prompt_revision": "daily-deep-analysis-v1",
+        # v2 tells list/inline template modules to return JSON arrays instead
+        # of the old blanket string example.  Incomplete cached analysis must
+        # be regenerated against that corrected output contract.
+        "prompt_revision": "daily-deep-analysis-v2",
     }
 
     return {
