@@ -128,3 +128,53 @@ class WebUITriggerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StopRequestTests(unittest.TestCase):
+    def test_monitor_stop_requests_signals_matching_child(self):
+        import subprocess
+        import threading
+        import time
+
+        from utils import webui_trigger
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            # 子进程模拟 main.py：把 SIGTERM 当中断处理，以 130 退出。
+            child_code = (
+                "import signal, sys, time\n"
+                "signal.signal(signal.SIGTERM, lambda *a: sys.exit(130))\n"
+                "time.sleep(60)\n"
+            )
+            child = subprocess.Popen(
+                [sys.executable, "-c", child_code],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            monitor = threading.Thread(
+                target=webui_trigger._monitor_stop_requests,
+                args=(child, data_dir),
+                daemon=True,
+            )
+            monitor.start()
+            time.sleep(0.5)
+
+            webui_trigger.request_stop(data_dir, child.pid)
+
+            child.wait(timeout=15)
+            monitor.join(timeout=5)
+            self.assertEqual(child.returncode, 130)
+            # 停止请求被消费，不残留。
+            self.assertEqual(
+                list(webui_trigger.stop_request_directory(data_dir).glob("stop_*.json")),
+                [],
+            )
+
+    def test_request_stop_writes_atomic_json_with_pid(self):
+        from utils import webui_trigger
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = webui_trigger.request_stop(Path(temp_dir), 4242)
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["pid"], 4242)
+            self.assertEqual(target.name, "stop_4242.json")

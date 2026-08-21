@@ -188,6 +188,29 @@ def _latest_run_log() -> Optional[Path]:
     return None
 
 
+def _request_worker_stop(active_locks: list[tuple[Path, Optional[int]]]) -> None:
+    """向 worker 写停止请求（仅对 WebUI 触发的运行生效，尽力而为）。"""
+    from utils.webui_trigger import request_stop
+
+    stopped = []
+    for _lock_path, pid in active_locks:
+        if pid is None:
+            continue
+        try:
+            request_stop(_LOCK_DIR.parent, pid)
+            stopped.append(pid)
+        except OSError as exc:
+            st.warning(t("rm_stop_failed").format(err=exc))
+            return
+    if stopped:
+        st.toast(
+            t("rm_stop_sent").format(pids=", ".join(str(p) for p in stopped)),
+            icon="⏹",
+        )
+    else:
+        st.info(t("rm_stop_no_pid"))
+
+
 def _render_live_status_body() -> None:
     """实时状态渲染体：运行锁 + 触发状态 + 活跃日志尾部。
 
@@ -270,6 +293,19 @@ def _render_run_control() -> None:
             "▶ " + t("run_now_btn"), key="rm_run_now",
             type="primary", use_container_width=True, disabled=not can_run,
         )
+        if is_running:
+            # 二次确认放在 popover 里，避免误触；停止信号走共享卷，
+            # 由 worker 侧 webui_trigger 的 stop 监听转发 SIGTERM。
+            with st.popover(
+                "⏹ " + t("rm_stop_btn"),
+                use_container_width=True,
+                disabled=not is_running,
+            ):
+                st.warning(t("rm_stop_confirm_hint"))
+                if st.button(
+                    t("rm_stop_confirm"), key="rm_stop_confirm", type="primary"
+                ):
+                    _request_worker_stop(active_locks)
     with col_status:
         auto_refresh = st.toggle(
             t("rm_auto_refresh"),

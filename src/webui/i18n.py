@@ -75,6 +75,23 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "{n} more runs ({per}/run)",
     },
     "rm_queue_all": {"zh": "下次运行全量处理", "en": "All on next run"},
+    "rm_stop_btn": {"zh": "停止运行", "en": "Stop run"},
+    "rm_stop_confirm": {"zh": "确认停止", "en": "Confirm stop"},
+    "rm_stop_confirm_hint": {
+        "zh": "将向正在运行的进程发送停止信号：已完成阶段保留，未完成论文留队待重试。"
+              "仅对 WebUI 触发的运行生效。",
+        "en": "Sends a stop signal to the running process: finished stages are "
+              "kept and unfinished papers stay queued. WebUI-triggered runs only.",
+    },
+    "rm_stop_sent": {
+        "zh": "停止请求已发送（PID {pids}），几秒内生效。",
+        "en": "Stop requested (PID {pids}); takes effect within seconds.",
+    },
+    "rm_stop_failed": {"zh": "停止请求写入失败: {err}", "en": "Failed to write stop request: {err}"},
+    "rm_stop_no_pid": {
+        "zh": "未能从锁文件解析出 PID，无法发送停止请求。",
+        "en": "No PID parsed from the lock file; cannot request a stop.",
+    },
     # ── usage.py ────────────────────────────────────────────────────────
     "usage_title": {"zh": "LLM Token 用量", "en": "LLM Token Usage"},
     "usage_hint": {

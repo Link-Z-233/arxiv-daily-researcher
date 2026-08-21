@@ -16,6 +16,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -280,6 +282,61 @@ def _remove_own_pid_file(pid_file: Optional[Path], pid: Optional[int]) -> None:
         pass
 
 
+def stop_request_directory(data_dir: Path) -> Path:
+    """Stop requests are small JSON files under ``<data>/run/stop_requests``."""
+    directory = Path(data_dir) / "run" / "stop_requests"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def request_stop(data_dir: Path, pid: int) -> Path:
+    """Atomically ask the worker to stop the run owning ``pid`` (best effort)."""
+    target = stop_request_directory(data_dir) / f"stop_{int(pid)}.json"
+    _atomic_write_json(
+        target,
+        {
+            "schema_version": 1,
+            "pid": int(pid),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return target
+
+
+def _monitor_stop_requests(
+    child: subprocess.Popen,
+    data_dir: Path,
+    *,
+    poll_seconds: float = 2.0,
+) -> None:
+    """Watch the shared stop-request directory and SIGTERM the child on match.
+
+    Runs as a daemon thread next to ``child.wait()``.  ``main.py`` maps
+    SIGTERM to its interrupt path, so the pipeline records an interrupted
+    state and its durable queue keeps already-completed stages.  The consumed
+    request is removed; requests for other PIDs are left for their owners.
+    """
+    directory = stop_request_directory(data_dir)
+    while child.poll() is None:
+        try:
+            for request in directory.glob("stop_*.json"):
+                try:
+                    payload = json.loads(request.read_text(encoding="utf-8"))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+                if payload.get("pid") == child.pid:
+                    request.unlink(missing_ok=True)
+                    print(
+                        f"[webui-trigger] Stop requested for PID {child.pid}; sending SIGTERM",
+                        file=sys.stderr,
+                    )
+                    child.send_signal(signal.SIGTERM)
+                    return
+        except OSError:
+            pass
+        time.sleep(poll_seconds)
+
+
 def execute_trigger_request(
     request_path: Path,
     *,
@@ -308,10 +365,24 @@ def execute_trigger_request(
         command = build_main_command(payload, root)
         _write_status(data_dir, payload, "running", command=command)
         child = subprocess.Popen(command, cwd=str(root))
+        stop_monitor = threading.Thread(
+            target=_monitor_stop_requests,
+            args=(child, data_dir),
+            daemon=True,
+            name=f"stop-monitor-{child.pid}",
+        )
+        stop_monitor.start()
         if pid_file is not None:
             _write_pid_file(Path(pid_file), child.pid)
         return_code = child.wait()
-        state = "succeeded" if return_code == 0 else "failed"
+        if return_code == 0:
+            state = "succeeded"
+        elif return_code == 130:
+            # main.py maps SIGTERM to its interrupt path; distinguish it from
+            # a genuine failure so the UI can explain what happened.
+            state = "interrupted"
+        else:
+            state = "failed"
         _write_status(data_dir, payload, state, return_code=return_code, command=command)
         return return_code
     except KeyboardInterrupt:
