@@ -81,7 +81,6 @@ def render(env_values: dict, _config_values: dict):
             env_key="CHEAP_LLM__API_KEY",
             field_key="cheap_api_key",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
     with col4:
         default_model = env_values.get("CHEAP_LLM__MODEL_NAME", preset["cheap"])
@@ -152,7 +151,6 @@ def render(env_values: dict, _config_values: dict):
             env_key="SMART_LLM__API_KEY",
             field_key="smart_api_key",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
     with col8:
         default_smart_model = env_values.get("SMART_LLM__MODEL_NAME", smart_preset["smart"])
@@ -201,7 +199,6 @@ def render(env_values: dict, _config_values: dict):
         env_key="MINERU_API_KEY",
         field_key="mineru_key",
         configured_hint=t("secret_configured_keep_blank"),
-        clear_label=t("clear_saved_secret"),
         help=t("mineru_key_help"),
     )
 
@@ -248,7 +245,6 @@ def render(env_values: dict, _config_values: dict):
             env_key="SEMANTIC_SCHOLAR_API_KEY",
             field_key="semantic_scholar_key",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
     with col10:
         render_secret_input(
@@ -258,7 +254,6 @@ def render(env_values: dict, _config_values: dict):
             env_key="OPENALEX_API_KEY",
             field_key="openalex_key",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
 
 

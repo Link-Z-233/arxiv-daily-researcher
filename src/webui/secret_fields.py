@@ -3,20 +3,14 @@
 Password widgets only mask their contents visually.  Supplying a saved value
 as ``value=`` would still send that value to the browser, so saved secrets are
 never used to initialise a widget here.  A blank field deliberately means
-"keep the persisted value"; clearing a secret requires an explicit checkbox.
+"keep the persisted value"; to remove a secret, edit the .env file directly.
 """
 
 from collections.abc import Iterable, Mapping, MutableMapping
 from typing import Any
 
 
-_CLEAR_SUFFIX = "__clear_saved_secret"
 _INITIALIZED_SUFFIX = "__secret_widget_initialized"
-
-
-def secret_clear_key(field_key: str) -> str:
-    """Return the session-state key for a secret field's clear control."""
-    return f"{field_key}{_CLEAR_SUFFIX}"
 
 
 def _initialized_key(field_key: str) -> str:
@@ -33,7 +27,6 @@ def initialize_secret_field_state(state: MutableMapping[str, Any], field_key: st
     marker = _initialized_key(field_key)
     if marker not in state:
         state[field_key] = ""
-        state[secret_clear_key(field_key)] = False
         state[marker] = True
 
 
@@ -43,16 +36,14 @@ def resolve_secret_value(
     field_key: str,
     state: Mapping[str, Any],
 ) -> str:
-    """Resolve a replacement, explicit deletion, or unchanged saved secret.
+    """Resolve a replacement or the unchanged saved secret.
 
-    A non-empty widget value wins over the clear checkbox.  This makes a
-    pasted replacement safe even if a user had previously ticked "clear".
+    A non-empty widget value replaces the saved secret; a blank field keeps
+    whatever is already persisted.
     """
     entered = state.get(field_key, "")
     if isinstance(entered, str) and entered != "":
         return entered
-    if state.get(secret_clear_key(field_key), False):
-        return ""
     saved = env_values.get(env_key, "")
     return saved if isinstance(saved, str) else str(saved or "")
 
@@ -63,7 +54,6 @@ def clear_secret_field_state(
     """Forget intentionally entered secrets after a successful configuration save."""
     for field_key in field_keys:
         state[field_key] = ""
-        state[secret_clear_key(field_key)] = False
 
 
 def render_secret_input(
@@ -74,7 +64,6 @@ def render_secret_input(
     env_key: str,
     field_key: str,
     configured_hint: str,
-    clear_label: str,
     help: str | None = None,
 ) -> str:
     """Render a blank password field without serialising a saved secret to UI."""
@@ -88,5 +77,4 @@ def render_secret_input(
     )
     if env_values.get(env_key):
         st.caption(configured_hint)
-        st.checkbox(clear_label, key=secret_clear_key(field_key))
     return entered

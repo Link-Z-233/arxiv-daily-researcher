@@ -99,7 +99,6 @@ def render(env_values: dict, config_values: dict):
                 env_key="SMTP_PASSWORD",
                 field_key="smtp_password",
                 configured_hint=t("secret_configured_keep_blank"),
-                clear_label=t("clear_saved_secret"),
             )
 
         col9, col10 = st.columns(2)
@@ -144,7 +143,6 @@ def render(env_values: dict, config_values: dict):
             env_key="WECHAT_WEBHOOK_URL",
             field_key="wechat_webhook_url",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
 
     # ---- DingTalk ----
@@ -161,7 +159,6 @@ def render(env_values: dict, config_values: dict):
             env_key="DINGTALK_WEBHOOK_URL",
             field_key="dingtalk_webhook_url",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
         render_secret_input(
             st,
@@ -170,7 +167,6 @@ def render(env_values: dict, config_values: dict):
             env_key="DINGTALK_SECRET",
             field_key="dingtalk_secret",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
 
     # ---- Telegram ----
@@ -189,7 +185,6 @@ def render(env_values: dict, config_values: dict):
                 env_key="TELEGRAM_BOT_TOKEN",
                 field_key="telegram_bot_token",
                 configured_hint=t("secret_configured_keep_blank"),
-                clear_label=t("clear_saved_secret"),
             )
         with col12:
             st.text_input(
@@ -212,7 +207,6 @@ def render(env_values: dict, config_values: dict):
             env_key="SLACK_WEBHOOK_URL",
             field_key="slack_webhook_url",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
 
     # ---- Generic Webhook ----
@@ -231,7 +225,6 @@ def render(env_values: dict, config_values: dict):
             env_key="GENERIC_WEBHOOK_URL",
             field_key="generic_webhook_url",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
 
 

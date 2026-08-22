@@ -17,7 +17,6 @@ class _FakeStreamlit:
         self.session_state = session_state
         self.text_input_calls = []
         self.caption_calls = []
-        self.checkbox_calls = []
 
     def text_input(self, *args, **kwargs):
         self.text_input_calls.append((args, kwargs))
@@ -25,10 +24,6 @@ class _FakeStreamlit:
 
     def caption(self, value):
         self.caption_calls.append(value)
-
-    def checkbox(self, *args, **kwargs):
-        self.checkbox_calls.append((args, kwargs))
-        return self.session_state.get(kwargs["key"], False)
 
 
 class WebUISecretFieldTests(unittest.TestCase):
@@ -44,14 +39,12 @@ class WebUISecretFieldTests(unittest.TestCase):
             env_key="API_KEY",
             field_key="api_key",
             configured_hint="configured",
-            clear_label="clear",
         )
 
         self.assertEqual(entered, "")
         self.assertEqual(fake_st.text_input_calls[0][1]["value"], "")
         self.assertNotIn(saved_secret, fake_st.text_input_calls[0][1].values())
         self.assertEqual(fake_st.caption_calls, ["configured"])
-        self.assertEqual(fake_st.checkbox_calls[0][1]["key"], "api_key__clear_saved_secret")
 
     def test_initialization_only_erases_legacy_session_state_once(self):
         state = {"api_key": "legacy-browser-copy"}
@@ -63,7 +56,7 @@ class WebUISecretFieldTests(unittest.TestCase):
         secret_fields.initialize_secret_field_state(state, "api_key")
         self.assertEqual(state["api_key"], "newly-entered-secret")
 
-    def test_resolver_preserves_replaces_and_explicitly_clears_secret(self):
+    def test_resolver_preserves_or_replaces_secret(self):
         saved = {"API_KEY": "persisted-secret"}
 
         self.assertEqual(
@@ -76,6 +69,8 @@ class WebUISecretFieldTests(unittest.TestCase):
             ),
             "replacement",
         )
+        # Legacy session flags from older panel builds must never wipe a
+        # persisted secret on their own.
         self.assertEqual(
             secret_fields.resolve_secret_value(
                 saved,
@@ -83,7 +78,7 @@ class WebUISecretFieldTests(unittest.TestCase):
                 "api_key",
                 {"api_key": "", "api_key__clear_saved_secret": True},
             ),
-            "",
+            "persisted-secret",
         )
 
     def test_collectors_keep_saved_secret_when_widget_is_blank(self):
@@ -121,7 +116,7 @@ class WebUISecretFieldTests(unittest.TestCase):
         self.assertEqual(notification_updates["TELEGRAM_BOT_TOKEN"], "telegram-saved")
         self.assertEqual(data_updates["WEBDAV_PASSWORD"], "webdav-saved")
 
-    def test_collectors_honor_explicit_secret_clear(self):
+    def test_collectors_honor_legacy_clear_flags_are_ignored(self):
         env_values = {
             "CHEAP_LLM__API_KEY": "cheap-saved",
             "SMTP_PASSWORD": "smtp-saved",
@@ -143,19 +138,17 @@ class WebUISecretFieldTests(unittest.TestCase):
             notification_updates, _ = notifications.collect(env_values, {})
             data_updates, _ = data_management.collect(env_values, {})
 
-        self.assertEqual(llm_updates["CHEAP_LLM__API_KEY"], "")
-        self.assertEqual(notification_updates["SMTP_PASSWORD"], "")
-        self.assertEqual(data_updates["WEBDAV_PASSWORD"], "")
+        self.assertEqual(llm_updates["CHEAP_LLM__API_KEY"], "cheap-saved")
+        self.assertEqual(notification_updates["SMTP_PASSWORD"], "smtp-saved")
+        self.assertEqual(data_updates["WEBDAV_PASSWORD"], "webdav-saved")
 
     def test_successful_save_cleanup_forgets_entered_secret_but_not_marker(self):
         state = {
             "api_key": "just-entered",
-            "api_key__clear_saved_secret": True,
             "api_key__secret_widget_initialized": True,
         }
         secret_fields.clear_secret_field_state(state, ["api_key"])
         self.assertEqual(state["api_key"], "")
-        self.assertFalse(state["api_key__clear_saved_secret"])
         self.assertTrue(state["api_key__secret_widget_initialized"])
 
 

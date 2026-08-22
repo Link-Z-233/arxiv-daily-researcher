@@ -93,7 +93,6 @@ def render(env_values: dict, config_values: dict):
             env_key="WEBDAV_PASSWORD",
             field_key="webdav_password",
             configured_hint=t("secret_configured_keep_blank"),
-            clear_label=t("clear_saved_secret"),
         )
 
     # 操作按钮（紧跟凭据后面）
