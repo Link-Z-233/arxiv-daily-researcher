@@ -378,5 +378,41 @@ class ArxivFetchTests(unittest.TestCase):
         fake_source.set_history_filtering_enabled.assert_called_once_with(False)
 
 
+class ArxivTimeoutGuardTests(unittest.TestCase):
+    """超时守卫是"无进展"看门狗：持续到达的结果应持续续期。"""
+
+    def test_ongoing_progress_outlives_the_guard_window(self):
+        import time as _time
+
+        from sources.arxiv_source import _timeout_guard
+
+        def slow_generator():
+            # 总耗时 1.6s，超过 1s 守卫窗口；每 0.2s 到达一个结果。
+            for index in range(8):
+                _time.sleep(0.2)
+                yield index
+
+        with _timeout_guard(1) as guard:
+            received = []
+            for item in slow_generator():
+                guard.touch()
+                received.append(item)
+        self.assertEqual(received, list(range(8)))
+
+    def test_stalled_stream_raises_timeout(self):
+        import time as _time
+
+        from sources.arxiv_source import _ArxivTimeoutError, _timeout_guard
+
+        def stalled_generator():
+            _time.sleep(1.5)
+            yield "never"
+
+        with self.assertRaises(_ArxivTimeoutError):
+            with _timeout_guard(1) as guard:
+                for item in stalled_generator():
+                    guard.touch()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -87,7 +87,13 @@ class ArxivScanReceiptError(ArxivFetchError):
 
 
 class _timeout_guard:
-    """使用 SIGALRM 对阻塞调用设置硬超时（Linux 主线程可用）。"""
+    """使用 SIGALRM 对阻塞调用设置硬超时（Linux 主线程可用）。
+
+    超时语义是"无进展"看门狗：只要持续收到结果（``touch()`` 重置闹钟），
+    多页完整扫描可以合法地跑超过 ``seconds``；只有真正停摆（单次请求
+    卡死、分页间无响应）才触发超时。arxiv 客户端在分页之间强制 6 秒
+    间隔，把整个扫描窗口当成单次请求的硬超时会在大时间窗下必然误杀。
+    """
 
     def __init__(self, seconds: int):
         self.seconds = max(0, int(seconds or 0))
@@ -103,7 +109,7 @@ class _timeout_guard:
             self._old_handler = signal.getsignal(signal.SIGALRM)
 
             def _handler(signum, frame):
-                raise _ArxivTimeoutError(f"ArXiv 请求超时（>{self.seconds}s）")
+                raise _ArxivTimeoutError(f"ArXiv 请求超时（>{self.seconds}s 无进展）")
 
             signal.signal(signal.SIGALRM, _handler)
             signal.alarm(self.seconds)
@@ -111,6 +117,11 @@ class _timeout_guard:
         except Exception:
             self._enabled = False
         return self
+
+    def touch(self):
+        """有新结果到达时重置倒计时（仅在启用时生效）。"""
+        if self._enabled:
+            signal.alarm(self.seconds)
 
     def __exit__(self, exc_type, exc, tb):
         if self._enabled:
@@ -219,8 +230,10 @@ class ArxivSource(BasePaperSource):
         configured_page_size = max(
             1, int(page_size or getattr(self.client, "page_size", 100))
         )
-        with _timeout_guard(fetch_timeout_seconds):
+        guard = _timeout_guard(fetch_timeout_seconds)
+        with guard:
             for result in self.client.results(search):
+                guard.touch()
                 api_total += 1
                 page_count = ((api_total - 1) // configured_page_size) + 1
                 boundary = getattr(result, boundary_field)
@@ -634,8 +647,10 @@ class ArxivSource(BasePaperSource):
         while retry_count <= max_retries:
             papers = []  # 每次重试前清空，防止重复积累
             try:
-                with _timeout_guard(fetch_timeout_seconds):
+                guard = _timeout_guard(fetch_timeout_seconds)
+                with guard:
                     for result in self.client.results(search):
+                        guard.touch()
                         paper_id = result.get_short_id()
 
                         metadata = PaperMetadata(
