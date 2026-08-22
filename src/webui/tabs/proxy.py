@@ -66,8 +66,6 @@ def render(_env_values: dict, config_values: dict):
             st.toggle(t("proxy_notifications_label"), value=flat.get("proxy_notifications", False), key="proxy_notifications", help=t("proxy_notifications_help"))
             st.toggle(t("proxy_webdav_label"), value=flat.get("proxy_webdav", True), key="proxy_webdav", help=t("proxy_webdav_help"))
             st.toggle(t("proxy_update_check_label"), value=flat.get("proxy_update_check", False), key="proxy_update_check", help=t("proxy_update_check_help"))
-    else:
-        st.caption(t("proxy_details_collapsed"))
 
 
 def collect(_env_values: dict, config_values: dict) -> dict:

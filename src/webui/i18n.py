@@ -423,10 +423,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "extra_sources_add_btn": {"zh": "添加来源", "en": "Add source"},
     "extra_sources_added": {"zh": "已添加自定义来源。", "en": "Custom source added."},
     "extra_sources_removed": {"zh": "已移除自定义来源。", "en": "Custom source removed."},
-    "extra_sources_summary": {
-        "zh": "当前启用 {builtin} 个内置来源 + {custom} 个自定义来源。",
-        "en": "{builtin} built-in + {custom} custom sources enabled.",
-    },
     "extra_sources_invalid": {"zh": "来源定义无效", "en": "Invalid source definitions"},
     "reports_by_source_toggle": {
         "zh": "按数据源分类整理报告",
@@ -1047,10 +1043,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "proxy_update_check_help": {
         "zh": "GitHub 版本更新检查（需访问 api.github.com）",
         "en": "GitHub version update check (requires access to api.github.com)",
-    },
-    "proxy_details_collapsed": {
-        "zh": "代理未启用；代理地址、不使用代理的地址和服务范围已折叠。",
-        "en": "Proxy is disabled; URL, no-proxy addresses, and service scope are collapsed.",
     },
     # ── data_management.py ───────────────────────────────────────────
     "tab_data_management": {"zh": "数据管理", "en": "Data Management"},

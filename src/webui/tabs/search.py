@@ -202,12 +202,6 @@ def render(_env_values: dict, config_values: dict):
                     st.toast(t("extra_sources_added"), icon="✅")
                     st.rerun()
 
-        st.caption(
-            t("extra_sources_summary").format(
-                builtin=len(selected_builtins), custom=len(custom_definitions)
-            )
-        )
-
     # 由多选与自定义列表推导出最终定义（供 HF 参数区判断）
     try:
         parsed_extra = validate_source_definitions(
