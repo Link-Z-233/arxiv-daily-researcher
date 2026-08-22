@@ -9,6 +9,7 @@ from pathlib import Path
 
 from webui.i18n import t
 from webui.secret_fields import render_secret_input, resolve_secret_value
+from utils.backup import export_backup_zip, restore_backup_archive
 
 logger = logging.getLogger(__name__)
 
@@ -217,11 +218,6 @@ def render(env_values: dict, config_values: dict):
     if st.session_state.get("backup_enabled", flat.get("backup_enabled", True)):
         col_b1, col_b2 = st.columns([3, 1])
         with col_b1:
-            st.toggle(
-                t("dm_backup_upload_label"),
-                value=flat.get("backup_upload_to_webdav", True),
-                key="backup_upload_to_webdav",
-            )
             st.number_input(
                 t("dm_backup_keep_label"),
                 min_value=1,
@@ -233,6 +229,51 @@ def render(env_values: dict, config_values: dict):
         with col_b2:
             if st.button(t("dm_backup_now_btn"), use_container_width=True):
                 _do_backup(env_values)
+
+    # 导入 / 导出：都是压缩包，导入端自动识别 zip / gzip / 原始 SQLite
+    st.divider()
+    col_export, col_import = st.columns(2)
+    with col_export:
+        if st.button(t("dm_backup_export_btn"), key="dm_backup_export", use_container_width=True):
+            try:
+                with st.spinner(t("dm_backup_running")):
+                    st.session_state["dm_export_bundle"] = export_backup_zip(
+                        _PROJECT_ROOT / "data"
+                    )
+            except Exception as e:
+                st.error(f"{t('dm_backup_failed')}: {e}")
+        bundle = st.session_state.get("dm_export_bundle")
+        if bundle:
+            st.download_button(
+                label=t("dm_backup_download_btn"),
+                data=bundle[0],
+                file_name=bundle[1],
+                mime="application/zip",
+                use_container_width=True,
+            )
+
+    with col_import:
+        uploaded = st.file_uploader(
+            t("dm_backup_import_label"),
+            type=["zip", "gz", "db"],
+            key="dm_backup_import_file",
+        )
+        if uploaded is not None and st.button(
+            t("dm_backup_import_btn"), key="dm_backup_import", use_container_width=True
+        ):
+            try:
+                with st.spinner(t("dm_backup_running")):
+                    result = restore_backup_archive(
+                        _PROJECT_ROOT / "data", uploaded.getvalue(), uploaded.name
+                    )
+                st.success(
+                    t("dm_backup_import_ok").format(
+                        source=result["source_member"],
+                        archived=result["archived_previous"] or "—",
+                    )
+                )
+            except Exception as e:
+                st.error(f"{t('dm_backup_failed')}: {e}")
 
     backups = _list_backups()
     if backups:
@@ -285,7 +326,6 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         "webdav_sync_reports": current_cfg("webdav_sync_reports", False),
         "backup_enabled": current_cfg("backup_enabled", True),
         "backup_keep": current_cfg("backup_keep", 5),
-        "backup_upload_to_webdav": current_cfg("backup_upload_to_webdav", True),
     }
 
     return env_updates, config_updates
@@ -331,31 +371,33 @@ def _list_backups():
 
 
 def _do_backup(env_values: dict):
-    """立即创建一次压缩数据库备份（可选上传 WebDAV）。"""
+    """立即创建一次压缩数据库备份（WebDAV 已配置时默认镜像上传）。"""
     try:
         from utils.backup import create_backup
+        from utils.webdav_sync import WebDAVSync
 
+        # 备份默认压缩后上传：只要 WebDAV 凭据可用（表单或 .env）就镜像，
+        # 不再提供单独的上传开关。
+        url = (st.session_state.get("webdav_url") or env_values.get("WEBDAV_URL") or "").strip()
+        username = (
+            st.session_state.get("webdav_username") or env_values.get("WEBDAV_USERNAME") or ""
+        ).strip()
+        password = resolve_secret_value(
+            env_values, "WEBDAV_PASSWORD", "webdav_password", st.session_state
+        )
         webdav_sync = None
-        if st.session_state.get("backup_upload_to_webdav", True):
-            from utils.webdav_sync import WebDAVSync
-
-            url = (st.session_state.get("webdav_url") or "").strip()
-            username = (st.session_state.get("webdav_username") or "").strip()
-            password = resolve_secret_value(
-                env_values, "WEBDAV_PASSWORD", "webdav_password", st.session_state
+        if url and username:
+            webdav_sync = WebDAVSync(
+                url=url,
+                username=username,
+                password=password,
+                remote_path=(
+                    st.session_state.get("webdav_remote_path")
+                    or "/arxiv-daily-researcher/"
+                ).strip(),
             )
-            if url and username:
-                webdav_sync = WebDAVSync(
-                    url=url,
-                    username=username,
-                    password=password,
-                    remote_path=(
-                        st.session_state.get("webdav_remote_path")
-                        or "/arxiv-daily-researcher/"
-                    ).strip(),
-                )
-            else:
-                st.info(t("dm_backup_local_only"))
+        else:
+            st.info(t("dm_backup_local_only"))
 
         keep = int(st.session_state.get("backup_keep", 5) or 5)
         with st.spinner(t("dm_backup_running")):

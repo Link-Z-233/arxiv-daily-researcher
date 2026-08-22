@@ -692,7 +692,6 @@ def build_config_dict(
     webdav_sync_reports: bool = False,
     backup_enabled: bool = True,
     backup_keep: int = 5,
-    backup_upload_to_webdav: bool = True,
 ) -> Dict[str, Any]:
     """Build a nested config.json dict from flat parameters."""
 
@@ -941,7 +940,6 @@ def build_config_dict(
         "backup": {
             "enabled": backup_enabled,
             "keep": backup_keep,
-            "upload_to_webdav": backup_upload_to_webdav,
         },
         "trend_research": {
             "default_date_range_days": trend_default_date_range_days,
@@ -1237,7 +1235,6 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     bk = config.get("backup", {})
     flat["backup_enabled"] = bk.get("enabled", True)
     flat["backup_keep"] = bk.get("keep", 5)
-    flat["backup_upload_to_webdav"] = bk.get("upload_to_webdav", True)
 
     # Trend research
     tr = config.get("trend_research", {})

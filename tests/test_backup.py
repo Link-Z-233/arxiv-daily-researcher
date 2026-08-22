@@ -205,3 +205,97 @@ class ScheduledBackupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackupImportExportTests(unittest.TestCase):
+    def test_export_zip_round_trip_restores_and_archives_previous(self):
+        import io
+        import zipfile
+
+        from utils.backup import export_backup_zip, restore_backup_archive
+
+        with TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            _seed_database(data_dir)
+
+            bundle, filename = export_backup_zip(data_dir)
+            self.assertTrue(filename.endswith(".zip"))
+            with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+                self.assertIn("daily_research.db", archive.namelist())
+
+            # 在导出后写入新数据，导入应回滚到导出时的快照并存档当前库
+            store = DailyResearchStore(
+                data_dir / "daily_research" / "daily_research.db"
+            )
+            store.set_app_state("seed", "v2")
+
+            result = restore_backup_archive(data_dir, bundle, filename)
+            self.assertTrue(result["restored"])
+            self.assertEqual(result["source_member"], "daily_research.db")
+            self.assertIsNotNone(result["archived_previous"])
+
+            restored = DailyResearchStore(data_dir / "daily_research" / "daily_research.db")
+            self.assertEqual(restored.get_app_state("seed"), "v1")
+            archived = sqlite3.connect(result["archived_previous"])
+            archived_state = archived.execute(
+                "SELECT value FROM app_state WHERE key='seed'"
+            ).fetchone()[0]
+            archived.close()
+            self.assertEqual(archived_state, "v2")
+
+    def test_restore_auto_detects_gzip_and_raw_sqlite(self):
+        import gzip as gzip_mod
+
+        from utils.backup import create_backup, restore_backup_archive
+
+        with TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            _seed_database(data_dir)
+            created = create_backup(data_dir, keep=5)
+            self.assertTrue(created["created"])
+
+            with TemporaryDirectory() as other_dir:
+                other = Path(other_dir)
+                _seed_database(other)
+                store = DailyResearchStore(other / "daily_research" / "daily_research.db")
+                store.set_app_state("seed", "changed")
+
+                packed = Path(created["path"]).read_bytes()  # 已是 gzip
+                result = restore_backup_archive(
+                    other, packed, created["name"]
+                )
+                self.assertTrue(result["restored"])
+                restored = DailyResearchStore(
+                    other / "daily_research" / "daily_research.db"
+                )
+                self.assertEqual(restored.get_app_state("seed"), "v1")
+
+                raw = Path(created["path"]).read_bytes()
+                raw_db = gzip_mod.decompress(raw)
+                result2 = restore_backup_archive(other, raw_db, "daily_research.db")
+                self.assertTrue(result2["restored"])
+                self.assertEqual(
+                    DailyResearchStore(
+                        other / "daily_research" / "daily_research.db"
+                    ).get_app_state("seed"),
+                    "v1",
+                )
+
+    def test_restore_rejects_invalid_payload(self):
+        from utils.backup import restore_backup_archive
+
+        with TemporaryDirectory() as temp_dir:
+            with self.assertRaises(ValueError):
+                restore_backup_archive(
+                    Path(temp_dir), b"not a database at all", "junk.zip"
+                )
+            import io
+            import zipfile
+
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as archive:
+                archive.writestr("readme.txt", "no db here")
+            with self.assertRaises(ValueError):
+                restore_backup_archive(
+                    Path(temp_dir), buffer.getvalue(), "empty.zip"
+                )
