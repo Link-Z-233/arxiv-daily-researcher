@@ -1,4 +1,4 @@
-"""数据分析页用量统计改版的回归测试：近一月热力图 + 静态自适应折线图。"""
+"""数据分析页用量统计改版的回归测试：近一年热力图 + 静态自适应折线图。"""
 
 import sys
 import unittest
@@ -29,14 +29,14 @@ class NiceCeilingTests(unittest.TestCase):
 
 
 class HeatmapTests(unittest.TestCase):
-    def test_heatmap_covers_only_the_last_month_and_autoscrolls_right(self):
+    def test_heatmap_covers_the_last_year_in_week_columns(self):
         today = date.today()
-        inside = today - timedelta(days=10)
-        outside = today - timedelta(days=40)
+        inside = today - timedelta(days=300)
+        outside = today - timedelta(days=400)
         daily = {
             today.isoformat(): _row(100, 50),
             inside.isoformat(): _row(200, 80),
-            outside.isoformat(): _row(9_999, 9_999),  # 近一月之外，不应出现
+            outside.isoformat(): _row(9_999, 9_999),  # 一年之外，不应出现
         }
         html = analytics._render_heatmap_html(daily)
 
@@ -44,6 +44,9 @@ class HeatmapTests(unittest.TestCase):
         self.assertNotIn(outside.isoformat(), html)
         self.assertIn(today.isoformat(), html)
         self.assertIn(inside.isoformat(), html)
+        # 53 列周网格：header 行有 53 个月度标签单元格
+        header_row = html.split("<tr>")[1]
+        self.assertEqual(header_row.count("<td"), 54)  # 1 空占位 + 53 周
 
     def test_heatmap_document_autoscrolls_to_the_latest(self):
         document = analytics._scroll_right_document(analytics._render_heatmap_html({}))

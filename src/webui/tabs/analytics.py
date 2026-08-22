@@ -40,8 +40,8 @@ def _month_label(month: int) -> str:
     ]
     return labels[month - 1]
 
-# 热力图窗口：只看近一个月。
-_HEATMAP_DAYS = 30
+# 热力图窗口：近一年（GitHub 布局，53 列周网格）。
+_HEATMAP_DAYS = 365
 
 _RANGE_DAYS = [
     ("7", 7),
@@ -103,7 +103,7 @@ def _heat_level(total: int, daily_max: int) -> int:
 
 
 def _render_heatmap_html(daily: dict[str, dict]) -> str:
-    """近一个月的日用量热力图；容器默认滚动到最右（最新日期可见）。"""
+    """近一年的日用量热力图；容器默认滚动到最右（最新日期可见）。"""
     today = date.today()
     first_day = today - timedelta(days=_HEATMAP_DAYS - 1)
     # 网格从 first_day 所在周的周一开始（GitHub 布局，列为周、行为星期）。
@@ -128,14 +128,14 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
             else t("usage_heatmap_none").format(date=key)
         )
         return (
-            f'<td title="{tooltip}" style="width:16px;height:16px;'
-            f'border-radius:3px;background:{_HEAT_LEVEL_COLORS[level]};"></td>'
+            f'<td title="{tooltip}" style="width:11px;height:11px;'
+            f'border-radius:2px;background:{_HEAT_LEVEL_COLORS[level]};"></td>'
         )
 
     grid_rows = []
     for weekday in range(7):
         prefix = (
-            f'<td style="padding:0 6px 0 0;font-size:11px;color:#666;'
+            f'<td style="padding:0 4px 0 0;font-size:10px;color:#666;'
             f'white-space:nowrap;">{_week_labels()[weekday]}</td>'
         )
         cells = [
@@ -154,24 +154,24 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
             current_month = week_start.month
             label = _month_label(current_month)
         month_cells.append(
-            f'<td style="font-size:11px;color:#666;padding:0 0 2px 0;'
+            f'<td style="font-size:10px;color:#666;padding:0 0 2px 0;'
             f'white-space:nowrap;">{label}</td>'
         )
     header_row = '<tr><td style="width:26px;"></td>' + "".join(month_cells) + "</tr>"
 
     legend = "".join(
-        f'<span style="display:inline-block;width:16px;height:16px;'
-        f'border-radius:3px;background:{color};margin:0 1px;"></span>'
+        f'<span style="display:inline-block;width:11px;height:11px;'
+        f'border-radius:2px;background:{color};margin:0 1px;"></span>'
         for color in _HEAT_LEVEL_COLORS
     )
     legend_html = (
-        f'<div style="font-size:11px;color:#666;margin-top:6px;">'
+        f'<div style="font-size:10px;color:#666;margin-top:6px;">'
         f'{t("usage_heatmap_less")} {legend} {t("usage_heatmap_more")}</div>'
     )
 
     return (
         '<div id="usage-heatmap" style="overflow-x:auto;">'
-        '<table style="border-collapse:separate;border-spacing:3px 3px;">'
+        '<table style="border-collapse:separate;border-spacing:2px 2px;">'
         f"{header_row}"
         + "".join(grid_rows)
         + "</table>"
@@ -348,7 +348,7 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
         unsafe_allow_html=True,
     )
     heatmap_html = _render_heatmap_html(daily)
-    components_html(_scroll_right_document(heatmap_html), height=190)
+    components_html(_scroll_right_document(heatmap_html), height=160)
 
     # ── 用量趋势（静态自适应折线图）────────────────────────────────────────
     st.markdown(
