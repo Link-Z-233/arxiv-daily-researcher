@@ -145,8 +145,7 @@ class Reporter:
             return label
         if paper.get("is_retry"):
             return "↻ 重试"
-        if version is not None:
-            return f"v{version}"
+        # 普通版本不在标题旁标注 vN，版本信息只在详情字段（Version: vN）展示。
         return ""
 
     def generate_reports_by_source(

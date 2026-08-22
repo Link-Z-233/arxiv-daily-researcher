@@ -73,6 +73,14 @@ class MetadataRenderer(BaseModuleRenderer):
                 published = data.get('published', 'N/A')
             field_values['published_date'] = published
 
+        # 版本（arXiv v1/v2…）：标题旁不再标注，版本只在此字段展示
+        if fields_config.get('version', {}).get('enabled', True):
+            version = getattr(paper_meta, 'version', None) if paper_meta else None
+            if version is None:
+                version = data.get('version')
+            if version is not None:
+                field_values['version'] = f"v{version}"
+
         # 判断数据源类型
         source = data.get('source', '')
         if paper_meta and hasattr(paper_meta, 'source'):
@@ -119,6 +127,8 @@ class MetadataRenderer(BaseModuleRenderer):
                     label = "arXiv链接"
                 elif field_id == 'doi_link':
                     label = "DOI"
+                elif field_id == 'version':
+                    label = "Version"
                 else:
                     label = fields_config.get(field_id, {}).get('label', field_id)
                 rows.append((label, value))
@@ -133,6 +143,8 @@ class MetadataRenderer(BaseModuleRenderer):
                     label = "arXiv链接"
                 elif field_id == 'doi_link':
                     label = "DOI"
+                elif field_id == 'version':
+                    label = "Version"
                 else:
                     label = fields_config.get(field_id, {}).get('label', field_id)
                 lines.append(
@@ -149,6 +161,8 @@ class MetadataRenderer(BaseModuleRenderer):
                     label = "arXiv链接"
                 elif field_id == 'doi_link':
                     label = "DOI"
+                elif field_id == 'version':
+                    label = "Version"
                 else:
                     label = fields_config.get(field_id, {}).get('label', field_id)
                 parts.append(

@@ -466,6 +466,8 @@ class IdentityStoreTests(unittest.TestCase):
             Reporter._paper_status_label({"paper_metadata": paper, "is_retry": True}),
             "↻ 重试",
         )
+        # 普通版本不再在标题旁标注 vN
+        self.assertEqual(Reporter._paper_status_label({"paper_metadata": paper}), "")
 
     def test_stage_state_keeps_score_when_translation_or_analysis_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
