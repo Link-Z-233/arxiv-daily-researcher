@@ -135,7 +135,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "usage_model": {"zh": "模型", "en": "Model"},
     "usage_today_prompt": {"zh": "当日输入 tokens", "en": "Today prompt tokens"},
     "usage_today_completion": {"zh": "当日输出 tokens", "en": "Today completion tokens"},
-    "usage_month_prompt": {"zh": "近30天输入 tokens", "en": "30-day prompt tokens"},
     "usage_month_total": {"zh": "近30天累计用量", "en": "30-day total usage"},
     "usage_heatmap_tip": {
         "zh": "{date} · {tokens} tokens · {runs} 次运行",

@@ -331,14 +331,12 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
     month_prompt = sum(row["prompt"] for row in month_rows)
     month_completion = sum(row["completion"] for row in month_rows)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(t("usage_today_prompt"), _format_tokens(today_row["prompt"]))
     with col2:
         st.metric(t("usage_today_completion"), _format_tokens(today_row["completion"]))
     with col3:
-        st.metric(t("usage_month_prompt"), _format_tokens(month_prompt))
-    with col4:
         st.metric(
             t("usage_month_total"),
             _format_tokens(month_prompt + month_completion),
