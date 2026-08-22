@@ -556,3 +556,42 @@ class ConfigCommentPreservationTests(unittest.TestCase):
             second = text.index("comment for second enabled")
             self.assertLess(first, second)
             self.assertIn("comment for first enabled\n    \"enabled\": false", text)
+
+
+class LLMConnectionTestTests(unittest.TestCase):
+    """LLM 连通性测试必须能跑在 WebUI 镜像里（无 worker 的 config/llm_request_pool 栈）。"""
+
+    def _run_with_fake_openai(self, raise_exc=None):
+        created = {}
+
+        class _Completions:
+            def create(self, **kwargs):
+                if raise_exc is not None:
+                    raise raise_exc
+                created["kwargs"] = kwargs
+                return type("Resp", (), {"model": "stub-model"})()
+
+        class _Client:
+            def __init__(self, api_key, base_url, timeout):
+                self.chat = type("Chat", (), {"completions": _Completions()})()
+
+        import types
+
+        module = types.ModuleType("openai")
+        module.OpenAI = _Client
+        with patch.dict(sys.modules, {"openai": module}):
+            from utils.config_io import validate_llm_connection
+
+            result = validate_llm_connection("k", "https://api.example/v1", "m")
+        return result, created
+
+    def test_success_uses_client_directly_without_worker_pool(self):
+        result, created = self._run_with_fake_openai()
+        self.assertEqual(result[0], True)
+        self.assertIn("stub-model", result[1])
+        self.assertEqual(created["kwargs"]["model"], "m")
+
+    def test_api_error_is_reported_as_failure(self):
+        result, _ = self._run_with_fake_openai(raise_exc=RuntimeError("boom"))
+        self.assertEqual(result[0], False)
+        self.assertIn("boom", result[1])

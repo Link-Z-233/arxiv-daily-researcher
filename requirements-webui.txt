@@ -4,3 +4,5 @@ json5==0.13.0
 requests==2.32.5
 streamlit>=1.37.0  # st.fragment(run_every=...) for live run status
 webdavclient3>=3.14.0
+# LLM 连通性测试需要 openai 客户端（与 worker 的 requirements-core 同版本）。
+openai==2.15.0

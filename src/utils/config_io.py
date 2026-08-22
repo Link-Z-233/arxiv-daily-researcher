@@ -1269,11 +1269,11 @@ def validate_llm_connection(api_key: str, base_url: str, model_name: str) -> Tup
 
     try:
         from openai import OpenAI
-        from utils.llm_request_pool import call_chat_completion
 
         client = OpenAI(api_key=api_key, base_url=base_url, timeout=15)
-        response = call_chat_completion(
-            client,
+        # 直接调用而非 worker 的请求池：WebUI 镜像不携带 worker 的 config 栈，
+        # 而一次性的连通性测试也不需要并发限流。
+        response = client.chat.completions.create(
             model=model_name,
             messages=[{"role": "user", "content": "Hi"}],
             max_tokens=5,
