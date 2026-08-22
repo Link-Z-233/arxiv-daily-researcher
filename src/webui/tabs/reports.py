@@ -30,6 +30,15 @@ _FORCE_LATEST_KEY = "reports_force_latest"
 # ArXiv 来源标识（用于非 ArXiv 过滤）
 _ARXIV_SOURCES = {"ARXIV", "arxiv"}
 
+# 标题旁裸版本徽标（v1/v2…）。生成端已不再输出；这里在显示层过滤
+# 历史报告里的残留，带说明文字的修订标签（🔁 修订版 …）保留。
+_BARE_VERSION_RE = re.compile(r'\s*<span class="revision-label">\s*v\d+\s*</span>')
+
+
+def _strip_bare_version_labels(report_html: str) -> str:
+    """去掉标题旁的裸 vN 徽标（仅影响预览显示，不改存档文件）。"""
+    return _BARE_VERSION_RE.sub("", report_html)
+
 
 # ─── data structures ──────────────────────────────────────────────────────────
 
@@ -316,7 +325,7 @@ def _build_sandboxed_preview_html(report_html: str) -> str:
     popups).  Escaping before insertion is important: otherwise a report could
     close the inner iframe and inject markup into the outer component document.
     """
-    escaped_report = html.escape(report_html, quote=True)
+    escaped_report = html.escape(_strip_bare_version_labels(report_html), quote=True)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -727,7 +736,9 @@ def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
         return False
 
     try:
-        html_content = report.path.read_text(encoding="utf-8")
+        html_content = _strip_bare_version_labels(
+            report.path.read_text(encoding="utf-8")
+        )
     except OSError:
         return False
 

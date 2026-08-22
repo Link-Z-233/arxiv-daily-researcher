@@ -11,6 +11,7 @@ from webui.tabs.reports import (  # noqa: E402
     _build_sandboxed_preview_html,
     _discover_reports,
     _filter_visible_reports,
+    _strip_bare_version_labels,
 )
 
 
@@ -92,6 +93,23 @@ class WebUiReportPreviewTests(unittest.TestCase):
             self.assertEqual(len(discovered["daily"]), 1)
             self.assertEqual(discovered["daily"][0].source, "custom_physics")
             self.assertEqual(discovered["daily"][0].path, custom_path)
+
+    def test_bare_version_badges_are_hidden_but_revision_labels_kept(self):
+        report_html = (
+            '<div class="card-title"><a href="#">1. Paper One</a>'
+            '<span class="revision-label">v1</span></div>'
+            '<div class="card-title"><a href="#">2. Paper Two</a>'
+            '<span class="revision-label">🔁 修订版 v2（上一版本 v1）</span></div>'
+        )
+
+        stripped = _strip_bare_version_labels(report_html)
+
+        self.assertNotIn(">v1<", stripped)
+        self.assertIn("🔁 修订版 v2", stripped)
+        # 沙箱预览同样过滤
+        wrapper = _build_sandboxed_preview_html(report_html)
+        self.assertNotIn("&gt;v1&lt;", wrapper)
+        self.assertIn("修订版 v2", wrapper)
 
 
 if __name__ == "__main__":
