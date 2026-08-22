@@ -286,30 +286,36 @@ def render(_env_values: dict, config_values: dict) -> None:
             key="skill_comprehensive_analysis",
         )
 
-    # 深度分析提示词 + 模板
+    # 深度分析提示词：下拉选择已保存模板，新增在折叠表单里完成（与额外来源同款交互）
     templates = _load_prompt_templates()
     template_names = sorted(templates)
-    col_tpl, col_tpl_del = st.columns([3, 1])
+    none_label = t("trend_prompt_template_none")
+
+    configured_prompt = (flat.get("trend_analysis_prompt", "") or "").strip()
+    default_index = 0
+    for offset, name in enumerate(template_names, start=1):
+        if templates[name].strip() == configured_prompt:
+            default_index = offset
+            break
+
+    col_tpl, col_tpl_del = st.columns([4, 1])
     with col_tpl:
         st.selectbox(
             t("trend_prompt_template_label"),
-            [t("trend_prompt_template_none"), *template_names],
+            [none_label, *template_names],
+            index=default_index,
             key="tr_prompt_template",
             help=t("trend_prompt_template_help"),
         )
-    selected_template = st.session_state.get("tr_prompt_template", "")
-    if selected_template and selected_template != t("trend_prompt_template_none"):
-        if selected_template in templates:
-            # 每次选中模板时把内容带入提示词框（仅当用户未手动改过）
-            if st.session_state.get("tr_prompt_template_applied") != selected_template:
-                st.session_state["trend_analysis_prompt"] = templates[selected_template]
-                st.session_state["tr_prompt_template_applied"] = selected_template
+    selected_template = st.session_state.get("tr_prompt_template", none_label)
+    active_prompt = (
+        templates.get(selected_template, "") if selected_template != none_label else ""
+    )
+
     with col_tpl_del:
         st.write("")
         can_delete = bool(
-            selected_template
-            and selected_template != t("trend_prompt_template_none")
-            and selected_template in templates
+            selected_template != none_label and selected_template in templates
         )
         if st.button(
             t("trend_prompt_template_delete"),
@@ -318,46 +324,35 @@ def render(_env_values: dict, config_values: dict) -> None:
             use_container_width=True,
         ):
             updated = {
-                name: text
-                for name, text in templates.items()
-                if name != selected_template
+                name: text for name, text in templates.items() if name != selected_template
             }
             try:
                 _write_prompt_templates(updated)
-                st.session_state["tr_prompt_template"] = t("trend_prompt_template_none")
-                st.session_state["tr_prompt_template_applied"] = None
+                st.session_state["tr_prompt_template"] = none_label
                 st.toast(t("trend_prompt_template_deleted"), icon="🗑")
                 st.rerun()
             except OSError as exc:
                 st.error(t("tr_start_failed").format(err=exc))
 
-    st.text_area(
-        t("trend_prompt_label"),
-        value=flat.get("trend_analysis_prompt", ""),
-        height=180,
-        max_chars=_MAX_PROMPT_LENGTH,
-        key="trend_analysis_prompt",
-        placeholder=t("trend_prompt_placeholder"),
-        help=t("trend_prompt_help"),
-    )
-
-    col_save_name, col_save_btn = st.columns([3, 1])
-    with col_save_name:
+    with st.expander(t("trend_prompt_add_title"), expanded=False):
         st.text_input(
             t("trend_prompt_template_name_label"),
             value="",
-            key="tr_prompt_template_name",
+            key="tr_prompt_new_name",
             placeholder=t("trend_prompt_template_name_placeholder"),
         )
-    with col_save_btn:
-        st.write("")
-        if st.button(
-            t("trend_prompt_template_save"),
-            key="tr_prompt_template_save",
-            use_container_width=True,
-        ):
-            name = (st.session_state.get("tr_prompt_template_name", "") or "").strip()
-            text = (st.session_state.get("trend_analysis_prompt", "") or "").strip()
+        st.text_area(
+            t("trend_prompt_label"),
+            value="",
+            height=180,
+            max_chars=_MAX_PROMPT_LENGTH,
+            key="tr_prompt_new_text",
+            placeholder=t("trend_prompt_placeholder"),
+            help=t("trend_prompt_help"),
+        )
+        if st.button(t("trend_prompt_add_btn"), key="tr_prompt_add"):
+            name = (st.session_state.get("tr_prompt_new_name", "") or "").strip()
+            text = (st.session_state.get("tr_prompt_new_text", "") or "").strip()
             if not name:
                 st.error(t("trend_prompt_template_name_required"))
             elif not text:
@@ -367,9 +362,9 @@ def render(_env_values: dict, config_values: dict) -> None:
                 updated[name] = text
                 try:
                     _write_prompt_templates(updated)
-                    st.session_state["tr_prompt_template_name"] = ""
+                    st.session_state["tr_prompt_new_name"] = ""
+                    st.session_state["tr_prompt_new_text"] = ""
                     st.session_state["tr_prompt_template"] = name
-                    st.session_state["tr_prompt_template_applied"] = name
                     st.toast(t("trend_prompt_template_saved"), icon="💾")
                     st.rerun()
                 except OSError as exc:
@@ -398,9 +393,7 @@ def render(_env_values: dict, config_values: dict) -> None:
                 "categories": categories,
                 "sort_order": st.session_state.get("trend_sort_order", "ascending"),
                 "max_results": int(st.session_state.get("trend_max_results", 500)),
-                "analysis_prompt": (
-                    st.session_state.get("trend_analysis_prompt", "") or ""
-                ).strip(),
+                "analysis_prompt": active_prompt.strip(),
             }
             try:
                 if _IS_DOCKER_WEBUI:
@@ -481,6 +474,16 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
             formats.append("html")
         return formats
 
+    templates = _load_prompt_templates()
+    selected_template = st.session_state.get("tr_prompt_template")
+    if isinstance(selected_template, str) and selected_template in templates:
+        analysis_prompt = templates[selected_template].strip()
+    elif "tr_prompt_template" in st.session_state:
+        # 页面已浏览且明确选择了「不使用模板」
+        analysis_prompt = ""
+    else:
+        analysis_prompt = str(current("trend_analysis_prompt", "") or "").strip()
+
     return {
         "trend_default_date_range_days": current("trend_default_date_range_days", 365),
         "trend_max_results": current("trend_max_results", 500),
@@ -490,5 +493,5 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "trend_tldr_batch_size": current("trend_tldr_batch_size", 10),
         "trend_output_formats": current_formats(),
         "trend_enabled_skills": enabled_skills,
-        "trend_analysis_prompt": str(current("trend_analysis_prompt", "") or "").strip(),
+        "trend_analysis_prompt": analysis_prompt,
     }
