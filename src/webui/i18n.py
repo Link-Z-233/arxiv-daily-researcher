@@ -569,7 +569,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "e.g., I study quantum error correction and topological quantum computing...",
     },
     # ── scoring.py ───────────────────────────────────────────────────────
-    "scoring_title": {"zh": "资格与排序策略", "en": "Qualification & Ranking"},
+    "scoring_title": {"zh": "评价策略", "en": "Evaluation Policy"},
     "scoring_hint": {
         "zh": "V2 仅用内容相关性决定资格；参考词与作者偏好只影响合格论文的排序。",
         "en": "V2 uses content relevance for qualification; reference terms and author preference only rank qualified papers.",
