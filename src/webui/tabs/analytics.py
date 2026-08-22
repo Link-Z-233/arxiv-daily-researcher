@@ -135,7 +135,7 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
     grid_rows = []
     for weekday in range(7):
         prefix = (
-            f'<td style="padding:0 4px 0 0;font-size:10px;color:#666;'
+            f'<td style="width:26px;padding:0 4px 0 0;font-size:10px;color:#666;'
             f'white-space:nowrap;">{_week_labels()[weekday]}</td>'
         )
         cells = [
@@ -144,7 +144,8 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
         ]
         grid_rows.append("<tr>" + prefix + "".join(cells) + "</tr>")
 
-    # 月份标签行：每周的起始日进入新月份时打一个标签。
+    # 月份标签行：每周的起始日进入新月份时打一个标签。固定布局下列宽只由
+    # 单元格 width 决定，标签文字溢出显示、不参与宽度计算（等宽网格）。
     month_cells = []
     current_month = -1
     for week_offset in range(weeks):
@@ -154,8 +155,8 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
             current_month = week_start.month
             label = _month_label(current_month)
         month_cells.append(
-            f'<td style="font-size:10px;color:#666;padding:0 0 2px 0;'
-            f'white-space:nowrap;">{label}</td>'
+            f'<td style="width:11px;overflow:visible;font-size:10px;color:#666;'
+            f'padding:0 0 2px 0;white-space:nowrap;">{label}</td>'
         )
     header_row = '<tr><td style="width:26px;"></td>' + "".join(month_cells) + "</tr>"
 
@@ -169,9 +170,12 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
         f'{t("usage_heatmap_less")} {legend} {t("usage_heatmap_more")}</div>'
     )
 
+    # 固定布局 + 显式像素宽度：月份标签溢出显示但不占列宽，单元格保持等宽 11px。
+    table_width = weeks * 13 + 30
     return (
         '<div id="usage-heatmap" style="overflow-x:auto;">'
-        '<table style="border-collapse:separate;border-spacing:2px 2px;">'
+        f'<table style="border-collapse:separate;border-spacing:2px 2px;'
+        f'table-layout:fixed;width:{table_width}px;">'
         f"{header_row}"
         + "".join(grid_rows)
         + "</table>"

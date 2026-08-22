@@ -47,6 +47,13 @@ class HeatmapTests(unittest.TestCase):
         # 53 列周网格：header 行有 53 个月度标签单元格
         header_row = html.split("<tr>")[1]
         self.assertEqual(header_row.count("<td"), 54)  # 1 空占位 + 53 周
+        # 固定布局 + 显式宽度：月份标签不占列宽，单元格保持等宽网格
+        self.assertIn("table-layout:fixed", html)
+        self.assertIn("overflow:visible", header_row)
+        self.assertRegex(html, r"width:\d+px;\">")
+        self.assertTrue(
+            all("width:11px" in cell for cell in header_row.split("<td")[2:])
+        )
 
     def test_heatmap_document_autoscrolls_to_the_latest(self):
         document = analytics._scroll_right_document(analytics._render_heatmap_html({}))
