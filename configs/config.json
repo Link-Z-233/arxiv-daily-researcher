@@ -220,9 +220,12 @@
   // ==================================================
   "daily_research": {
     "enable_deep_analysis": true,
-    // 0 = process every pending paper; positive values are useful for tests.
-    // Fetching is never truncated: excess candidates stay queued in SQLite.
-    "max_papers_per_run": 0,
+    // Per-run processing cap. A fresh deployment collects a large backlog in
+    // its first scan; the default 200 prevents huge single runs while later
+    // runs drain the queue. Once drained, a normal day's new papers all fit
+    // below the cap. 0 = process every pending paper. Fetching is never
+    // truncated: excess candidates stay queued in SQLite.
+    "max_papers_per_run": 200,
     "db_path": "data/daily_research/daily_research.db"
   },
 

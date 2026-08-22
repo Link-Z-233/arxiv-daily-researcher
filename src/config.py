@@ -232,9 +232,11 @@ class Settings(BaseSettings):
     # Compatibility field only. SQLite is mandatory for daily research.
     DAILY_RESEARCH_PERSISTENCE_ENABLED: bool = True
     DAILY_RESEARCH_DB_PATH: Path = DATA_DIR / "daily_research" / "daily_research.db"
-    # 0 means process the complete pending queue. A positive value limits only
-    # downstream work; source scans still exhaust their configured windows.
-    DAILY_MAX_PAPERS_PER_RUN: int = 0
+    # 0 means process the complete pending queue. The default 200 protects a
+    # fresh deployment whose first scan collects weeks of backlog; the excess
+    # stays queued and is drained by subsequent runs, after which a normal
+    # day's new papers all fit below the cap.
+    DAILY_MAX_PAPERS_PER_RUN: int = 200
 
     # ==================== PDF 解析配置 ====================
     PDF_PARSER_MODE: str = "mineru"  # PDF 解析模式: "mineru" (云端API) 或 "pymupdf" (本地解析)

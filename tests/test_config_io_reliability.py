@@ -221,7 +221,7 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         self.assertEqual(legacy_flat["search_days"], 3)
         self.assertNotIn("max_results", legacy_flat)
         self.assertNotIn("max_results_per_source", legacy_flat)
-        self.assertEqual(legacy_flat["daily_max_papers_per_run"], 0)
+        self.assertEqual(legacy_flat["daily_max_papers_per_run"], 200)
 
     def test_daily_queue_limit_round_trips_and_sqlite_is_mandatory(self):
         config = build_config_dict(

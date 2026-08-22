@@ -270,8 +270,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Maximum papers per run",
     },
     "daily_max_papers_help": {
-        "zh": "0 表示处理全部。正数只限制本次评分/分析数量；抓取仍完整执行，剩余论文保存在 SQLite 中等待下次处理。",
-        "en": "0 processes all papers. A positive value limits scoring/analysis only; scans remain complete and excess papers stay queued in SQLite.",
+        "zh": "单次运行最多处理的论文数，默认 200：首次部署会一次性抓到大量历史论文，上限确保不会一次处理过多，堆积由后续运行消化，消化完每天正常处理全部新论文；0 表示不限。抓取始终完整执行，剩余论文保存在 SQLite 中等待下次处理。",
+        "en": "Maximum papers processed per run, default 200: a fresh deployment first collects a large backlog at once, so the cap prevents huge single runs while later runs drain the queue; once drained, each day's new papers are processed in full. 0 means unlimited. Scans always run complete; excess papers stay queued in SQLite.",
     },
     "markdown_report_label": {"zh": "Markdown 报告", "en": "Markdown Report"},
     "no_logs_found": {"zh": "暂未找到日志文件。", "en": "No log files found."},

@@ -953,7 +953,7 @@ def render(_env_values: dict, config_values: dict) -> None:
             t("daily_max_papers_label"),
             min_value=0,
             max_value=100000,
-            value=int(flat.get("daily_max_papers_per_run", 0)),
+            value=int(flat.get("daily_max_papers_per_run", 200)),
             step=1,
             key="daily_max_papers_per_run",
             help=t("daily_max_papers_help"),
@@ -983,5 +983,5 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "enable_html_report": current("enable_html_report", True),
         "enable_markdown_report": current("enable_markdown_report", True),
         "include_all_in_report": current("include_all_in_report", True),
-        "daily_max_papers_per_run": int(current("daily_max_papers_per_run", 0)),
+        "daily_max_papers_per_run": int(current("daily_max_papers_per_run", 200)),
     }

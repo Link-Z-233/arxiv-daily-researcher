@@ -649,7 +649,7 @@ def build_config_dict(
     llm_request_pool_log_slow_wait_seconds: float = 5.0,
     daily_research_persistence_enabled: bool = True,
     daily_research_db_path: str = "data/daily_research/daily_research.db",
-    daily_max_papers_per_run: int = 0,
+    daily_max_papers_per_run: int = 200,
     daily_enable_deep_analysis: bool = True,
     pdf_parser_mode: str = "mineru",
     mineru_model_version: str = "pipeline",
@@ -1171,7 +1171,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     # the argument back to build_config_dict; SQLite itself is no longer
     # optional and new config files omit the obsolete switch.
     flat["daily_research_persistence_enabled"] = True
-    flat["daily_max_papers_per_run"] = dr.get("max_papers_per_run", 0)
+    flat["daily_max_papers_per_run"] = dr.get("max_papers_per_run", 200)
     flat["daily_research_db_path"] = dr.get(
         "db_path", "data/daily_research/daily_research.db"
     )
