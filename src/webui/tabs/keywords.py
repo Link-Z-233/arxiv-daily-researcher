@@ -144,56 +144,59 @@ def render(_env_values: dict, config_values: dict):
         st.markdown(t("weight_distribution"))
         col3, col4, col5 = st.columns(3)
         with col3:
-            st.markdown(t("high_importance"))
-            st.number_input(
-                t("weight_label"),
-                value=float(flat.get("ref_weight_high", 1.0)),
-                min_value=0.0,
-                max_value=5.0,
-                step=0.1,
-                key="ref_weight_high",
-            )
-            st.number_input(
-                t("count_label"),
-                value=flat.get("ref_count_high", 3),
-                min_value=0,
-                max_value=20,
-                key="ref_count_high",
-            )
+            with st.container(border=True):
+                st.markdown(t("high_importance"))
+                st.number_input(
+                    t("weight_label"),
+                    value=float(flat.get("ref_weight_high", 1.0)),
+                    min_value=0.0,
+                    max_value=5.0,
+                    step=0.1,
+                    key="ref_weight_high",
+                )
+                st.number_input(
+                    t("count_label"),
+                    value=flat.get("ref_count_high", 3),
+                    min_value=0,
+                    max_value=20,
+                    key="ref_count_high",
+                )
         with col4:
-            st.markdown(t("medium_importance"))
-            st.number_input(
-                t("weight_label"),
-                value=float(flat.get("ref_weight_medium", 0.2)),
-                min_value=0.0,
-                max_value=5.0,
-                step=0.1,
-                key="ref_weight_medium",
-            )
-            st.number_input(
-                t("count_label"),
-                value=flat.get("ref_count_medium", 5),
-                min_value=0,
-                max_value=20,
-                key="ref_count_medium",
-            )
+            with st.container(border=True):
+                st.markdown(t("medium_importance"))
+                st.number_input(
+                    t("weight_label"),
+                    value=float(flat.get("ref_weight_medium", 0.2)),
+                    min_value=0.0,
+                    max_value=5.0,
+                    step=0.1,
+                    key="ref_weight_medium",
+                )
+                st.number_input(
+                    t("count_label"),
+                    value=flat.get("ref_count_medium", 5),
+                    min_value=0,
+                    max_value=20,
+                    key="ref_count_medium",
+                )
         with col5:
-            st.markdown(t("low_importance"))
-            st.number_input(
-                t("weight_label"),
-                value=float(flat.get("ref_weight_low", 0.1)),
-                min_value=0.0,
-                max_value=5.0,
-                step=0.1,
-                key="ref_weight_low",
-            )
-            st.number_input(
-                t("count_label"),
-                value=flat.get("ref_count_low", 2),
-                min_value=0,
-                max_value=20,
-                key="ref_count_low",
-            )
+            with st.container(border=True):
+                st.markdown(t("low_importance"))
+                st.number_input(
+                    t("weight_label"),
+                    value=float(flat.get("ref_weight_low", 0.1)),
+                    min_value=0.0,
+                    max_value=5.0,
+                    step=0.1,
+                    key="ref_weight_low",
+                )
+                st.number_input(
+                    t("count_label"),
+                    value=flat.get("ref_count_low", 2),
+                    min_value=0,
+                    max_value=20,
+                    key="ref_count_low",
+                )
 
     # 已提取关键词是只读数据展示，始终可见
     _render_extracted_keywords_box()
