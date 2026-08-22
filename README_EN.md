@@ -121,7 +121,7 @@ First-time deployment includes a 7-step CLI wizard covering LLM, search, data so
 
 ### 🖥️ Streamlit Config Panel <sup><kbd>v4.0</kbd></sup>
 
-An **11-tab** browser-based management interface: Daily Push (run manager + report toggles), Report Viewer, Trend Analysis, Keywords, Search, Scoring, Notifications, Data Management (config export + WebDAV sync), API Config, Network Proxy, and Advanced Settings.
+An **11-tab** browser-based management interface: Daily Push (run manager + report toggles), Report Viewer (quick marks + paper search), Analytics (token usage + source health + run diagnostics), Trend Analysis, Keywords, Search, Scoring, Notifications, Data Management (config export + WebDAV sync + DB backup), API Config, and Advanced Settings (incl. Network Proxy).
 
 </td>
 </tr>
@@ -318,17 +318,17 @@ The config panel shares the same `.env` and `configs/config.json` as the main pr
 
 | # | Tab | Functionality |
 | :---: | :----------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 | **Daily Push** | One-click daily research run; run status monitoring (lock file / PID); **Daily Research Settings** (HTML report / Markdown report / Include all papers); run log viewer with auto-redirect to latest non-system log |
-| 2 | **Report Viewer** | Three-column display of Daily Research / Trend Research / Keyword Trend HTML reports; auto-opens latest visible report; report preview, trend metadata display, same-source date navigation |
-| 3 | **Trend Analysis** | Set keywords, date range, category filter, sort order, max results, TLDR, Markdown/HTML dual-toggle output format, and Skill selection; one-click start/stop trend research |
-| 4 | **Keywords** | Manage primary keywords, reference PDF extraction, similarity threshold, weight distribution, research context |
-| 5 | **Search** | Search days, per-source fetch count, data source toggles, ArXiv categories and fetch timeout |
-| 6 | **Scoring** | Pass threshold formula, max score per keyword, author bonus, live scoring preview |
-| 7 | **Notifications** | Global toggle, success/failure/attachment controls, six-channel config, SMTP test |
-| 8 | **Data Management** | One-click config export (config.json + .env) as zip; **WebDAV sync** (manual / scheduled / post-report auto), with connection test, upload, download |
-| 9 | **API** | Configure CHEAP_LLM / SMART_LLM / MinerU, with connection test support |
-| 10 | **Network Proxy** | HTTP/SOCKS5 proxy config with per-service granularity (ArXiv / OpenAlex / Semantic Scholar / LLM API / Notifications / Update Check), Docker & GitHub Actions compatible |
-| 11 | **Advanced** | PDF parsing mode, concurrency, token tracking, auto update check, keyword trend tracking, retry, log rotation, and stale lock reclamation |
+| 1 | **Daily Push** | One-click daily research run; run status monitoring (lock file / PID); **Daily Research Settings** (HTML report / Markdown report / Include all papers / per-run cap); run log viewer with auto-redirect to latest non-system log |
+| 2 | **Report Viewer** | Three-column display of Daily Research / Trend Research / Keyword Trend HTML reports with preview and date navigation; **quick marks** below the preview (like/dislike/clear + interest profile); **paper search** at the bottom of the page (full-archive metadata search) |
+| 3 | **Analytics** | Token usage (today / 30-day totals on top, one-month heatmap, static adaptive line chart, per-model table), source health (last 20 scan receipts), slim run diagnostics |
+| 4 | **Trend Analysis** | Set keywords, date range, category filter, sort order, max results, TLDR, output formats and the comprehensive-analysis skill; custom deep-analysis prompt (save/apply/delete templates); one-click start/stop trend research |
+| 5 | **Keywords** | Research context (top), primary keywords, reference PDF extraction (with extracted-keywords box), similarity threshold, weight distribution |
+| 6 | **Search** | Search days, data source toggles, extra sources (built-in dropdown + custom add after enabling), ArXiv categories and fetch timeout |
+| 7 | **Scoring** | Scoring strategy (v1 / V2 / learned), pass threshold formula, max score per keyword, author bonus, live scoring preview |
+| 8 | **Notifications** | Global toggle, success/failure/attachment controls, six-channel config, SMTP test |
+| 9 | **Data Management** | One-click config export (config.json + .env) as zip; **WebDAV sync** (manual / scheduled / post-report auto); **database backup** (gzip + local/WebDAV rotation + backup now) |
+| 10 | **API** | Configure CHEAP_LLM / SMART_LLM / MinerU, with connection test support |
+| 11 | **Advanced** | PDF parsing mode, concurrency, token tracking, auto update check, keyword trend tracking, retry, log rotation, stale lock reclamation, and **Network Proxy** (merged into this tab) |
 
 ### 🖼️ WebUI Screenshots
 
