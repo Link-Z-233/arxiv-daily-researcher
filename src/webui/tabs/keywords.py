@@ -117,9 +117,10 @@ def render(_env_values: dict, config_values: dict):
         key="enable_reference_extraction",
     )
 
-    _render_extracted_keywords_box()
-
-    with st.expander(t("ref_extract_expander"), expanded=False):
+    # 与代理配置一致：开关关闭时收起全部详细设置，磁盘现值保持不变。
+    if st.session_state.get(
+        "enable_reference_extraction", flat.get("enable_reference_extraction", False)
+    ):
         col1, col2 = st.columns(2)
         with col1:
             st.number_input(
@@ -193,6 +194,9 @@ def render(_env_values: dict, config_values: dict):
                 max_value=20,
                 key="ref_count_low",
             )
+
+    # 已提取关键词是只读数据展示，始终可见
+    _render_extracted_keywords_box()
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:

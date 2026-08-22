@@ -526,10 +526,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "启用参考文献关键词提取",
         "en": "Enable reference keyword extraction",
     },
-    "ref_extract_expander": {
-        "zh": "参考文献提取设置",
-        "en": "Reference Extraction Settings",
-    },
     "max_extracted_kws": {
         "zh": "最大提取关键词数",
         "en": "Max extracted keywords",
@@ -759,10 +755,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "enable_kw_tracker": {
         "zh": "启用关键词追踪",
         "en": "Enable keyword tracking",
-    },
-    "kw_tracker_expander": {
-        "zh": "关键词追踪设置",
-        "en": "Keyword Tracker Settings",
     },
     "ai_normalization_label": {
         "zh": "AI 归一化",

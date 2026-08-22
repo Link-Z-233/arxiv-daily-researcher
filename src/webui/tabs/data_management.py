@@ -63,135 +63,138 @@ def render(env_values: dict, config_values: dict):
         unsafe_allow_html=True,
     )
 
-    # 全局开关
+    # 全局开关（与代理配置一致：关闭时收起全部详细设置）
     st.toggle(
         t("dm_webdav_enable"),
         value=flat.get("webdav_enabled", False),
         key="webdav_enabled",
     )
 
-    # WebDAV 连接凭据（直接在面板配置，类似 API tab）
-    st.text_input(
-        t("dm_webdav_url_label"),
-        value=env_values.get("WEBDAV_URL", ""),
-        key="webdav_url",
-        placeholder="https://dav.jianguoyun.com/dav/",
-    )
-
-    col_u, col_p = st.columns(2)
-    with col_u:
+    if st.session_state.get("webdav_enabled", flat.get("webdav_enabled", False)):
+        # WebDAV 连接凭据（直接在面板配置，类似 API tab）
         st.text_input(
-            t("dm_webdav_username_label"),
-            value=env_values.get("WEBDAV_USERNAME", ""),
-            key="webdav_username",
-        )
-    with col_p:
-        render_secret_input(
-            st,
-            label=t("dm_webdav_password_label"),
-            env_values=env_values,
-            env_key="WEBDAV_PASSWORD",
-            field_key="webdav_password",
-            configured_hint=t("secret_configured_keep_blank"),
+            t("dm_webdav_url_label"),
+            value=env_values.get("WEBDAV_URL", ""),
+            key="webdav_url",
+            placeholder="https://dav.jianguoyun.com/dav/",
         )
 
-    # 操作按钮（紧跟凭据后面）
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        if st.button(t("dm_webdav_test_btn"), use_container_width=True):
-            _do_test_connection(env_values)
-    with col_b:
-        if st.button(t("dm_webdav_upload_btn"), use_container_width=True):
-            _do_sync("upload", env_values)
-    with col_c:
-        if st.button(t("dm_webdav_download_btn"), use_container_width=True):
-            _do_sync("download", env_values)
+        col_u, col_p = st.columns(2)
+        with col_u:
+            st.text_input(
+                t("dm_webdav_username_label"),
+                value=env_values.get("WEBDAV_USERNAME", ""),
+                key="webdav_username",
+            )
+        with col_p:
+            render_secret_input(
+                st,
+                label=t("dm_webdav_password_label"),
+                env_values=env_values,
+                env_key="WEBDAV_PASSWORD",
+                field_key="webdav_password",
+                configured_hint=t("secret_configured_keep_blank"),
+            )
 
-    st.divider()
+        # 操作按钮（紧跟凭据后面）
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            if st.button(t("dm_webdav_test_btn"), use_container_width=True):
+                _do_test_connection(env_values)
+        with col_b:
+            if st.button(t("dm_webdav_upload_btn"), use_container_width=True):
+                _do_sync("upload", env_values)
+        with col_c:
+            if st.button(t("dm_webdav_download_btn"), use_container_width=True):
+                _do_sync("download", env_values)
 
-    # 远程路径 & 同步设置
-    st.markdown(
-        f'<p class="section-title">⚙️ {t("dm_webdav_sync_settings")}</p>',
-        unsafe_allow_html=True,
-    )
+        st.divider()
 
-    st.text_input(
-        t("dm_webdav_remote_path"),
-        value=flat.get("webdav_remote_path", "/arxiv-daily-researcher/"),
-        key="webdav_remote_path",
-        help=t("dm_webdav_remote_path_help"),
-    )
-
-    # 同步模式
-    mode_options = ["manual", "scheduled", "after_report"]
-    mode_labels = [
-        t("dm_webdav_mode_manual"),
-        t("dm_webdav_mode_scheduled"),
-        t("dm_webdav_mode_after_report"),
-    ]
-    current_mode = flat.get("webdav_sync_mode", "after_report")
-    current_idx = mode_options.index(current_mode) if current_mode in mode_options else 2
-
-    selected_label = st.selectbox(
-        t("dm_webdav_sync_mode"),
-        options=mode_labels,
-        index=current_idx,
-        key="webdav_sync_mode_label",
-    )
-    _mode_idx = mode_labels.index(selected_label)
-    st.session_state["webdav_sync_mode"] = mode_options[_mode_idx]
-
-    # 定时同步 — 时间选择器（小时:分钟）
-    if st.session_state.get("webdav_sync_mode") == "scheduled":
-        # Parse existing cron or default to 23:00
-        cron_str = flat.get("webdav_cron_schedule", "0 23 * * *")
-        try:
-            parts = cron_str.split()
-            default_hour = int(parts[1]) if len(parts) > 1 else 23
-            default_minute = int(parts[0]) if len(parts) > 0 else 0
-        except (ValueError, IndexError):
-            default_hour, default_minute = 23, 0
-
-        sync_time = st.time_input(
-            t("dm_webdav_sync_time"),
-            value=dt_time(default_hour, default_minute),
-            key="webdav_sync_time",
-            help=t("dm_webdav_sync_time_help"),
+        # 远程路径 & 同步设置
+        st.markdown(
+            f'<p class="section-title">⚙️ {t("dm_webdav_sync_settings")}</p>',
+            unsafe_allow_html=True,
         )
-        # Store as cron expression for backend compatibility
-        st.session_state["webdav_cron_schedule"] = f"{sync_time.minute} {sync_time.hour} * * *"
 
-    st.divider()
+        st.text_input(
+            t("dm_webdav_remote_path"),
+            value=flat.get("webdav_remote_path", "/arxiv-daily-researcher/"),
+            key="webdav_remote_path",
+            help=t("dm_webdav_remote_path_help"),
+        )
 
-    # 同步范围
-    st.markdown(
-        f'<p class="section-title">📂 {t("dm_webdav_scope_title")}</p>',
-        unsafe_allow_html=True,
-    )
+        # 同步模式
+        mode_options = ["manual", "scheduled", "after_report"]
+        mode_labels = [
+            t("dm_webdav_mode_manual"),
+            t("dm_webdav_mode_scheduled"),
+            t("dm_webdav_mode_after_report"),
+        ]
+        current_mode = flat.get("webdav_sync_mode", "after_report")
+        current_idx = mode_options.index(current_mode) if current_mode in mode_options else 2
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.toggle(
-            t("dm_webdav_sync_configs_label"),
-            value=flat.get("webdav_sync_configs", True),
-            key="webdav_sync_configs",
+        selected_label = st.selectbox(
+            t("dm_webdav_sync_mode"),
+            options=mode_labels,
+            index=current_idx,
+            key="webdav_sync_mode_label",
         )
-        st.toggle(
-            t("dm_webdav_sync_history_label"),
-            value=flat.get("webdav_sync_history", True),
-            key="webdav_sync_history",
+        _mode_idx = mode_labels.index(selected_label)
+        st.session_state["webdav_sync_mode"] = mode_options[_mode_idx]
+
+        # 定时同步 — 时间选择器（小时:分钟）
+        if st.session_state.get("webdav_sync_mode") == "scheduled":
+            # Parse existing cron or default to 23:00
+            cron_str = flat.get("webdav_cron_schedule", "0 23 * * *")
+            try:
+                parts = cron_str.split()
+                default_hour = int(parts[1]) if len(parts) > 1 else 23
+                default_minute = int(parts[0]) if len(parts) > 0 else 0
+            except (ValueError, IndexError):
+                default_hour, default_minute = 23, 0
+
+            sync_time = st.time_input(
+                t("dm_webdav_sync_time"),
+                value=dt_time(default_hour, default_minute),
+                key="webdav_sync_time",
+                help=t("dm_webdav_sync_time_help"),
+            )
+            # Store as cron expression for backend compatibility
+            st.session_state["webdav_cron_schedule"] = (
+                f"{sync_time.minute} {sync_time.hour} * * *"
+            )
+
+        st.divider()
+
+        # 同步范围
+        st.markdown(
+            f'<p class="section-title">📂 {t("dm_webdav_scope_title")}</p>',
+            unsafe_allow_html=True,
         )
-    with col2:
-        st.toggle(
-            t("dm_webdav_sync_keywords_label"),
-            value=flat.get("webdav_sync_keywords", True),
-            key="webdav_sync_keywords",
-        )
-        st.toggle(
-            t("dm_webdav_sync_reports_label"),
-            value=flat.get("webdav_sync_reports", False),
-            key="webdav_sync_reports",
-        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.toggle(
+                t("dm_webdav_sync_configs_label"),
+                value=flat.get("webdav_sync_configs", True),
+                key="webdav_sync_configs",
+            )
+            st.toggle(
+                t("dm_webdav_sync_history_label"),
+                value=flat.get("webdav_sync_history", True),
+                key="webdav_sync_history",
+            )
+        with col2:
+            st.toggle(
+                t("dm_webdav_sync_keywords_label"),
+                value=flat.get("webdav_sync_keywords", True),
+                key="webdav_sync_keywords",
+            )
+            st.toggle(
+                t("dm_webdav_sync_reports_label"),
+                value=flat.get("webdav_sync_reports", False),
+                key="webdav_sync_reports",
+            )
 
     st.divider()
 
@@ -205,30 +208,31 @@ def render(env_values: dict, config_values: dict):
         unsafe_allow_html=True,
     )
 
-    col_b1, col_b2 = st.columns([3, 1])
-    with col_b1:
-        st.toggle(
-            t("dm_backup_enable"),
-            value=flat.get("backup_enabled", True),
-            key="backup_enabled",
-        )
-        st.toggle(
-            t("dm_backup_upload_label"),
-            value=flat.get("backup_upload_to_webdav", True),
-            key="backup_upload_to_webdav",
-        )
-    with col_b2:
-        st.number_input(
-            t("dm_backup_keep_label"),
-            min_value=1,
-            max_value=60,
-            value=int(flat.get("backup_keep", 5)),
-            key="backup_keep",
-            help=t("dm_backup_keep_help"),
-        )
+    st.toggle(
+        t("dm_backup_enable"),
+        value=flat.get("backup_enabled", True),
+        key="backup_enabled",
+    )
 
-    if st.button(t("dm_backup_now_btn"), use_container_width=True):
-        _do_backup(env_values)
+    if st.session_state.get("backup_enabled", flat.get("backup_enabled", True)):
+        col_b1, col_b2 = st.columns([3, 1])
+        with col_b1:
+            st.toggle(
+                t("dm_backup_upload_label"),
+                value=flat.get("backup_upload_to_webdav", True),
+                key="backup_upload_to_webdav",
+            )
+            st.number_input(
+                t("dm_backup_keep_label"),
+                min_value=1,
+                max_value=60,
+                value=int(flat.get("backup_keep", 5)),
+                key="backup_keep",
+                help=t("dm_backup_keep_help"),
+            )
+        with col_b2:
+            if st.button(t("dm_backup_now_btn"), use_container_width=True):
+                _do_backup(env_values)
 
     backups = _list_backups()
     if backups:

@@ -154,7 +154,10 @@ def render(env_values: dict, config_values: dict):
         key="keyword_tracker_enabled",
     )
 
-    with st.expander(t("kw_tracker_expander"), expanded=False):
+    # 与代理配置一致：开关关闭时收起全部详细设置，磁盘现值保持不变。
+    if st.session_state.get(
+        "keyword_tracker_enabled", flat.get("keyword_tracker_enabled", True)
+    ):
         col8, col9 = st.columns(2)
         with col8:
             st.toggle(
