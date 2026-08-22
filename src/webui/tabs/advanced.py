@@ -16,8 +16,8 @@ def render(env_values: dict, config_values: dict):
 
     col1, col2 = st.columns(2)
     with col1:
-        mode_options = ["mineru", "pymupdf"]
-        current_mode = flat.get("pdf_parser_mode", "mineru")
+        mode_options = ["pymupdf", "mineru"]
+        current_mode = flat.get("pdf_parser_mode", "pymupdf")
         st.selectbox(
             t("parser_mode_label"),
             options=mode_options,
@@ -295,7 +295,7 @@ def collect(env_values: dict, config_values: dict) -> dict:
     ) // (1024 * 1024)
 
     return {
-        "pdf_parser_mode": current("pdf_parser_mode", "mineru"),
+        "pdf_parser_mode": current("pdf_parser_mode", "pymupdf"),
         "mineru_model_version": current("mineru_model_version", "pipeline"),
         "pdf_download_max_bytes": int(
             current("pdf_download_max_mb", configured_pdf_mb)

@@ -244,7 +244,7 @@ class Settings(BaseSettings):
     DAILY_RUN_TIME: str = "08:00"
 
     # ==================== PDF 解析配置 ====================
-    PDF_PARSER_MODE: str = "mineru"  # PDF 解析模式: "mineru" (云端API) 或 "pymupdf" (本地解析)
+    PDF_PARSER_MODE: str = "pymupdf"  # PDF 解析模式: "pymupdf" (本地解析) 或 "mineru" (云端API)
     MINERU_API_KEY: str = ""  # MinerU API Token
     MINERU_MODEL_VERSION: str = "pipeline"  # MinerU 模型版本: pipeline 或 vlm
     MINERU_POLL_INTERVAL: int = 3  # MinerU 任务状态轮询间隔（秒）
@@ -793,7 +793,7 @@ class Settings(BaseSettings):
             # 加载 PDF 解析配置
             if "pdf_parser" in config:
                 pdf_cfg = config["pdf_parser"]
-                self.PDF_PARSER_MODE = pdf_cfg.get("mode", "mineru")
+                self.PDF_PARSER_MODE = pdf_cfg.get("mode", "pymupdf")
                 self.MINERU_MODEL_VERSION = pdf_cfg.get("mineru_model_version", "pipeline")
                 self.MINERU_POLL_INTERVAL = pdf_cfg.get("poll_interval", 3)
                 self.MINERU_POLL_TIMEOUT = pdf_cfg.get("poll_timeout", 300)

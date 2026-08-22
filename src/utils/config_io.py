@@ -654,7 +654,7 @@ def build_config_dict(
     daily_max_papers_per_run: int = 200,
     daily_run_time: str = "08:00",
     daily_enable_deep_analysis: bool = True,
-    pdf_parser_mode: str = "mineru",
+    pdf_parser_mode: str = "pymupdf",
     mineru_model_version: str = "pipeline",
     mineru_poll_interval: int = 3,
     mineru_poll_timeout: int = 300,
@@ -1198,7 +1198,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
 
     # PDF parser
     pp = config.get("pdf_parser", {})
-    flat["pdf_parser_mode"] = pp.get("mode", "mineru")
+    flat["pdf_parser_mode"] = pp.get("mode", "pymupdf")
     flat["mineru_model_version"] = pp.get("mineru_model_version", "pipeline")
     flat["mineru_poll_interval"] = pp.get("poll_interval", 3)
     flat["mineru_poll_timeout"] = pp.get("poll_timeout", 300)
