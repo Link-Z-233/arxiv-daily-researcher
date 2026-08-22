@@ -67,12 +67,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "rm_queue_pending": {"zh": "待处理队列", "en": "Pending queue"},
     "rm_queue_failed": {"zh": "失败待重试", "en": "Awaiting retry"},
-    "rm_queue_estimate": {"zh": "处理节奏", "en": "Pace"},
-    "rm_queue_batches": {
-        "zh": "还需 {n} 次运行（每次 {per} 篇）",
-        "en": "{n} more runs ({per}/run)",
-    },
-    "rm_queue_all": {"zh": "下次运行全量处理", "en": "All on next run"},
     "rm_stop_btn": {"zh": "停止运行", "en": "Stop run"},
     "rm_stop_confirm": {"zh": "确认停止", "en": "Confirm stop"},
     "rm_stop_confirm_hint": {
