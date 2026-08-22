@@ -15,7 +15,9 @@
   "use strict";
 
   // 与 Streamlit 组件宿主的最小协议握手：componentReady → render/componentValue。
+  // 发往宿主的消息必须带 isStreamlitMessage 标记，否则会被宿主静默丢弃。
   function send(message) {
+    message.isStreamlitMessage = true;
     window.parent.postMessage(message, "*");
   }
 
