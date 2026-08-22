@@ -2,9 +2,10 @@
 
 import streamlit as st
 from webui.i18n import t
+from webui.tabs import proxy as _proxy_section
 
 
-def render(_env_values: dict, config_values: dict):
+def render(env_values: dict, config_values: dict):
     """Render the Advanced Settings tab."""
 
     flat = config_values
@@ -275,11 +276,17 @@ def render(_env_values: dict, config_values: dict):
 
     # 趋势分析设置已移至「趋势分析」 Tab，请在趋势分析 Tab 中配置。
 
+    st.divider()
 
-def collect(_env_values: dict, _config_values: dict) -> dict:
+    # ---- 网络代理（原独立 Tab 并入）----
+    _proxy_section.render(env_values, config_values)
+
+
+def collect(env_values: dict, config_values: dict) -> dict:
     """从 session_state 收集当前值，返回 config 更新字典。"""
-    # 注意：趋势分析的配置已移至 trend_runner.py，这里不再收集趋势分析相关设置。
-    flat = _config_values or {}
+    # 注意：趋势分析的配置已移至 trend_runner.py；网络代理并入本页，
+    # 由 proxy.collect 一并收集。
+    flat = config_values or {}
 
     def current(key: str, default):
         return st.session_state.get(key, flat.get(key, default))
@@ -318,4 +325,5 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "run_lock_max_age_hours": current("run_lock_max_age_hours", 12),
         "log_rotation_type": current("log_rotation_type", "time"),
         "log_keep_days": current("log_keep_days", 30),
+        **_proxy_section.collect(env_values, config_values),
     }

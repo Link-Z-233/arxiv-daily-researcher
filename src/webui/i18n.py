@@ -1033,7 +1033,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_health_qualification_rate": {"zh": "评分通过率", "en": "Qualification rate"},
     "rm_health_notification_backlog": {"zh": "待处理通知", "en": "Open notifications"},
     # ── proxy.py ──────────────────────────────────────────────────────
-    "tab_proxy": {"zh": "网络代理", "en": "Network Proxy"},
     "proxy_title": {"zh": "网络代理设置", "en": "Network Proxy Settings"},
     "proxy_enable_label": {"zh": "启用网络代理", "en": "Enable Network Proxy"},
     "proxy_url_label": {"zh": "代理地址", "en": "Proxy URL"},

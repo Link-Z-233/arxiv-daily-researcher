@@ -31,7 +31,7 @@ from utils.config_io import (
 
 from webui.styles import CUSTOM_CSS
 from webui.tabs import llm, search, keywords, scoring, notifications, advanced, reports
-from webui.tabs import run_manager, trend_runner, proxy, data_management
+from webui.tabs import run_manager, trend_runner, data_management
 from webui.tabs.analytics import render as render_analytics
 from webui.i18n import t
 from webui.secret_fields import clear_secret_field_state
@@ -98,9 +98,6 @@ def do_save():
 
     # Run Manager tab -> config only（每日研究设置）
     config_updates.update(run_manager.collect(env_values, config_values))
-
-    # Proxy tab -> config only
-    config_updates.update(proxy.collect(env_values, config_values))
 
     # Data Management tab -> both env and config
     dm_env, dm_cfg = data_management.collect(env_values, config_values)
@@ -202,7 +199,6 @@ tab_labels = [
     t("tab_notifications"),  # 通知
     t("tab_data_management"),  # 数据管理
     t("tab_llm"),  # API
-    t("tab_proxy"),  # 网络代理
     t("tab_advanced"),  # 高级设置
 ]
 
@@ -217,7 +213,6 @@ pages = [
     notifications.render,
     data_management.render,
     llm.render,
-    proxy.render,
     advanced.render,
 ]
 
