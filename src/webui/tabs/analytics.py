@@ -385,13 +385,16 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
         unsafe_allow_html=True,
     )
     labels = {key: t(f"usage_range_{key}") for key, _ in _RANGE_DAYS}
-    choice = st.radio(
+    choice = st.segmented_control(
         t("usage_range_label"),
         list(labels.keys()),
+        selection_mode="single",
+        default="30",
         format_func=lambda key: labels[key],
-        horizontal=True,
         key="usage_range_choice",
     )
+    if choice not in labels:
+        choice = "30"
     days = dict(_RANGE_DAYS)[choice]
 
     window_rows = store.get_daily_token_totals(days=days)
