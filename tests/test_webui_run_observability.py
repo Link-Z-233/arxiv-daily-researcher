@@ -17,7 +17,7 @@ from utils.scoring_evaluation import (  # noqa: E402
     SCAN_OBSERVABILITY_SCHEMA,
     build_recent_scan_receipt_summaries,
 )
-from webui.tabs import run_manager  # noqa: E402
+from webui.tabs import analytics, run_manager  # noqa: E402
 
 
 class _FakeColumn:
@@ -266,11 +266,11 @@ class WebUiRunObservabilityTests(unittest.TestCase):
             _seed_scan_receipts(db_path)
             fake_st = _FakeStreamlit()
             with (
-                patch.object(run_manager, "st", fake_st),
-                patch.object(run_manager, "t", side_effect=lambda key: key),
-                patch.object(run_manager, "_daily_db_path_from_config", return_value=db_path),
+                patch.object(analytics, "st", fake_st),
+                patch.object(analytics, "t", side_effect=lambda key: key),
+                patch.object(analytics, "_daily_db_path_from_config", return_value=db_path),
             ):
-                run_manager._render_scan_receipts({})
+                analytics._render_diagnostics_section({})
 
         rendered = repr(fake_st.calls)
         self.assertNotIn("supersecret", rendered)
@@ -284,17 +284,17 @@ class WebUiRunObservabilityTests(unittest.TestCase):
             _seed_scan_receipts(db_path)
             fake_st = _FakeStreamlit()
             with (
-                patch.object(run_manager, "st", fake_st),
-                patch.object(run_manager, "t", side_effect=lambda key: key),
-                patch.object(run_manager, "_daily_db_path_from_config", return_value=db_path),
+                patch.object(analytics, "st", fake_st),
+                patch.object(analytics, "t", side_effect=lambda key: key),
+                patch.object(analytics, "_daily_db_path_from_config", return_value=db_path),
             ):
-                run_manager._render_operational_health({})
+                analytics._render_diagnostics_section({})
 
         rendered = repr(fake_st.calls)
         self.assertNotIn("supersecret", rendered)
         self.assertNotIn("https://", rendered)
         self.assertNotIn("cat:quant-ph", rendered)
-        self.assertTrue(any(kind == "dataframe" for kind, _args, _kwargs in fake_st.calls))
+        self.assertTrue(any(kind == "metric" for kind, _args, _kwargs in fake_st.calls))
 
     def test_trigger_failure_status_does_not_echo_worker_exception_text(self):
         fake_st = _FakeStreamlit()
