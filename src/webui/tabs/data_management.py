@@ -194,6 +194,58 @@ def render(env_values: dict, config_values: dict):
             key="webdav_sync_reports",
         )
 
+    st.divider()
+
+    # ==================== 数据库备份 ====================
+    st.markdown(
+        f'<p class="section-title">🗄️ {t("dm_backup_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<p class="hint-text">{t("dm_backup_hint")}</p>',
+        unsafe_allow_html=True,
+    )
+
+    col_b1, col_b2 = st.columns([3, 1])
+    with col_b1:
+        st.toggle(
+            t("dm_backup_enable"),
+            value=flat.get("backup_enabled", True),
+            key="backup_enabled",
+        )
+        st.toggle(
+            t("dm_backup_upload_label"),
+            value=flat.get("backup_upload_to_webdav", True),
+            key="backup_upload_to_webdav",
+        )
+    with col_b2:
+        st.number_input(
+            t("dm_backup_keep_label"),
+            min_value=1,
+            max_value=60,
+            value=int(flat.get("backup_keep", 5)),
+            key="backup_keep",
+            help=t("dm_backup_keep_help"),
+        )
+
+    if st.button(t("dm_backup_now_btn"), use_container_width=True):
+        _do_backup(env_values)
+
+    backups = _list_backups()
+    if backups:
+        st.caption(t("dm_backup_existing"))
+        rows = [
+            {
+                t("dm_backup_col_name"): item["name"],
+                t("dm_backup_col_size"): f"{item['size_bytes'] / 1024:.0f} KB",
+                t("dm_backup_col_time"): item["modified_at"],
+            }
+            for item in backups[:10]
+        ]
+        st.table(rows)
+    else:
+        st.caption(t("dm_backup_none"))
+
 
 def collect(env_values: dict, _config_values: dict) -> tuple:
     """收集数据管理 Tab 的配置值。返回 (env_updates, config_updates)。"""
@@ -228,6 +280,9 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         "webdav_sync_history": current_cfg("webdav_sync_history", True),
         "webdav_sync_keywords": current_cfg("webdav_sync_keywords", True),
         "webdav_sync_reports": current_cfg("webdav_sync_reports", False),
+        "backup_enabled": current_cfg("backup_enabled", True),
+        "backup_keep": current_cfg("backup_keep", 5),
+        "backup_upload_to_webdav": current_cfg("backup_upload_to_webdav", True),
     }
 
     return env_updates, config_updates
@@ -259,6 +314,66 @@ def _build_export_zip() -> bytes | None:
         for arcname, filepath in files_to_zip:
             zf.write(filepath, arcname)
     return buf.getvalue()
+
+
+def _list_backups():
+    """List rotated database backups under the shared data volume."""
+    try:
+        from utils.backup import list_local_backups
+
+        return list_local_backups(_PROJECT_ROOT / "data")
+    except Exception as e:
+        logger.warning(f"列出现有备份失败: {e}")
+        return []
+
+
+def _do_backup(env_values: dict):
+    """立即创建一次压缩数据库备份（可选上传 WebDAV）。"""
+    try:
+        from utils.backup import create_backup
+
+        webdav_sync = None
+        if st.session_state.get("backup_upload_to_webdav", True):
+            from utils.webdav_sync import WebDAVSync
+
+            url = (st.session_state.get("webdav_url") or "").strip()
+            username = (st.session_state.get("webdav_username") or "").strip()
+            password = resolve_secret_value(
+                env_values, "WEBDAV_PASSWORD", "webdav_password", st.session_state
+            )
+            if url and username:
+                webdav_sync = WebDAVSync(
+                    url=url,
+                    username=username,
+                    password=password,
+                    remote_path=(
+                        st.session_state.get("webdav_remote_path")
+                        or "/arxiv-daily-researcher/"
+                    ).strip(),
+                )
+            else:
+                st.info(t("dm_backup_local_only"))
+
+        keep = int(st.session_state.get("backup_keep", 5) or 5)
+        with st.spinner(t("dm_backup_running")):
+            result = create_backup(
+                _PROJECT_ROOT / "data", keep=keep, webdav_sync=webdav_sync
+            )
+
+        if not result.get("created"):
+            st.warning(t("dm_backup_skip_reason").format(result.get("reason", "")))
+            return
+        if result.get("uploaded"):
+            st.success(t("dm_backup_done_uploaded"))
+        elif result.get("upload_error"):
+            st.warning(t("dm_backup_done_upload_failed").format(result["upload_error"]))
+        else:
+            st.success(t("dm_backup_done_local"))
+        st.rerun()
+    except ImportError:
+        st.error(t("dm_webdav_missing_lib"))
+    except Exception as e:
+        st.error(f"{t('dm_backup_failed')}: {e}")
 
 
 def _do_test_connection(env_values: dict):

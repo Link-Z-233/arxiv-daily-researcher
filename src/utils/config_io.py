@@ -219,6 +219,7 @@ SECTION_COMMENTS = {
     "token_tracking": "Token Tracking Configuration",
     "proxy": "Network Proxy Configuration",
     "webdav": "WebDAV Sync Configuration",
+    "backup": "Database Backup Configuration",
     "trend_research": "Trend Research Mode Configuration",
 }
 
@@ -686,6 +687,9 @@ def build_config_dict(
     webdav_sync_history: bool = True,
     webdav_sync_keywords: bool = True,
     webdav_sync_reports: bool = False,
+    backup_enabled: bool = True,
+    backup_keep: int = 5,
+    backup_upload_to_webdav: bool = True,
 ) -> Dict[str, Any]:
     """Build a nested config.json dict from flat parameters."""
 
@@ -697,6 +701,13 @@ def build_config_dict(
         raise ValueError(
             "daily_research.max_papers_per_run 必须是非负整数（0 表示不限）"
         )
+
+    if (
+        isinstance(backup_keep, bool)
+        or not isinstance(backup_keep, int)
+        or backup_keep < 1
+    ):
+        raise ValueError("backup.keep 必须是正整数")
 
     if not isinstance(extra_sources_enabled, bool):
         raise ValueError("extra_sources_enabled 必须是布尔值")
@@ -923,6 +934,11 @@ def build_config_dict(
             "sync_history": webdav_sync_history,
             "sync_keywords": webdav_sync_keywords,
             "sync_reports": webdav_sync_reports,
+        },
+        "backup": {
+            "enabled": backup_enabled,
+            "keep": backup_keep,
+            "upload_to_webdav": backup_upload_to_webdav,
         },
         "trend_research": {
             "default_date_range_days": trend_default_date_range_days,
@@ -1206,6 +1222,12 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["webdav_sync_history"] = wd.get("sync_history", True)
     flat["webdav_sync_keywords"] = wd.get("sync_keywords", True)
     flat["webdav_sync_reports"] = wd.get("sync_reports", False)
+
+    # Database backup
+    bk = config.get("backup", {})
+    flat["backup_enabled"] = bk.get("enabled", True)
+    flat["backup_keep"] = bk.get("keep", 5)
+    flat["backup_upload_to_webdav"] = bk.get("upload_to_webdav", True)
 
     # Trend research
     tr = config.get("trend_research", {})

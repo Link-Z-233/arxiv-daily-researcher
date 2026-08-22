@@ -1196,6 +1196,37 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_webdav_sync_done": {"zh": "✅ 同步完成", "en": "✅ Sync completed"},
     "dm_webdav_sync_partial": {"zh": "⚠️ 部分同步成功", "en": "⚠️ Partial sync success"},
     "dm_webdav_sync_error": {"zh": "❌ 同步失败", "en": "❌ Sync failed"},
+    "dm_backup_title": {"zh": "数据库备份", "en": "Database Backup"},
+    "dm_backup_hint": {
+        "zh": "每日运行结束后自动对 SQLite 数据库做 gzip 压缩备份，本地与 WebDAV 各保留指定份数；也可手动立即备份。",
+        "en": "Automatically create a gzip-compressed SQLite backup after each daily run, keeping a bounded number of copies locally and on WebDAV; manual backup is also available.",
+    },
+    "dm_backup_enable": {"zh": "启用自动备份", "en": "Enable automatic backup"},
+    "dm_backup_upload_label": {"zh": "压缩后上传 WebDAV（节省流量）", "en": "Upload compressed backup to WebDAV (saves traffic)"},
+    "dm_backup_keep_label": {"zh": "保留份数", "en": "Copies to keep"},
+    "dm_backup_keep_help": {
+        "zh": "本地与 WebDAV 各保留的备份份数，超出后自动轮转删除最旧的备份",
+        "en": "Number of backups kept locally and on WebDAV; the oldest are rotated out",
+    },
+    "dm_backup_now_btn": {"zh": "🗄️ 立即备份", "en": "🗄️ Back Up Now"},
+    "dm_backup_existing": {"zh": "现有备份（最近 10 份）", "en": "Existing backups (latest 10)"},
+    "dm_backup_none": {"zh": "暂无备份。运行一次每日研究或点击上方按钮即可生成。", "en": "No backups yet. Run the daily research once or use the button above."},
+    "dm_backup_col_name": {"zh": "文件名", "en": "File"},
+    "dm_backup_col_size": {"zh": "大小", "en": "Size"},
+    "dm_backup_col_time": {"zh": "时间", "en": "Time"},
+    "dm_backup_running": {"zh": "正在创建压缩备份...", "en": "Creating compressed backup..."},
+    "dm_backup_done_local": {"zh": "✅ 备份完成（仅本地）", "en": "✅ Backup created (local only)"},
+    "dm_backup_done_uploaded": {"zh": "✅ 备份完成并已上传 WebDAV", "en": "✅ Backup created and uploaded to WebDAV"},
+    "dm_backup_done_upload_failed": {
+        "zh": "⚠️ 本地备份已完成，但 WebDAV 上传失败：{}",
+        "en": "⚠️ Local backup created, but the WebDAV upload failed: {}",
+    },
+    "dm_backup_local_only": {
+        "zh": "WebDAV 凭据不完整，本次仅做本地备份",
+        "en": "WebDAV credentials incomplete; backing up locally only",
+    },
+    "dm_backup_skip_reason": {"zh": "未创建备份：{}", "en": "Backup not created: {}"},
+    "dm_backup_failed": {"zh": "❌ 备份失败", "en": "❌ Backup failed"},
 }
 
 

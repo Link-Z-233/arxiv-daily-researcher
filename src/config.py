@@ -278,6 +278,11 @@ class Settings(BaseSettings):
     WEBDAV_SYNC_KEYWORDS: bool = True  # 是否同步关键词数据
     WEBDAV_SYNC_REPORTS: bool = False  # 是否同步报告（体积较大）
 
+    # ==================== 数据库备份配置 ====================
+    BACKUP_ENABLED: bool = True  # 每日运行结束后自动做一次 gzip 数据库备份
+    BACKUP_KEEP: int = 5  # 本地与 WebDAV 各保留的备份份数
+    BACKUP_UPLOAD_TO_WEBDAV: bool = True  # 备份压缩后上传 WebDAV（需启用 WebDAV）
+
     # ==================== 运行锁配置 ====================
     RUN_LOCK_MAX_AGE_HOURS: int = 12  # 锁超龄告警阈值（小时），不会按 PID 自动终止任务
 
@@ -829,6 +834,22 @@ class Settings(BaseSettings):
                 self.WEBDAV_SYNC_HISTORY = wd_cfg.get("sync_history", True)
                 self.WEBDAV_SYNC_KEYWORDS = wd_cfg.get("sync_keywords", True)
                 self.WEBDAV_SYNC_REPORTS = wd_cfg.get("sync_reports", False)
+
+            # 加载数据库备份配置
+            if "backup" in config:
+                bk_cfg = config["backup"]
+                self.BACKUP_ENABLED = bk_cfg.get("enabled", self.BACKUP_ENABLED)
+                self.BACKUP_UPLOAD_TO_WEBDAV = bk_cfg.get(
+                    "upload_to_webdav", self.BACKUP_UPLOAD_TO_WEBDAV
+                )
+                backup_keep = bk_cfg.get("keep", self.BACKUP_KEEP)
+                if (
+                    isinstance(backup_keep, bool)
+                    or not isinstance(backup_keep, int)
+                    or backup_keep < 1
+                ):
+                    raise ValueError("backup.keep 必须是正整数")
+                self.BACKUP_KEEP = backup_keep
 
             # 加载研究趋势模式配置
             if "trend_research" in config:

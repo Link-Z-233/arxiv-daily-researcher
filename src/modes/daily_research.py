@@ -1468,3 +1468,19 @@ class DailyResearchPipeline:
                         )
                 except Exception:
                     logger.debug("Token 用量记录失败", exc_info=True)
+
+            # 运行收尾后按配置做一次压缩数据库备份；SQLite 是队列与偏好
+            # 数据的唯一真相源，备份失败不影响运行结果本身。
+            try:
+                from utils.backup import run_scheduled_backup
+
+                backup_result = run_scheduled_backup(logger=logger)
+                if backup_result and backup_result.get("created"):
+                    logger.info(
+                        "数据库备份完成: %s（%d 字节%s）",
+                        backup_result.get("name"),
+                        backup_result.get("size_bytes", 0),
+                        "，已上传 WebDAV" if backup_result.get("uploaded") else "",
+                    )
+            except Exception:
+                logger.warning("运行后数据库备份失败", exc_info=True)
