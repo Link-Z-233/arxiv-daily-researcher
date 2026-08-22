@@ -50,6 +50,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tab_notifications": {"zh": "通知", "en": "Notifications"},
     "tab_advanced": {"zh": "高级设置", "en": "Advanced"},
     "tab_reports": {"zh": "报告查看", "en": "Reports"},
+    "tab_favorites": {"zh": "收藏与检索", "en": "Favorites & Search"},
     "tab_run_manager": {"zh": "每日推送", "en": "Daily Push"},
     "tab_trend_runner": {"zh": "趋势分析", "en": "Trend Analysis"},
     "rm_auto_refresh": {"zh": "自动刷新", "en": "Auto refresh"},
@@ -157,7 +158,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── 报告查看页：随手标记（原收藏偏好页融合）─────────────────────────
     "fav_like": {"zh": "喜欢", "en": "Like"},
     "fav_dislike": {"zh": "不喜欢", "en": "Dislike"},
-    "fav_clear": {"zh": "清除标记", "en": "Clear mark"},
     "tab_analytics": {"zh": "数据分析", "en": "Analytics"},
     "an_diag_title": {"zh": "运行诊断", "en": "Run diagnostics"},
     "an_diag_recent_runs": {"zh": "近 10 次运行（完成/可用）", "en": "Last 10 runs (done/avail)"},
@@ -172,20 +172,28 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "fav_state_like": {"zh": "已喜欢", "en": "Liked"},
     "fav_state_dislike": {"zh": "已不喜欢", "en": "Disliked"},
-    "fav_summary_title": {"zh": "偏好汇总", "en": "Preference summary"},
+    "fav_hint": {
+        "zh": "在报告里点 👍/👎 收藏论文；这里按时间浏览收藏、统计关键词，并可全量检索历史论文。",
+        "en": "Mark papers with 👍/👎 in reports; browse them by time here, see keyword stats, and search the full history below.",
+    },
+    "fav_list_title": {"zh": "收藏的论文", "en": "Liked papers"},
+    "fav_list_hint": {
+        "zh": "按标记时间倒序；点击标题打开论文页面（arXiv 等）。",
+        "en": "Newest marks first; click a title to open the paper page.",
+    },
+    "fav_no_likes": {
+        "zh": "还没有收藏论文；在报告里点 👍 后会出现在这里。",
+        "en": "No liked papers yet; tap 👍 in a report and they will appear here.",
+    },
+    "fav_keywords_title": {"zh": "收藏关键词统计", "en": "Liked keyword stats"},
+    "fav_keywords_empty": {
+        "zh": "收藏的论文还没有提取到关键词。",
+        "en": "No extracted keywords among liked papers yet.",
+    },
     "fav_likes": {"zh": "喜欢", "en": "Likes"},
     "fav_dislikes": {"zh": "不喜欢", "en": "Dislikes"},
     "fav_top_authors": {"zh": "收藏作者 Top", "en": "Top authors"},
-    "fav_top_categories": {"zh": "收藏领域 Top", "en": "Top categories"},
-    "fav_matched_keywords": {
-        "zh": "命中的主要关键词（按已喜欢论文标题统计）",
-        "en": "Matched primary keywords (from liked paper titles)",
-    },
     "fav_no_marks": {"zh": "还没有任何标记。", "en": "No marks yet."},
-    "fav_no_keyword_hits": {
-        "zh": "已喜欢的论文标题中没有命中主要关键词。",
-        "en": "No primary keyword hits in liked paper titles.",
-    },
     # ── llm.py ───────────────────────────────────────────────────────────
     "cheap_llm_title": {
         "zh": "低成本 LLM (CHEAP_LLM)",

@@ -1,0 +1,114 @@
+"""收藏与检索 Tab — 按时间浏览收藏的论文、关键词统计与全量论文检索。
+
+收藏（偏好）数据只增不删；本页为只读展示：标记时间倒序的收藏列表
+（标题为论文页超链接）、收藏论文的关键词统计，以及下方的论文检索。
+"""
+
+from __future__ import annotations
+
+import html
+
+import pandas as pd
+import streamlit as st
+
+from utils.daily_research_store import DailyResearchStore
+from webui.i18n import t
+from webui.tabs import paper_search
+
+
+def _fallback_url(source: str, paper_id: str) -> str | None:
+    """元数据缺 URL 时按来源构造论文页链接（arXiv 短 id 可直接访问）。"""
+    if source.lower() == "arxiv" and paper_id:
+        return f"https://arxiv.org/abs/{paper_id}"
+    return None
+
+
+def _safe_href(url: str) -> str | None:
+    if url.startswith(("http://", "https://")) and " " not in url.split("#")[0]:
+        return html.escape(url, quote=True)
+    return None
+
+
+def _render_favorites_list(store: DailyResearchStore, liked: list[dict]) -> None:
+    urls = store.liked_paper_urls()
+    with st.container(border=True):
+        for row in liked:
+            time_text = str(row.get("updated_at") or "")[:16].replace("T", " ")
+            title = str(row.get("title") or row.get("paper_id") or "")
+            url = (
+                urls.get((row.get("source", ""), row.get("paper_id", "")))
+                or _fallback_url(str(row.get("source", "")), str(row.get("paper_id", "")))
+            )
+            href = _safe_href(url) if url else None
+            if href:
+                label = (
+                    f'<a href="{href}" target="_blank" rel="noopener noreferrer">'
+                    f"{html.escape(title)}</a>"
+                )
+            else:
+                label = html.escape(title)
+            st.markdown(f"- `{time_text}` {label}", unsafe_allow_html=True)
+
+
+def _render_preference_stats(store: DailyResearchStore) -> None:
+    """收藏画像：关键词统计（取代旧的领域统计）+ 高频作者。"""
+    aggregation = store.aggregate_liked_preferences()
+    col_authors, col_keywords = st.columns(2)
+    with col_authors:
+        st.markdown(f"**👤 {t('fav_top_authors')}**")
+        if aggregation["authors"]:
+            st.table(
+                pd.DataFrame(aggregation["authors"][:10], columns=["name", "count"])
+            )
+        else:
+            st.caption(t("fav_no_marks"))
+    with col_keywords:
+        st.markdown(f"**🔑 {t('fav_keywords_title')}**")
+        ranked = store.aggregate_liked_keywords()
+        if ranked:
+            st.table(pd.DataFrame(ranked[:10], columns=["keyword", "count"]))
+        else:
+            st.caption(t("fav_keywords_empty"))
+
+
+def render(env_values: dict, config_values: dict) -> None:
+    """渲染收藏与检索 Tab：收藏列表 + 关键词统计 + 论文检索。"""
+    st.markdown(f'<p class="hint-text">{t("fav_hint")}</p>', unsafe_allow_html=True)
+
+    store = paper_search._open_store(config_values)
+    if store is None:
+        st.info(t("ps_no_data"))
+        return
+
+    # ── 收藏的论文（按标记时间倒序）────────────────────────────────────
+    st.markdown(
+        f'<p class="section-title">⭐ {t("fav_list_title")}</p>', unsafe_allow_html=True
+    )
+    counts = store.get_preference_counts()
+    if counts["like"] == 0 and counts["dislike"] == 0:
+        st.caption(t("fav_no_marks"))
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(t("fav_likes"), counts["like"])
+        with col2:
+            st.metric(t("fav_dislikes"), counts["dislike"])
+
+        liked = store.list_preferences(preference="like", limit=500)
+        if liked:
+            st.caption(t("fav_list_hint"))
+            _render_favorites_list(store, liked)
+        else:
+            st.caption(t("fav_no_likes"))
+
+        st.divider()
+        _render_preference_stats(store)
+
+    # ── 论文检索 ────────────────────────────────────────────────────────
+    st.divider()
+    paper_search.render(env_values, config_values)
+
+
+def collect(_env_values: dict, _config_values: dict) -> dict:
+    """收藏与检索 Tab 无配置需保存，返回空字典。"""
+    return {}

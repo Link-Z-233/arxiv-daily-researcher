@@ -1227,6 +1227,59 @@ class DailyResearchStore:
 
         return {"authors": ranked(author_counts), "categories": ranked(category_counts)}
 
+    def liked_paper_urls(self) -> Dict[Tuple[str, str], str]:
+        """URL lookup for liked papers, taken from their stored metadata."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT p.source, p.paper_id, d.paper_json FROM paper_preferences p "
+                "LEFT JOIN daily_papers d "
+                "ON d.source = p.source AND d.paper_id = p.paper_id "
+                "WHERE p.preference = 'like'"
+            ).fetchall()
+        urls: Dict[Tuple[str, str], str] = {}
+        for row in rows:
+            try:
+                metadata = json.loads(row["paper_json"]) if row["paper_json"] else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                metadata = {}
+            url = metadata.get("url") if isinstance(metadata, dict) else None
+            if isinstance(url, str) and url.strip():
+                urls[(row["source"], row["paper_id"])] = url.strip()
+        return urls
+
+    def aggregate_liked_keywords(self, limit: int = 200) -> list[Dict[str, Any]]:
+        """Count extracted keywords across currently liked papers.
+
+        Mirrors aggregate_liked_preferences: pure SQL + Python counting over
+        the reader's own marks — no model inference involved.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT d.score_json FROM paper_preferences p "
+                "JOIN daily_papers d "
+                "ON d.source = p.source AND d.paper_id = p.paper_id "
+                "WHERE p.preference = 'like'"
+            ).fetchall()
+        counts: Dict[str, int] = {}
+        for row in rows:
+            try:
+                score = json.loads(row["score_json"]) if row["score_json"] else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                score = {}
+            if not isinstance(score, dict):
+                continue
+            for keyword in score.get("extracted_keywords") or []:
+                if isinstance(keyword, str) and keyword.strip():
+                    key = keyword.strip()
+                    counts[key] = counts.get(key, 0) + 1
+        ranked = [
+            {"keyword": keyword, "count": count}
+            for keyword, count in sorted(
+                counts.items(), key=lambda item: (-item[1], item[0])
+            )
+        ]
+        return ranked[: max(1, int(limit))]
+
     def count_pending_papers(self) -> Dict[str, int]:
         """Global durable-queue depth: uncompleted papers, split by retry need.
 

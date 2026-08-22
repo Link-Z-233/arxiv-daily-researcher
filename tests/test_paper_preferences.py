@@ -72,6 +72,56 @@ class PaperPreferenceTests(unittest.TestCase):
             )
             self.assertEqual(mapping, {("arxiv", "1"): "like"})
 
+    def _seed_daily_paper(self, store, paper_id, *, url=None, keywords=None, liked=True):
+        import json
+        import sqlite3
+
+        paper_json = json.dumps(
+            {"title": f"Paper {paper_id}", "authors": ["A"], "url": url}
+        )
+        score_json = json.dumps({"extracted_keywords": keywords or []})
+        with store._connect() as conn:
+            conn.execute(
+                "INSERT INTO daily_papers (source, paper_id, paper_json, score_json,"
+                " first_seen_at, last_seen_at, run_id) VALUES (?,?,?,?,?,?,?)",
+                ("arxiv", paper_id, paper_json, score_json, "2026-01-01", "2026-01-01", "r"),
+            )
+        if liked:
+            store.set_paper_preference(
+                "arxiv", paper_id, preference="like", title=f"Paper {paper_id}"
+            )
+
+    def test_liked_keyword_aggregation_counts_extracted_keywords(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "state.db")
+            self._seed_daily_paper(store, "1", keywords=["error correction", "topological"])
+            self._seed_daily_paper(store, "2", keywords=["error correction"])
+            self._seed_daily_paper(store, "3", keywords=["error correction"], liked=False)
+            store.set_paper_preference("arxiv", "3", preference="dislike", title="Paper 3")
+
+            ranked = store.aggregate_liked_keywords()
+            # 只统计 like 的论文；同频按字母序
+            self.assertEqual(
+                ranked,
+                [
+                    {"keyword": "error correction", "count": 2},
+                    {"keyword": "topological", "count": 1},
+                ],
+            )
+
+    def test_liked_paper_urls_come_from_stored_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "state.db")
+            self._seed_daily_paper(store, "1", url="https://arxiv.org/abs/2401.00001v2")
+            self._seed_daily_paper(store, "2", url=None)
+            self._seed_daily_paper(store, "3", url="https://arxiv.org/abs/2401.00003", liked=False)
+            store.set_paper_preference("arxiv", "3", preference="none", title="Paper 3")
+
+            urls = store.liked_paper_urls()
+            self.assertEqual(
+                urls, {("arxiv", "1"): "https://arxiv.org/abs/2401.00001v2"}
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

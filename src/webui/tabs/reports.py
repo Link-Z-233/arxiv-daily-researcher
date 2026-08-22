@@ -12,11 +12,8 @@ from typing import NamedTuple, Optional
 import streamlit as st
 import streamlit.components.v1 as components
 
-import pandas as pd
-
 from utils.daily_research_store import DailyResearchStore
 from webui.i18n import t
-from webui.tabs import paper_search
 from utils.source_registry import source_display_names
 
 # project root: tabs/ -> webui/ -> src/ -> project_root
@@ -445,23 +442,6 @@ def _render_preview(
 # ─── 报告正文论文卡片（标记内联，收藏融合）────────────────────────────────
 
 
-def _match_primary_keywords(
-    keywords: list[str], liked_titles: list[str]
-) -> list[dict[str, object]]:
-    """在已喜欢论文的标题里统计主要关键词命中次数（大小写不敏感）。"""
-    lowered = [title.lower() for title in liked_titles]
-    counts: list[dict[str, object]] = []
-    for keyword in keywords:
-        needle = keyword.strip().lower()
-        if not needle:
-            continue
-        hits = sum(1 for title in lowered if needle in title)
-        if hits:
-            counts.append({"keyword": keyword, "count": hits})
-    counts.sort(key=lambda item: (-int(item["count"]), str(item["keyword"])))
-    return counts
-
-
 def _apply_report_mark(store: DailyResearchStore, paper: dict, preference: str) -> None:
     store.set_paper_preference(
         paper["source"],
@@ -663,53 +643,6 @@ def _render_report_component(report_html: str, states: dict, key: str):
         return None
 
 
-def _render_preference_profile(store: DailyResearchStore, config_values: dict) -> None:
-    """兴趣画像汇总（折叠展示，标记数据永不删除）。"""
-    with st.expander(f"📊 {t('fav_summary_title')}", expanded=False):
-        counts = store.get_preference_counts()
-        if counts["like"] == 0 and counts["dislike"] == 0:
-            st.caption(t("fav_no_marks"))
-            return
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric(t("fav_likes"), counts["like"])
-        with col2:
-            st.metric(t("fav_dislikes"), counts["dislike"])
-
-        aggregation = store.aggregate_liked_preferences()
-        col_authors, col_categories = st.columns(2)
-        with col_authors:
-            st.markdown(f"**👤 {t('fav_top_authors')}**")
-            if aggregation["authors"]:
-                st.table(
-                    pd.DataFrame(aggregation["authors"][:10], columns=["name", "count"])
-                )
-            else:
-                st.caption(t("fav_no_marks"))
-        with col_categories:
-            st.markdown(f"**🗂 {t('fav_top_categories')}**")
-            if aggregation["categories"]:
-                st.table(
-                    pd.DataFrame(aggregation["categories"][:10], columns=["name", "count"])
-                )
-            else:
-                st.caption(t("fav_no_marks"))
-
-        liked = store.list_preferences(preference="like", limit=500)
-        primary_keywords = config_values.get("primary_keywords") if config_values else None
-        if liked and isinstance(primary_keywords, list) and primary_keywords:
-            matched = _match_primary_keywords(
-                [k for k in primary_keywords if isinstance(k, str)],
-                [row["title"] for row in liked],
-            )
-            st.markdown(f"**🔑 {t('fav_matched_keywords')}**")
-            if matched:
-                st.table(pd.DataFrame(matched, columns=["keyword", "count"]))
-            else:
-                st.caption(t("fav_no_keyword_hits"))
-
-
 def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
     """日报以原始 HTML 报告呈现，收藏按钮内联注入卡片；无库记录时返回 False。"""
     from webui.tabs.run_manager import _daily_db_path_from_config
@@ -768,11 +701,10 @@ def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
             )
             if paper is not None:
                 _apply_report_mark(store, paper, value.get("pref") or "none")
-                # 重跑一次以刷新 states/画像；报告 HTML 不含状态，
+                # 重跑一次以刷新 states；报告 HTML 不含状态，
                 # iframe 不会重建，用户看不到闪烁。
                 st.rerun()
 
-    _render_preference_profile(store, config_values)
     return True
 
 
@@ -818,10 +750,6 @@ def render(env_values: dict, config_values: dict) -> None:
         st.caption(f"📂 {t('reports_dir_label')}: `{_REPORTS_DIR}`")
     else:
         _render_report_browser(visible_reports, source_labels, config_values)
-
-    # ── 论文检索（页面最下方）──────────────────────────────────────────
-    st.divider()
-    paper_search.render(env_values, config_values)
 
 
 def _render_report_browser(
