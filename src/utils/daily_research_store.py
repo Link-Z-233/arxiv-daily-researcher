@@ -1246,6 +1246,93 @@ class DailyResearchStore:
             )
         return {"total": int(total_row[0]), "items": items}
 
+    def get_source_health(self, window: int = 20) -> Dict[str, Dict[str, Any]]:
+        """Per-source scan health aggregated from the durable receipt log.
+
+        For each source the summary covers its most recent ``window`` receipts:
+        the newest status/timestamp, the success rate inside the window, the
+        candidate count of the newest succeeded scan and the newest recorded
+        error text. Sources without any receipt yet are omitted.
+        """
+        bounded_window = max(1, min(int(window), 100))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source, status, recorded_at, receipt_json
+                FROM daily_scan_receipts
+                ORDER BY recorded_at DESC
+                LIMIT ?
+                """,
+                (bounded_window * 32,),
+            ).fetchall()
+
+        per_source: Dict[str, list[Dict[str, Any]]] = {}
+        for row in rows:
+            try:
+                receipt = json.loads(row["receipt_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                receipt = {}
+            if not isinstance(receipt, dict):
+                receipt = {}
+            per_source.setdefault(row["source"], []).append(
+                {
+                    "status": row["status"],
+                    "recorded_at": row["recorded_at"],
+                    "receipt": receipt,
+                }
+            )
+
+        summaries: Dict[str, Dict[str, Any]] = {}
+        for source, entries in per_source.items():
+            window_entries = entries[:bounded_window]
+            succeeded = sum(
+                1 for entry in window_entries if entry["status"] == "succeeded"
+            )
+            newest = window_entries[0]
+            new_candidates = None
+            for entry in window_entries:
+                if entry["status"] != "succeeded":
+                    continue
+                domain_receipts = entry["receipt"].get("domain_receipts")
+                if isinstance(domain_receipts, list):
+                    new_candidates = sum(
+                        int(item.get("new_candidates") or 0)
+                        for item in domain_receipts
+                        if isinstance(item, dict)
+                    )
+                break
+            last_error = None
+            for entry in window_entries:
+                if entry["status"] == "failed":
+                    last_error = self._extract_receipt_error(entry["receipt"])
+                    break
+            summaries[source] = {
+                "last_status": newest["status"],
+                "last_scan_at": newest["recorded_at"],
+                "scans_in_window": len(window_entries),
+                "succeeded_in_window": succeeded,
+                "success_rate": (
+                    succeeded / len(window_entries) if window_entries else 0.0
+                ),
+                "last_new_candidates": new_candidates,
+                "last_error": last_error,
+            }
+        return summaries
+
+    @staticmethod
+    def _extract_receipt_error(receipt: Dict[str, Any]) -> Optional[str]:
+        error = receipt.get("error")
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+        for item in receipt.get("domain_receipts") or []:
+            if not isinstance(item, dict):
+                continue
+            domain_error = item.get("error")
+            if isinstance(domain_error, str) and domain_error.strip():
+                label = item.get("domain") or item.get("label") or ""
+                return f"{label}: {domain_error.strip()}".lstrip(": ")
+        return None
+
     def get_recent_runs(self, limit: int = 20) -> list[Dict[str, Any]]:
         """Return recent run summaries plus receipts for local observability."""
         max_rows = max(1, min(int(limit), 200))

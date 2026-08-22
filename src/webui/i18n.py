@@ -131,6 +131,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── favorites.py ────────────────────────────────────────────────────
     "tab_favorites": {"zh": "收藏偏好", "en": "Favorites"},
     "tab_paper_search": {"zh": "论文检索", "en": "Paper Search"},
+    "tab_source_health": {"zh": "数据源健康", "en": "Source Health"},
     "fav_title": {"zh": "收藏偏好", "en": "Paper Favorites"},
     "fav_hint": {
         "zh": "给论文点喜欢或不喜欢；标记只用于汇总你的兴趣画像（作者、领域、关键词），"
@@ -1269,6 +1270,21 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "ps_prev_page": {"zh": "← 上一页", "en": "← Previous"},
     "ps_next_page": {"zh": "下一页 →", "en": "Next →"},
     "ps_page_info": {"zh": "第 {page} / {pages} 页", "en": "Page {page} of {pages}"},
+    "sh_title": {"zh": "数据源健康", "en": "Source Health"},
+    "sh_hint": {
+        "zh": "每个数据源最近 20 次扫描的终态收据聚合：成功率和最近一次错误一目了然。arXiv 是主数据源，其余为辅助源。",
+        "en": "Aggregated terminal receipts of each source's last 20 scans: success rate and the newest error at a glance. arXiv is the primary source; the rest are auxiliary.",
+    },
+    "sh_no_data": {"zh": "暂无数据库，运行一次每日研究后可见。", "en": "No database yet; visible after the first daily research run."},
+    "sh_no_receipts": {"zh": "尚无扫描收据。运行一次每日研究后可见。", "en": "No scan receipts yet; visible after the first daily research run."},
+    "sh_load_failed": {"zh": "健康数据加载失败：{}", "en": "Failed to load health data: {}"},
+    "sh_success_rate": {"zh": "成功率", "en": "Success"},
+    "sh_success_rate_help": {"zh": "最近 20 次扫描中成功终态的占比", "en": "Succeeded terminal scans out of the last 20"},
+    "sh_new_candidates": {"zh": "最近新增", "en": "New papers"},
+    "sh_new_candidates_help": {"zh": "最近一次成功扫描新入队的候选论文数", "en": "Candidates newly queued by the newest successful scan"},
+    "sh_last_scan": {"zh": "最近扫描：{time}", "en": "Last scan: {time}"},
+    "sh_last_error": {"zh": "最近一次错误", "en": "Newest error"},
+    "sh_window_note": {"zh": "共汇总 {scans} 条扫描收据（每个来源最近 20 次）。", "en": "Summarized {scans} scan receipts (last 20 per source)."},
 }
 
 
