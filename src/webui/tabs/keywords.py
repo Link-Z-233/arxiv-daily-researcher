@@ -1,6 +1,7 @@
 """Keywords Configuration tab for the Streamlit config panel."""
 
 import json
+from pathlib import Path
 
 import streamlit as st
 from webui.i18n import t
@@ -9,9 +10,14 @@ from webui.i18n import t
 @st.cache_data(ttl=60)
 def _load_extracted_keywords() -> dict[str, float]:
     """读取参考文献 PDF 已提取并缓存的关键词（只读展示）。"""
-    from config import settings
-
-    path = settings.DATA_DIR / "keywords" / "keywords_cache.json"
+    # 不导入 worker 的 config 模块（WebUI 镜像不携带 src/config.py）；
+    # 关键词缓存固定在项目根下 data/keywords/。
+    path = (
+        Path(__file__).resolve().parent.parent.parent.parent
+        / "data"
+        / "keywords"
+        / "keywords_cache.json"
+    )
     if not path.exists():
         return {}
     try:

@@ -34,9 +34,9 @@ _MAX_PROMPT_LENGTH = 8000
 
 
 def _templates_path() -> Path:
-    from config import settings
-
-    return settings.DATA_DIR / "trend_prompt_templates.json"
+    # 不导入 worker 的 config 模块（WebUI 镜像不携带 src/config.py）；
+    # DATA_DIR 固定为项目根下的 data/。
+    return _PROJECT_ROOT / "data" / "trend_prompt_templates.json"
 
 
 def _load_prompt_templates() -> dict[str, str]:
