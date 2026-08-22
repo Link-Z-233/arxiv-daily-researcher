@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  #host { width: 100%; }
+  #host iframe { display: block; width: 100%; border: 0; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<script>
+(function () {
+  "use strict";
+
+  // 与 Streamlit 组件宿主的最小协议握手：componentReady → render/componentValue。
+  function send(message) {
+    window.parent.postMessage(message, "*");
+  }
+
+  var MIN_HEIGHT = 240;
+  var MAX_HEIGHT = 60000;
+  var currentHeight = 0;
+
+  function frameHeight(height) {
+    var value = Math.round(Number(height)) || 0;
+    if (value < MIN_HEIGHT) value = MIN_HEIGHT;
+    if (value > MAX_HEIGHT) value = MAX_HEIGHT;
+    if (value === currentHeight) return;
+    currentHeight = value;
+    send({ type: "streamlit:setFrameHeight", height: value });
+  }
+
+  function renderReport(args) {
+    var host = document.getElementById("host");
+    host.innerHTML = "";
+    var frame = document.createElement("iframe");
+    frame.title = "Daily report preview";
+    // 报告 HTML 保持与旧版预览一致的沙箱：可执行脚本（KaTeX），但与面板源隔离。
+    frame.setAttribute("sandbox", "allow-scripts allow-popups");
+    frame.setAttribute("referrerpolicy", "no-referrer");
+    frame.style.height = (currentHeight || 800) + "px";
+    // 通过属性赋值设置 srcdoc，由 DOM 负责编码，报告内容无法逃出 iframe。
+    frame.srcdoc = String(args && args.html ? args.html : "");
+    host.appendChild(frame);
+    frameHeight(800);
+  }
+
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || typeof data !== "object") return;
+    switch (data.type) {
+      case "streamlit:render":
+        renderReport(data.args);
+        break;
+      case "arxiv-report-mark":
+        // 沙箱报告里的标记点击，转发给 Python 侧（组件返回值）。
+        send({
+          type: "streamlit:setComponentValue",
+          dataType: "json",
+          value: {
+            source: String(data.source || ""),
+            paper_id: String(data.paper_id || ""),
+            pref: String(data.pref || "none"),
+          },
+        });
+        break;
+      case "arxiv-report-height":
+        frameHeight(data.height);
+        break;
+      default:
+        break;
+    }
+  });
+
+  send({ type: "streamlit:componentReady", apiVersion: 1 });
+})();
+</script>
+</body>
+</html>

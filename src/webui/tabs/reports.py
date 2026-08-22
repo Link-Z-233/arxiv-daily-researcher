@@ -424,10 +424,10 @@ def _render_preview(
                     help=t("report_no_next"),
                 )
 
-    # ── 正文：日报渲染为可标记的论文卡片；其余类型保持 HTML 预览 ──
+    # ── 正文：日报保持原始 HTML 报告样式，收藏按钮内联注入；其余类型同样 HTML 预览 ──
     if report.report_type == "daily":
-        if not _render_daily_paper_cards(report, config_values):
-            # 库里没有对应记录的旧日报：退回 HTML 原文预览
+        if not _render_daily_report(report, config_values):
+            # 库里没有对应记录的旧日报：直接 HTML 原文预览（无标记按钮）
             _render_html_iframe(report)
     else:
         _render_html_iframe(report)
@@ -466,85 +466,148 @@ def _apply_report_mark(store: DailyResearchStore, paper: dict, preference: str) 
     )
 
 
-def _render_mark_buttons(paper: dict, preference: str | None) -> str | None:
-    """卡片左侧的 👍/👎/✖ 按钮列；返回被点击的动作。"""
-    clicked = None
-    key = f"{paper['source']}_{paper['paper_id']}"
-    if st.button(
-        "👍",
-        key=f"rsm_like_{key}",
-        help=t("fav_like"),
-        use_container_width=True,
-        type="primary" if preference == "like" else "secondary",
-    ):
-        clicked = "like"
-    if st.button(
-        "👎",
-        key=f"rsm_dislike_{key}",
-        help=t("fav_dislike"),
-        use_container_width=True,
-        type="primary" if preference == "dislike" else "secondary",
-    ):
-        clicked = "dislike"
-    if st.button(
-        "✖",
-        key=f"rsm_clear_{key}",
-        help=t("fav_clear"),
-        use_container_width=True,
-        disabled=preference is None,
-    ):
-        clicked = "none"
-    return clicked
+# ─── HTML 报告内联收藏（保留报告原样式，注入标记按钮）──────────────────────
+
+# 自定义组件宿主页面：沙箱报告 iframe + Streamlit 组件消息通道。
+_COMPONENT_DIR = Path(__file__).resolve().parent.parent / "report_component"
+
+_CARD_OPEN_RE = re.compile(r'<div class="card (?:pass|fail)">')
+
+_MARK_BAR_CSS = (
+    "<style>.card{position:relative;}"
+    ".arxiv-mark-bar{position:absolute;top:10px;right:12px;display:flex;gap:4px;"
+    "z-index:9;opacity:.85;}"
+    ".arxiv-mark-bar:hover{opacity:1;}"
+    ".arxiv-mark-btn{border:1px solid rgba(127,127,127,.45);border-radius:8px;"
+    "background:rgba(255,255,255,.78);cursor:pointer;font-size:13px;line-height:1;"
+    "padding:4px 7px;color:inherit;}"
+    ".arxiv-mark-btn:hover{background:rgba(255,255,255,.95);}"
+    '.arxiv-mark-btn.active[data-pref="like"]{background:#16a34a;border-color:#16a34a;color:#fff;}'
+    '.arxiv-mark-btn.active[data-pref="dislike"]{background:#dc2626;border-color:#dc2626;color:#fff;}'
+    "</style>"
+)
+
+_MARK_BAR_JS = """<script>(function(){
+  if (window.__arxivMarkInjected) return; window.__arxivMarkInjected = true;
+  function post(msg){ parent.postMessage(msg, "*"); }
+  var lastHeight = 0;
+  function reportHeight(){
+    var h = document.documentElement && document.documentElement.scrollHeight;
+    if (h && h !== lastHeight){ lastHeight = h; post({type:"arxiv-report-height", height:h}); }
+  }
+  document.addEventListener("click", function(ev){
+    var target = ev.target;
+    var btn = target && target.closest ? target.closest(".arxiv-mark-btn") : null;
+    if (!btn) return;
+    ev.preventDefault();
+    var bar = btn.closest(".arxiv-mark-bar");
+    var want = btn.getAttribute("data-pref");
+    if (want === "clear") { want = "none"; }
+    else if (want === (bar.getAttribute("data-current") || "none")) { want = "none"; }
+    post({
+      type: "arxiv-report-mark",
+      source: bar.getAttribute("data-source"),
+      paper_id: bar.getAttribute("data-paper"),
+      pref: want,
+      nonce: Date.now() + "-" + Math.random()
+    });
+  });
+  window.addEventListener("load", reportHeight);
+  window.addEventListener("resize", reportHeight);
+  if (document.readyState === "complete") { reportHeight(); }
+  if (window.MutationObserver) {
+    new MutationObserver(reportHeight).observe(
+      document.documentElement, {subtree: true, childList: true, attributes: true});
+  }
+})();</script>"""
 
 
-def _render_paper_card(store: DailyResearchStore, paper: dict) -> None:
-    """单篇论文卡片：标题/摘要/TLDR 与标记按钮同屏，边读边标。"""
-    preference = paper.get("preference")
-    score = paper.get("total_score")
-    score_text = f"{score:.1f}" if isinstance(score, (int, float)) else "—"
-    badge = "🟢" if paper.get("is_qualified") else "⚪"
-    pref_icon = {"like": " 👍", "dislike": " 👎"}.get(preference, "")
+def _build_mark_bar(paper: dict) -> str:
+    """在报告卡片右上角注入 👍/👎/✖ 标记按钮（不动报告原有布局）。"""
+    source = html.escape(str(paper.get("source", "")), quote=True)
+    paper_id = html.escape(str(paper.get("paper_id", "")), quote=True)
+    current = paper.get("preference") or "none"
 
-    col_mark, col_body = st.columns([1, 9])
-    with col_mark:
-        clicked = _render_mark_buttons(paper, preference)
-    with col_body:
-        with st.expander(f"{badge} `{score_text}` {paper['title']}{pref_icon}"):
-            meta_parts = [
-                f"{t('ps_col_source')}: {paper.get('source', '—')}",
-                f"{t('ps_col_completed')}: {(paper.get('completed_at') or '—')[:19]}",
-            ]
-            if paper.get("published_date"):
-                meta_parts.append(f"{t('ps_col_published')}: {paper['published_date']}")
-            st.caption(" ｜ ".join(meta_parts))
+    def _btn(pref: str, label: str, help_text: str) -> str:
+        active = " active" if pref != "clear" and current == pref else ""
+        return (
+            f'<button type="button" class="arxiv-mark-btn{active}" data-pref="{pref}" '
+            f'title="{html.escape(help_text, quote=True)}">{label}</button>'
+        )
 
-            if paper.get("authors"):
-                st.markdown(
-                    f"**{t('ps_col_authors')}**: " + ", ".join(paper["authors"][:12])
-                )
-            if paper.get("tldr"):
-                st.markdown(f"**TL;DR**: {paper['tldr']}")
-            if paper.get("extracted_keywords"):
-                st.markdown(
-                    f"**{t('ps_col_keywords')}**: "
-                    + " · ".join(paper["extracted_keywords"])
-                )
-            if paper.get("categories"):
-                st.caption(
-                    f"{t('ps_col_categories')}: " + " ".join(paper["categories"])
-                )
+    return (
+        f'<div class="arxiv-mark-bar" data-source="{source}" data-paper="{paper_id}" '
+        f'data-current="{html.escape(current, quote=True)}">'
+        + _btn("like", "👍", t("fav_like"))
+        + _btn("dislike", "👎", t("fav_dislike"))
+        + _btn("clear", "✖", t("fav_clear"))
+        + "</div>"
+    )
 
-            links = []
-            if paper.get("url"):
-                links.append(f"[{t('ps_link_abs')}]({paper['url']})")
-            if paper.get("pdf_url"):
-                links.append(f"[{t('ps_link_pdf')}]({paper['pdf_url']})")
-            if links:
-                st.markdown(" ｜ ".join(links))
 
-    if clicked is not None:
-        _apply_report_mark(store, paper, clicked)
-        st.rerun()
+def _append_mark_assets(report_html: str) -> str:
+    """把按钮样式与点击脚本追加到报告尾部（</body> 前）。"""
+    payload = _MARK_BAR_CSS + _MARK_BAR_JS
+    close_idx = report_html.rfind("</body>")
+    if close_idx == -1:
+        return report_html + payload
+    return report_html[:close_idx] + payload + report_html[close_idx:]
+
+
+def _inject_mark_controls(report_html: str, papers: list[dict]) -> str:
+    """按卡片标题把论文与 HTML 卡片配对，注入标记按钮；返回原样的场景返回原文。
+
+    报告本体（样式/结构/内容）保持生成时的原样，只在每张卡片的开标签后
+    插入一个绝对定位的按钮条，并在文档末尾追加样式与脚本。
+    """
+    candidates: list[tuple[str, dict]] = []
+    for paper in papers:
+        title = paper.get("title")
+        if title:
+            candidates.append((html.escape(str(title)), paper))
+
+    matches = list(_CARD_OPEN_RE.finditer(report_html))
+    if not matches or not candidates:
+        return report_html
+
+    used: set[int] = set()
+    pieces: list[str] = []
+    last = 0
+    injected = 0
+    for index, match in enumerate(matches):
+        block_end = matches[index + 1].start() if index + 1 < len(matches) else len(report_html)
+        block = report_html[match.end() : block_end]
+        chosen = None
+        for candidate_index, (escaped_title, paper) in enumerate(candidates):
+            if candidate_index in used:
+                continue
+            if escaped_title in block:
+                chosen = (candidate_index, paper)
+                break
+        if chosen is None:
+            continue
+        used.add(chosen[0])
+        pieces.append(report_html[last : match.end()])
+        pieces.append(_build_mark_bar(chosen[1]))
+        last = match.end()
+        injected += 1
+
+    if not injected:
+        return report_html
+    pieces.append(report_html[last:])
+    return _append_mark_assets("".join(pieces))
+
+
+def _render_report_component(report_html: str, key: str):
+    """渲染报告查看自定义组件；返回组件回传的标记动作（无则 None）。"""
+    try:
+        viewer = components.declare_component(
+            "arxiv_report_viewer", path=str(_COMPONENT_DIR)
+        )
+        return viewer(html=report_html, key=key, default=None)
+    except Exception:
+        # 组件基础设施不可用时退回纯预览（由调用方处理）。
+        return None
 
 
 def _render_preference_profile(store: DailyResearchStore, config_values: dict) -> None:
@@ -594,8 +657,8 @@ def _render_preference_profile(store: DailyResearchStore, config_values: dict) -
                 st.caption(t("fav_no_keyword_hits"))
 
 
-def _render_daily_paper_cards(report: ReportFile, config_values: dict) -> bool:
-    """把日报正文渲染为论文卡片（标记内联）；无对应库记录时返回 False。"""
+def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
+    """日报以原始 HTML 报告呈现，收藏按钮内联注入卡片；无库记录时返回 False。"""
     from webui.tabs.run_manager import _daily_db_path_from_config
 
     if not report.date_key:
@@ -619,14 +682,35 @@ def _render_daily_paper_cards(report: ReportFile, config_values: dict) -> bool:
     if result["total"] == 0:
         return False
 
-    st.caption(t("reports_cards_hint"))
-    for paper in result["items"]:
-        _render_paper_card(store, paper)
+    try:
+        html_content = report.path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    enriched = _inject_mark_controls(html_content, result["items"])
+    if enriched is html_content:
+        # 报告里没有可配对的论文卡片（旧版/异构报告），退回纯 HTML 预览。
+        return False
+
+    key = f"rv_{report.source}_{report.path.name}"
+    value = _render_report_component(enriched, key)
+    if isinstance(value, dict) and value.get("paper_id"):
+        guard_key = f"rv_consumed_{key}"
+        if st.session_state.get(guard_key) != value.get("nonce"):
+            st.session_state[guard_key] = value.get("nonce")
+            paper = next(
+                (
+                    item
+                    for item in result["items"]
+                    if item.get("paper_id") == value.get("paper_id")
+                ),
+                None,
+            )
+            if paper is not None:
+                _apply_report_mark(store, paper, value.get("pref") or "none")
+                st.rerun()
 
     _render_preference_profile(store, config_values)
-
-    with st.expander(f"📄 {t('reports_raw_html')}"):
-        _render_html_iframe(report)
     return True
 
 
