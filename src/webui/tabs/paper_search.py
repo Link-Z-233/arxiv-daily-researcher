@@ -16,8 +16,8 @@ from webui.tabs.run_manager import _daily_db_path_from_config
 _PAGE_SIZE = 20
 
 
-def _open_store():
-    db_path = _daily_db_path_from_config()
+def _open_store(config_values: dict):
+    db_path = _daily_db_path_from_config(config_values or {})
     if db_path is None or not db_path.exists():
         return None
     try:
@@ -45,7 +45,7 @@ def render(env_values: dict, config_values: dict):
         unsafe_allow_html=True,
     )
 
-    store = _open_store()
+    store = _open_store(config_values)
     if store is None:
         st.info(t("ps_no_data"))
         return

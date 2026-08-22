@@ -86,7 +86,7 @@ def render(_env_values: dict, config_values: dict):
                 key="learned_term_weight_cap",
                 help=t("learned_term_weight_cap_help"),
             )
-        _render_learned_library_summary()
+        _render_learned_library_summary(flat)
     else:
         st.warning(t("legacy_strategy_warning"))
 
@@ -190,13 +190,13 @@ def render(_env_values: dict, config_values: dict):
 
 
 
-def _render_learned_library_summary():
+def _render_learned_library_summary(flat: dict):
     """Show what the learned keyword/author library currently looks like."""
     try:
         from utils.daily_research_store import DailyResearchStore
         from webui.tabs.run_manager import _daily_db_path_from_config
 
-        db_path = _daily_db_path_from_config()
+        db_path = _daily_db_path_from_config(flat)
         if db_path is None or not db_path.exists():
             st.caption(t("learned_library_empty"))
             return
