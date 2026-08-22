@@ -27,6 +27,8 @@ from utils.deep_analysis_contract import (
 from scoring_policy import (
     CORE_RELEVANCE_V2,
     LEGACY_WEIGHTED_KEYWORD_V1,
+    LEARNED_PREFERENCE_V1,
+    compute_learned_adjustment,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,11 @@ class WeightedScoreResponse(BaseModel):
     author_preference_bonus: float = 0.0
     ranking_score: Optional[float] = None
     qualification_reason: str = ""
+    # ``learned_preference_v1`` only. Defaults keep hydration of rows written
+    # by the other strategies fully backwards compatible.
+    learned_adjustment: Optional[float] = None
+    learned_keywords_matched: List[str] = Field(default_factory=list)
+    learned_authors_matched: List[str] = Field(default_factory=list)
 
 
 class Stage2Response(BaseModel):
@@ -583,7 +590,12 @@ class AnalysisAgent:
     # ======================================================================
 
     def score_paper_with_keywords(
-        self, title: str, authors: str | List[str], abstract: str, keywords_dict: Dict[str, float]
+        self,
+        title: str,
+        authors: str | List[str],
+        abstract: str,
+        keywords_dict: Dict[str, float],
+        learned_terms: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> WeightedScoreResponse:
         """
         使用已配置的关键词策略对论文进行评分。
@@ -591,6 +603,9 @@ class AnalysisAgent:
         ``legacy_weighted_keyword_v1`` 保留原公式以支持可逆迁移。
         ``core_relevance_v2`` 以核心主关键词的归一化内容相关度决定
         资格；参考关键词和作者偏好只影响已合格论文的排序。
+        ``learned_preference_v1`` 在旧公式之上叠加学习库修正：从收藏
+        偏好与 v1 及格历史学到的关键词/作者权重经过限幅与衰减后调
+        整总分，直接配置的关键词权重始终高于学习权重。
 
         参数:
             title (str): 论文标题
@@ -598,6 +613,8 @@ class AnalysisAgent:
                 以便确定性校验专家作者加分。
             abstract (str): 论文摘要
             keywords_dict (Dict[str, float]): 关键词-权重字典
+            learned_terms (Optional[Dict[str, Dict[str, float]]]): 学习库
+                {"keyword": {词: 权重}, "author": {作者: 权重}}，仅学习模式使用。
 
         返回:
             WeightedScoreResponse: 包含详细评分信息的响应对象
@@ -660,7 +677,7 @@ class AnalysisAgent:
         # 配置而无法执行；它使用自己的归一化资格门槛。
         total_weight = math.fsum(normalized_keywords.values())
         legacy_passing_score = None
-        if strategy_id == LEGACY_WEIGHTED_KEYWORD_V1:
+        if strategy_id in (LEGACY_WEIGHTED_KEYWORD_V1, LEARNED_PREFERENCE_V1):
             legacy_passing_score = _finite_number(
                 settings.calculate_passing_score(total_weight), "动态及格分"
             )
@@ -699,6 +716,22 @@ class AnalysisAgent:
             if author_bonus_points < 0:
                 raise ScoreValidationError("AUTHOR_BONUS_POINTS 不能为负数")
 
+        learned_weight_dampening = None
+        learned_term_weight_cap = None
+        if strategy_id == LEARNED_PREFERENCE_V1:
+            learned_weight_dampening = _finite_number(
+                settings.LEARNED_WEIGHT_DAMPENING, "LEARNED_WEIGHT_DAMPENING"
+            )
+            learned_term_weight_cap = _finite_number(
+                settings.LEARNED_TERM_WEIGHT_CAP, "LEARNED_TERM_WEIGHT_CAP"
+            )
+            if not 0 <= learned_weight_dampening <= 1:
+                raise ScoreValidationError(
+                    "LEARNED_WEIGHT_DAMPENING 必须在 0-1 之间"
+                )
+            if learned_term_weight_cap <= 0:
+                raise ScoreValidationError("LEARNED_TERM_WEIGHT_CAP 必须大于 0")
+
         # 构建关键词列表字符串
         keywords_list = "\n".join(
             [f"  - {kw} (权重: {weight:.1f})" for kw, weight in normalized_keywords.items()]
@@ -719,6 +752,11 @@ class AnalysisAgent:
 - 关键词总权重: {total_weight:.1f}
 - 动态及格分: {legacy_passing_score:.1f}
 """
+            if strategy_id == LEARNED_PREFERENCE_V1:
+                scoring_policy_text += (
+                    "- 学习模式：系统会在加权总分上叠加衰减后的学习偏好项"
+                    "（历史收藏与 v1 及格信号学得的关键词/作者），模型无需考虑。\n"
+                )
 
         prompt = f"""你是一名学术论文评审专家。请基于以下关键词对论文进行相关性评分，并提取论文信息。
 
@@ -882,6 +920,12 @@ class AnalysisAgent:
             if settings.ENABLE_AUTHOR_BONUS and verified_experts:
                 matched_author_bonus = len(verified_experts) * author_bonus_points
 
+            # Learned-preference fields default to "not applicable" for the
+            # other strategies; only the legacy-family branch fills them in.
+            learned_adjustment = None
+            learned_keywords_matched: List[str] = []
+            learned_authors_matched: List[str] = []
+
             if strategy_id == CORE_RELEVANCE_V2:
                 core_weight = math.fsum(normalized_keywords[kw] for kw in primary_keywords)
                 if core_weight <= 0:
@@ -944,7 +988,19 @@ class AnalysisAgent:
                 )
             else:
                 author_bonus = matched_author_bonus
-                total_score = weighted_score + author_bonus
+                if strategy_id == LEARNED_PREFERENCE_V1:
+                    learned = compute_learned_adjustment(
+                        extracted_keywords=extracted_keywords,
+                        author_names=author_names,
+                        learned_terms=learned_terms or {},
+                        configured_keywords=normalized_keywords.keys(),
+                        dampening=learned_weight_dampening,
+                        term_weight_cap=learned_term_weight_cap,
+                    )
+                    learned_adjustment = learned["adjustment"]
+                    learned_keywords_matched = learned["keywords"]
+                    learned_authors_matched = learned["authors"]
+                total_score = weighted_score + author_bonus + (learned_adjustment or 0.0)
                 passing_score = legacy_passing_score
                 is_qualified = total_score >= passing_score
                 relevance_score = None
@@ -952,6 +1008,14 @@ class AnalysisAgent:
                 ranking_score = total_score
                 author_preference_bonus = author_bonus
                 qualification_reason = "旧版加权总分判定"
+                if strategy_id == LEARNED_PREFERENCE_V1:
+                    qualification_reason = (
+                        "旧版加权总分 + 学习偏好修正"
+                        f"（学习项 {learned_adjustment or 0.0:+.1f}；"
+                        f"关键词 {len(learned_keywords_matched)} 个、"
+                        f"作者 {len(learned_authors_matched)} 个匹配，"
+                        "学习权重经限幅与衰减）"
+                    )
                 logger.info(
                     f"论文评分完成 [{title[:50]}]: 总分={total_score:.1f}, 及格分={passing_score:.1f}, {'✅及格' if is_qualified else '❌未及格'}"
                 )
@@ -978,6 +1042,9 @@ class AnalysisAgent:
                 author_preference_bonus=author_preference_bonus,
                 ranking_score=ranking_score,
                 qualification_reason=qualification_reason,
+                learned_adjustment=learned_adjustment,
+                learned_keywords_matched=learned_keywords_matched,
+                learned_authors_matched=learned_authors_matched,
             )
 
         except Exception as e:

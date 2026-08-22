@@ -614,6 +614,8 @@ def build_config_dict(
     core_relevance_threshold: float = 6.0,
     core_keyword_min_score: float = 7.0,
     reference_ranking_weight: float = 0.25,
+    learned_weight_dampening: float = 0.5,
+    learned_term_weight_cap: float = 2.0,
     score_strategy_explicit: bool = True,
     include_all_in_report: bool = True,
     keyword_tracker_enabled: bool = True,
@@ -964,6 +966,8 @@ def build_config_dict(
             "core_relevance_threshold": core_relevance_threshold,
             "core_keyword_min_score": core_keyword_min_score,
             "reference_ranking_weight": reference_ranking_weight,
+            "learned_weight_dampening": learned_weight_dampening,
+            "learned_term_weight_cap": learned_term_weight_cap,
         }
 
     return config
@@ -1102,6 +1106,8 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
         flat["core_relevance_threshold"] = strategy.get("core_relevance_threshold", 6.0)
         flat["core_keyword_min_score"] = strategy.get("core_keyword_min_score", 7.0)
         flat["reference_ranking_weight"] = strategy.get("reference_ranking_weight", 0.25)
+        flat["learned_weight_dampening"] = strategy.get("learned_weight_dampening", 0.5)
+        flat["learned_term_weight_cap"] = strategy.get("learned_term_weight_cap", 2.0)
     else:
         # Absence is a meaningful legacy policy rather than an invitation to
         # silently reinterpret an existing user's historical threshold.
@@ -1110,6 +1116,8 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
         flat["core_relevance_threshold"] = 6.0
         flat["core_keyword_min_score"] = 7.0
         flat["reference_ranking_weight"] = 0.25
+        flat["learned_weight_dampening"] = 0.5
+        flat["learned_term_weight_cap"] = 2.0
     flat["include_all_in_report"] = sc.get("include_all_in_report", True)
 
     # Keyword tracker

@@ -1285,6 +1285,30 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "sh_last_scan": {"zh": "最近扫描：{time}", "en": "Last scan: {time}"},
     "sh_last_error": {"zh": "最近一次错误", "en": "Newest error"},
     "sh_window_note": {"zh": "共汇总 {scans} 条扫描收据（每个来源最近 20 次）。", "en": "Summarized {scans} scan receipts (last 20 per source)."},
+    "learned_strategy_info": {
+        "zh": "学习模式：在旧版加权总分之上叠加学习库修正。学习库来自你的收藏/不喜欢（强信号）与 v1 及格历史（弱信号），学到的关键词和作者权重先限幅再衰减，单个学习项的影响始终低于直接配置的评分关键词。",
+        "en": "Learned mode: adds a learned-library adjustment on top of the legacy weighted score. The library learns from your likes/dislikes (strong signal) and legacy v1 passes (weak signal); learned keyword/author weights are capped and dampened, so each learned term always matters less than directly configured keywords.",
+    },
+    "learned_weight_dampening_label": {"zh": "学习权重衰减系数", "en": "Learned weight dampening"},
+    "learned_weight_dampening_help": {
+        "zh": "0-1；学习到的权重统一乘以该系数，越小学习项影响越弱",
+        "en": "0-1; learned weights are scaled by this factor; smaller means weaker influence",
+    },
+    "learned_term_weight_cap_label": {"zh": "学习单项限幅", "en": "Learned term weight cap"},
+    "learned_term_weight_cap_help": {
+        "zh": "单个学习关键词/作者的最大绝对权重，超出按此截断",
+        "en": "Maximum absolute weight of a single learned keyword/author",
+    },
+    "learned_library_keywords": {"zh": "学习关键词库（前 10）", "en": "Learned keywords (top 10)"},
+    "learned_library_authors": {"zh": "学习作者库（前 10）", "en": "Learned authors (top 10)"},
+    "learned_library_empty": {
+        "zh": "学习库为空：标记收藏/不喜欢或运行几次 v1 评分后，这里会逐步出现带权重的关键词与作者。",
+        "en": "The learned library is empty: mark likes/dislikes or run a few v1-scored days and weighted keywords/authors will accumulate here.",
+    },
+    "learned_library_note": {
+        "zh": "权重 = 收藏(+1)/不喜欢(-1)/v1 及格(+0.25) 信号之和；评分时按限幅与衰减生效。",
+        "en": "Weight = sum of like(+1)/dislike(-1)/v1-pass(+0.25) signals; applied with the cap and dampening at scoring time.",
+    },
 }
 
 

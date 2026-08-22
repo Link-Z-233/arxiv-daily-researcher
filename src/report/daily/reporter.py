@@ -22,6 +22,7 @@ from typing import List, Dict, Any, Optional
 from config import settings
 from scoring_policy import (
     CORE_RELEVANCE_V2,
+    LEARNED_PREFERENCE_V1,
     qualification_threshold_for,
     ranking_score_for,
     uses_core_relevance_v2,
@@ -449,6 +450,18 @@ class Reporter:
             )
             lines.append(
                 f"- **参考关键词排序系数**: {settings.REFERENCE_RANKING_WEIGHT:.2f}（不参与资格）"
+            )
+        elif settings.normalized_score_strategy() == LEARNED_PREFERENCE_V1:
+            lines.append(
+                "- **资格策略**: `learned_preference_v1`（v1 加权判定 + 学习偏好修正）"
+            )
+            lines.append(
+                f"- **及格分公式**: {settings.PASSING_SCORE_BASE} + {settings.PASSING_SCORE_WEIGHT_COEFFICIENT} × 总权重"
+            )
+            lines.append(f"- **当前及格分**: {passing_score:.1f}")
+            lines.append(
+                f"- **学习权重衰减**: {settings.LEARNED_WEIGHT_DAMPENING:.2f}，"
+                f"单项限幅 ±{settings.LEARNED_TERM_WEIGHT_CAP:.1f}"
             )
         else:
             lines.append("- **资格策略**: `legacy_weighted_keyword_v1`")

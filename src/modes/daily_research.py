@@ -30,6 +30,7 @@ from config import settings
 from utils.logger import setup_logger
 from utils.token_counter import token_counter
 from agents import KeywordAgent, AnalysisAgent
+from scoring_policy import LEARNED_PREFERENCE_V1, LEGACY_WEIGHTED_KEYWORD_V1
 from sources import (
     ArxivFetchError,
     HuggingFacePapersFetchError,
@@ -40,7 +41,10 @@ from sources import (
 )
 from report.daily import Reporter
 from notifications import NotifierAgent, RunResult
-from utils.daily_research_store import DailyResearchStore
+from utils.daily_research_store import (
+    DailyResearchStore,
+    V1_PASS_SIGNAL_STRENGTH,
+)
 from utils.daily_research_errors import PaperStageError, paper_stage_error
 from utils.daily_research_fingerprints import (
     build_score_audit_metadata,
@@ -219,6 +223,66 @@ def _exclude_cross_source_arxiv_mirrors(
     return filtered
 
 
+def _load_learned_terms(store):
+    """Load the learned keyword/author library for the learned scoring mode.
+
+    Raw aggregated weights are passed through unclamped; the scoring side
+    applies the configured cap and dampening so the tunables stay effective
+    without rewriting the library.
+    """
+    if store is None:
+        return None
+    try:
+        if settings.normalized_score_strategy() != LEARNED_PREFERENCE_V1:
+            return None
+        rows = store.get_learned_preference_terms()
+    except Exception:
+        logger.debug("学习库加载失败", exc_info=True)
+        return None
+    terms = {"keyword": {}, "author": {}}
+    for row in rows:
+        bucket = terms.get(row.get("term_type"))
+        term = row.get("term")
+        if bucket is None or not isinstance(term, str) or not term.strip():
+            continue
+        bucket[term.strip()] = float(row.get("weight") or 0.0)
+    return terms if any(terms.values()) else None
+
+
+def _record_v1_learning_signals(store, source, paper, score_response):
+    """Feed legacy-family passes back into the learned library.
+
+    Upserts keyed by (paper, term, kind) make re-recording idempotent, so
+    recovery replays never double-count a paper.
+    """
+    if store is None or score_response is None:
+        return
+    strategy_id = getattr(score_response, "strategy_id", "") or ""
+    if strategy_id not in (LEGACY_WEIGHTED_KEYWORD_V1, LEARNED_PREFERENCE_V1):
+        return
+    if not getattr(score_response, "is_qualified", False):
+        return
+    try:
+        store.record_learning_signals(
+            source,
+            paper.paper_id,
+            list(getattr(score_response, "extracted_keywords", None) or []),
+            "keyword",
+            "v1_pass",
+            V1_PASS_SIGNAL_STRENGTH,
+        )
+        store.record_learning_signals(
+            source,
+            paper.paper_id,
+            list(getattr(paper, "authors", None) or []),
+            "author",
+            "v1_pass",
+            V1_PASS_SIGNAL_STRENGTH,
+        )
+    except Exception:
+        logger.debug("v1 学习信号记录失败", exc_info=True)
+
+
 def _score_single_paper(
     paper,
     source,
@@ -230,6 +294,8 @@ def _score_single_paper(
     score_response=None,
     abstract_cn=None,
     translate=True,
+    learned_terms=None,
+    learning_store=None,
 ):
     """
     对单篇论文进行评分和翻译（供并发调用）。
@@ -243,6 +309,7 @@ def _score_single_paper(
                 authors=paper.authors,
                 abstract=paper.abstract,
                 keywords_dict=all_keywords,
+                learned_terms=learned_terms,
             )
         except Exception as exc:
             raise paper_stage_error("score", exc) from exc
@@ -289,6 +356,8 @@ def _score_single_paper(
             )
         except Exception as e:
             logger.warning(f"关键词记录失败 ({paper.paper_id[:30]}...): {e}")
+
+    _record_v1_learning_signals(learning_store, source, paper, score_response)
 
     return scored
 
@@ -360,6 +429,7 @@ def _score_or_hydrate_paper(
     cache_lock,
     keyword_tracker,
     store,
+    learned_terms=None,
     previous_version_info=None,
 ):
     """Reuse persisted scoring when available, otherwise score and persist."""
@@ -389,6 +459,7 @@ def _score_or_hydrate_paper(
                     authors=paper.authors,
                     abstract=paper.abstract,
                     keywords_dict=all_keywords,
+                    learned_terms=learned_terms,
                 )
             except Exception as exc:
                 raise _score_or_translate_stage_error("score", exc) from exc
@@ -403,6 +474,8 @@ def _score_or_hydrate_paper(
                 score_response=score_response,
                 abstract_cn="",
                 translate=False,
+                learned_terms=learned_terms,
+                learning_store=store,
             )
             store.update_score(
                 run_id,
@@ -466,6 +539,8 @@ def _score_or_hydrate_paper(
         translation_cache,
         cache_lock,
         keyword_tracker,
+        learned_terms=learned_terms,
+        learning_store=store,
     )
 
     _add_paper_delivery_context(
@@ -694,6 +769,14 @@ class DailyResearchPipeline:
                 logger.info(f"  - Reference关键词: {ref_count} 个（权重 0.3-0.8）")
             logger.info(f"  - 关键词总数: {len(all_keywords)} 个")
             logger.info(f"  - 总权重: {sum(all_keywords.values()):.2f}")
+
+            learned_terms = _load_learned_terms(store)
+            if learned_terms:
+                logger.info(
+                    "  - 学习库: 关键词 %d 个、作者 %d 个（学习模式启用）",
+                    len(learned_terms["keyword"]),
+                    len(learned_terms["author"]),
+                )
 
             total_weight = sum(all_keywords.values())
             if settings.normalized_score_strategy() == "core_relevance_v2":
@@ -1011,6 +1094,7 @@ class DailyResearchPipeline:
                                     cache_lock,
                                     keyword_tracker,
                                     store,
+                                    learned_terms,
                                     (
                                         None
                                         if store

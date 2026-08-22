@@ -12,6 +12,13 @@ if TYPE_CHECKING:
     from sources.base_source import PaperMetadata
 
 
+# Learning-signal strengths for the learned preference scoring mode.  An
+# explicit like/dislike dominates; a legacy v1 pass contributes a mild positive
+# nudge so the original scoring keeps shaping the learned library too.
+PREFERENCE_SIGNALS = {"like": 1.0, "dislike": -1.0, "none": 0.0}
+V1_PASS_SIGNAL_STRENGTH = 0.25
+
+
 class DailyResearchStore:
     """Small SQLite store for daily research runs and paper state."""
 
@@ -286,6 +293,26 @@ class DailyResearchStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_paper_preferences_updated "
                 "ON paper_preferences(updated_at)"
+            )
+
+            # Learned-preference evidence. Rows are upserted in place (never
+            # deleted), so a changed opinion updates its own contribution and
+            # the aggregate weight evolves with every new signal.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS preference_learning_signals (
+                    source TEXT NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    term TEXT NOT NULL,
+                    term_type TEXT NOT NULL
+                        CHECK (term_type IN ('keyword', 'author')),
+                    signal_kind TEXT NOT NULL
+                        CHECK (signal_kind IN ('preference', 'v1_pass')),
+                    signal REAL NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    PRIMARY KEY (source, paper_id, term, term_type, signal_kind)
+                )
+                """
             )
 
     @staticmethod
@@ -952,6 +979,60 @@ class DailyResearchStore:
                 ),
             )
 
+            # Explicit preferences are the strongest learning signal. The
+            # paper's own stored metadata supplies the terms, and clearing a
+            # preference rewrites its signal to zero instead of deleting it.
+            keyword_terms: list[str] = []
+            author_terms = [name for name in (authors or []) if isinstance(name, str) and name.strip()]
+            row = conn.execute(
+                "SELECT paper_json, score_json FROM daily_papers "
+                "WHERE source = ? AND paper_id = ?",
+                (source, paper_id),
+            ).fetchone()
+            if row is not None:
+                try:
+                    metadata = json.loads(row["paper_json"]) if row["paper_json"] else {}
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    metadata = {}
+                if isinstance(metadata, dict):
+                    author_terms = author_terms or [
+                        name
+                        for name in (metadata.get("authors") or [])
+                        if isinstance(name, str) and name.strip()
+                    ]
+                try:
+                    score = json.loads(row["score_json"]) if row["score_json"] else {}
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    score = {}
+                if isinstance(score, dict):
+                    keyword_terms = [
+                        keyword
+                        for keyword in (score.get("extracted_keywords") or [])
+                        if isinstance(keyword, str) and keyword.strip()
+                    ]
+            signal = PREFERENCE_SIGNALS.get(preference)
+            if signal is not None:
+                self._upsert_learning_signals(
+                    conn,
+                    source,
+                    paper_id,
+                    keyword_terms,
+                    "keyword",
+                    "preference",
+                    signal,
+                    now,
+                )
+                self._upsert_learning_signals(
+                    conn,
+                    source,
+                    paper_id,
+                    author_terms,
+                    "author",
+                    "preference",
+                    signal,
+                    now,
+                )
+
     @staticmethod
     def _preference_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         def parse(raw: object) -> list[str]:
@@ -1028,6 +1109,94 @@ class DailyResearchStore:
             if row["preference"] in counts:
                 counts[row["preference"]] = row["n"]
         return counts
+
+    @staticmethod
+    def _upsert_learning_signals(
+        conn,
+        source: str,
+        paper_id: str,
+        terms: list[str],
+        term_type: str,
+        signal_kind: str,
+        signal: float,
+        now: str,
+    ) -> None:
+        for term in terms:
+            conn.execute(
+                """
+                INSERT INTO preference_learning_signals(
+                    source, paper_id, term, term_type, signal_kind,
+                    signal, recorded_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source, paper_id, term, term_type, signal_kind)
+                DO UPDATE SET
+                    signal = excluded.signal,
+                    recorded_at = excluded.recorded_at
+                """,
+                (source, paper_id, term, term_type, signal_kind, signal, now),
+            )
+
+    def record_learning_signals(
+        self,
+        source: str,
+        paper_id: str,
+        terms: list[str],
+        term_type: str,
+        signal_kind: str,
+        signal: float,
+    ) -> None:
+        """Upsert one paper's learning signal for each given term."""
+        if term_type not in ("keyword", "author"):
+            raise ValueError(f"invalid term_type: {term_type!r}")
+        if signal_kind not in ("preference", "v1_pass"):
+            raise ValueError(f"invalid signal_kind: {signal_kind!r}")
+        if isinstance(signal, bool) or not isinstance(signal, (int, float)):
+            raise ValueError("signal 必须是数字")
+        cleaned = [
+            term.strip() for term in terms if isinstance(term, str) and term.strip()
+        ]
+        if not cleaned:
+            return
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            self._upsert_learning_signals(
+                conn, source, paper_id, cleaned, term_type, signal_kind,
+                float(signal), now,
+            )
+
+    def get_learned_preference_terms(
+        self, term_type: Optional[str] = None, limit: int = 200
+    ) -> list[Dict[str, Any]]:
+        """Aggregate the learned keyword/author library with net weights.
+
+        Terms whose signals cancel out to (near) zero are skipped: they carry
+        no usable preference either way.
+        """
+        bounded_limit = max(1, min(int(limit), 1000))
+        query = (
+            "SELECT term, term_type, SUM(signal) AS weight, COUNT(*) AS signals "
+            "FROM preference_learning_signals "
+        )
+        params: list[Any] = []
+        if term_type in ("keyword", "author"):
+            query += "WHERE term_type = ? "
+            params.append(term_type)
+        query += (
+            "GROUP BY term, term_type "
+            "HAVING ABS(SUM(signal)) > 1e-9 "
+            "ORDER BY ABS(SUM(signal)) DESC, term ASC LIMIT ?"
+        )
+        with self._connect() as conn:
+            rows = conn.execute(query, [*params, bounded_limit]).fetchall()
+        return [
+            {
+                "term": row["term"],
+                "term_type": row["term_type"],
+                "weight": float(row["weight"]),
+                "signals": int(row["signals"]),
+            }
+            for row in rows
+        ]
 
     def aggregate_liked_preferences(self) -> Dict[str, list[Dict[str, Any]]]:
         """Deterministic top authors/categories among liked papers.

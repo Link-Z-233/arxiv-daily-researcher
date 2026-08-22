@@ -320,6 +320,10 @@ class Settings(BaseSettings):
     CORE_KEYWORD_MIN_SCORE: float = 7.0
     # V2: 参考关键词只给已合格论文的排序带来有限辅助，不参与资格。
     REFERENCE_RANKING_WEIGHT: float = 0.25
+    # 学习模式（learned_preference_v1）：学习到的关键词/作者权重先限幅
+    # 再乘以衰减系数，保证单个学习项的影响低于直接配置的评分关键词。
+    LEARNED_WEIGHT_DAMPENING: float = 0.5
+    LEARNED_TERM_WEIGHT_CAP: float = 2.0
 
     # 报告配置
     INCLUDE_ALL_IN_REPORT: bool = True
@@ -591,6 +595,13 @@ class Settings(BaseSettings):
                     )
                     self.REFERENCE_RANKING_WEIGHT = strategy_cfg.get(
                         "reference_ranking_weight", self.REFERENCE_RANKING_WEIGHT
+                    )
+                    self.LEARNED_WEIGHT_DAMPENING = strategy_cfg.get(
+                        "learned_weight_dampening",
+                        self.LEARNED_WEIGHT_DAMPENING,
+                    )
+                    self.LEARNED_TERM_WEIGHT_CAP = strategy_cfg.get(
+                        "learned_term_weight_cap", self.LEARNED_TERM_WEIGHT_CAP
                     )
 
                 # 报告配置

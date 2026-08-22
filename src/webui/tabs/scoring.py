@@ -13,11 +13,18 @@ def render(_env_values: dict, config_values: dict):
     st.markdown(f'<p class="section-title">🧮 {t("scoring_title")}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="hint-text">{t("scoring_hint")}</p>', unsafe_allow_html=True)
 
+    strategy_options = [
+        "core_relevance_v2",
+        "legacy_weighted_keyword_v1",
+        "learned_preference_v1",
+    ]
     strategy = st.selectbox(
         t("score_strategy_label"),
-        options=["core_relevance_v2", "legacy_weighted_keyword_v1"],
-        index=0
-        if flat.get("score_strategy", "legacy_weighted_keyword_v1") == "core_relevance_v2"
+        options=strategy_options,
+        index=strategy_options.index(
+            flat.get("score_strategy", "legacy_weighted_keyword_v1")
+        )
+        if flat.get("score_strategy", "legacy_weighted_keyword_v1") in strategy_options
         else 1,
         key="score_strategy",
         help=t("score_strategy_help"),
@@ -56,10 +63,34 @@ def render(_env_values: dict, config_values: dict):
             )
         if not flat.get("primary_keywords", []):
             st.warning(t("core_relevance_no_primary_warning"))
+    elif strategy == "learned_preference_v1":
+        st.info(t("learned_strategy_info"))
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            st.number_input(
+                t("learned_weight_dampening_label"),
+                min_value=0.0,
+                max_value=1.0,
+                value=float(flat.get("learned_weight_dampening", 0.5)),
+                step=0.05,
+                key="learned_weight_dampening",
+                help=t("learned_weight_dampening_help"),
+            )
+        with col_d2:
+            st.number_input(
+                t("learned_term_weight_cap_label"),
+                min_value=0.1,
+                max_value=10.0,
+                value=float(flat.get("learned_term_weight_cap", 2.0)),
+                step=0.1,
+                key="learned_term_weight_cap",
+                help=t("learned_term_weight_cap_help"),
+            )
+        _render_learned_library_summary()
     else:
         st.warning(t("legacy_strategy_warning"))
 
-    if strategy == "legacy_weighted_keyword_v1":
+    if strategy in ("legacy_weighted_keyword_v1", "learned_preference_v1"):
         col1, col2, col3 = st.columns(3)
         with col1:
             st.number_input(
@@ -159,6 +190,44 @@ def render(_env_values: dict, config_values: dict):
 
 
 
+def _render_learned_library_summary():
+    """Show what the learned keyword/author library currently looks like."""
+    try:
+        from utils.daily_research_store import DailyResearchStore
+        from webui.tabs.run_manager import _daily_db_path_from_config
+
+        db_path = _daily_db_path_from_config()
+        if db_path is None or not db_path.exists():
+            st.caption(t("learned_library_empty"))
+            return
+        store = DailyResearchStore(db_path)
+        terms = store.get_learned_preference_terms(limit=30)
+    except Exception:
+        st.caption(t("learned_library_empty"))
+        return
+
+    if not terms:
+        st.caption(t("learned_library_empty"))
+        return
+
+    keywords = [row for row in terms if row["term_type"] == "keyword"][:10]
+    authors = [row for row in terms if row["term_type"] == "author"][:10]
+    col_k, col_a = st.columns(2)
+    with col_k:
+        st.caption(t("learned_library_keywords"))
+        for row in keywords:
+            st.markdown(
+                f"- `{row['term']}` ({row['weight']:+.2f})"
+            )
+    with col_a:
+        st.caption(t("learned_library_authors"))
+        for row in authors:
+            st.markdown(
+                f"- `{row['term']}` ({row['weight']:+.2f})"
+            )
+    st.caption(t("learned_library_note"))
+
+
 def collect(_env_values: dict, _config_values: dict) -> dict:
     """Collect current values from session state. Returns config updates."""
     # Widgets only render for the active strategy, so session state may not
@@ -180,6 +249,8 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "core_relevance_threshold": current("core_relevance_threshold", 6.0),
         "core_keyword_min_score": current("core_keyword_min_score", 7.0),
         "reference_ranking_weight": current("reference_ranking_weight", 0.25),
+        "learned_weight_dampening": current("learned_weight_dampening", 0.5),
+        "learned_term_weight_cap": current("learned_term_weight_cap", 2.0),
         "passing_score_base": current("passing_score_base", 5.0),
         "passing_score_weight_coefficient": current("passing_score_weight_coefficient", 3.0),
         "max_score_per_keyword": current("max_score_per_keyword", 10),
