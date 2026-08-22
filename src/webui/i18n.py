@@ -160,18 +160,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "usage_month_12": {"zh": "12月", "en": "Dec"},
     # ── 报告查看页：随手标记（原收藏偏好页融合）─────────────────────────
     "fav_like": {"zh": "喜欢", "en": "Like"},
+    "reports_cards_hint": {"zh": "阅读时随手点 👍/👎 标记偏好；标记只进入偏好画像与学习模式。", "en": "Mark papers with 👍/👎 while reading; marks only feed the preference profile and learning mode."},
+    "reports_raw_html": {"zh": "报告原文（HTML）", "en": "Original report (HTML)"},
     "fav_dislike": {"zh": "不喜欢", "en": "Dislike"},
     "fav_clear": {"zh": "清除标记", "en": "Clear mark"},
-    "rsm_title": {"zh": "随手标记", "en": "Quick marks"},
-    "rsm_hint": {
-        "zh": "上面是报告原文；这里列出该报告当日交付的论文，可一边阅读一边标记喜欢/不喜欢。标记仅进入偏好画像与学习模式，评分策略本身不受影响。",
-        "en": "The report preview is above; papers delivered on that report date are listed here so you can mark them while reading. Marks only feed the preference profile and the learned strategy.",
-    },
-    "rsm_no_papers": {
-        "zh": "该报告当日没有对应的已交付论文记录。",
-        "en": "No delivered papers match this report date.",
-    },
-    "rsm_count": {"zh": "共 {total} 篇论文", "en": "{total} papers"},
     "tab_analytics": {"zh": "数据分析", "en": "Analytics"},
     "an_diag_title": {"zh": "运行诊断", "en": "Run diagnostics"},
     "an_diag_recent_runs": {"zh": "近 10 次运行（完成/可用）", "en": "Last 10 runs (done/avail)"},

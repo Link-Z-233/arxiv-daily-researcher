@@ -337,8 +337,21 @@ iframe {{ display: block; width: 100%; height: 100%; border: 0; }}
 </html>"""
 
 
-def _render_preview(report: ReportFile, all_reports: dict[str, list[ReportFile]]) -> None:
-    """渲染报告预览区：文件信息栏 + 前/后天导航 + 固定 800px HTML 预览。"""
+def _render_html_iframe(report: ReportFile) -> None:
+    """固定 800px 高度的沙箱 HTML 预览。"""
+    try:
+        html_content = report.path.read_text(encoding="utf-8")
+        components.html(_build_sandboxed_preview_html(html_content), height=800, scrolling=False)
+    except Exception as e:
+        st.error(f"{t('reports_load_error')}: {e}")
+
+
+def _render_preview(
+    report: ReportFile,
+    all_reports: dict[str, list[ReportFile]],
+    config_values: dict,
+) -> None:
+    """渲染报告预览区：文件信息栏 + 前/后天导航 + 正文（或 HTML 预览）。"""
 
     # File info bar
     stat = report.path.stat()
@@ -411,21 +424,16 @@ def _render_preview(report: ReportFile, all_reports: dict[str, list[ReportFile]]
                     help=t("report_no_next"),
                 )
 
-    # ── HTML 预览（固定 800px 高度）──
-    try:
-        html_content = report.path.read_text(encoding="utf-8")
-        components.html(_build_sandboxed_preview_html(html_content), height=800, scrolling=False)
-    except Exception as e:
-        st.error(f"{t('reports_load_error')}: {e}")
+    # ── 正文：日报渲染为可标记的论文卡片；其余类型保持 HTML 预览 ──
+    if report.report_type == "daily":
+        if not _render_daily_paper_cards(report, config_values):
+            # 库里没有对应记录的旧日报：退回 HTML 原文预览
+            _render_html_iframe(report)
+    else:
+        _render_html_iframe(report)
 
 
-# ─── 报告随手标记（收藏融合）────────────────────────────────────────────────
-
-_MARK_PAGE_SIZE = 20
-
-
-def _report_paging_key(report: ReportFile) -> str:
-    return f"rsm_page_{report.source}_{report.date_key or 'na'}"
+# ─── 报告正文论文卡片（标记内联，收藏融合）────────────────────────────────
 
 
 def _match_primary_keywords(
@@ -458,43 +466,81 @@ def _apply_report_mark(store: DailyResearchStore, paper: dict, preference: str) 
     )
 
 
-def _render_mark_row(store: DailyResearchStore, paper: dict, preference: str | None) -> None:
-    col_btn, col_info = st.columns([1, 4])
+def _render_mark_buttons(paper: dict, preference: str | None) -> str | None:
+    """卡片左侧的 👍/👎/✖ 按钮列；返回被点击的动作。"""
     clicked = None
-    with col_btn:
-        btn_col1, btn_col2, btn_col3 = st.columns(3)
-        key = f"{paper['source']}_{paper['paper_id']}"
-        if btn_col1.button(
-            "👍", key=f"rsm_like_{key}",
-            help=t("fav_like"),
-            use_container_width=True,
-            type="primary" if preference == "like" else "secondary",
-        ):
-            clicked = "like"
-        if btn_col2.button(
-            "👎", key=f"rsm_dislike_{key}",
-            help=t("fav_dislike"),
-            use_container_width=True,
-            type="primary" if preference == "dislike" else "secondary",
-        ):
-            clicked = "dislike"
-        if btn_col3.button(
-            "✖", key=f"rsm_clear_{key}",
-            help=t("fav_clear"),
-            use_container_width=True,
-            disabled=preference is None,
-        ):
-            clicked = "none"
-    with col_info:
-        score = paper.get("total_score")
-        score_text = f"{score:.1f}" if isinstance(score, (int, float)) else "—"
-        badge = "🟢" if paper.get("is_qualified") else "⚪"
-        state_label = {
-            "like": f" · {t('fav_state_like')}",
-            "dislike": f" · {t('fav_state_dislike')}",
-        }.get(preference, "")
-        st.markdown(f"{badge} **{paper['title']}**")
-        st.caption(f"`{score_text}` · {paper['source']}{state_label}")
+    key = f"{paper['source']}_{paper['paper_id']}"
+    if st.button(
+        "👍",
+        key=f"rsm_like_{key}",
+        help=t("fav_like"),
+        use_container_width=True,
+        type="primary" if preference == "like" else "secondary",
+    ):
+        clicked = "like"
+    if st.button(
+        "👎",
+        key=f"rsm_dislike_{key}",
+        help=t("fav_dislike"),
+        use_container_width=True,
+        type="primary" if preference == "dislike" else "secondary",
+    ):
+        clicked = "dislike"
+    if st.button(
+        "✖",
+        key=f"rsm_clear_{key}",
+        help=t("fav_clear"),
+        use_container_width=True,
+        disabled=preference is None,
+    ):
+        clicked = "none"
+    return clicked
+
+
+def _render_paper_card(store: DailyResearchStore, paper: dict) -> None:
+    """单篇论文卡片：标题/摘要/TLDR 与标记按钮同屏，边读边标。"""
+    preference = paper.get("preference")
+    score = paper.get("total_score")
+    score_text = f"{score:.1f}" if isinstance(score, (int, float)) else "—"
+    badge = "🟢" if paper.get("is_qualified") else "⚪"
+    pref_icon = {"like": " 👍", "dislike": " 👎"}.get(preference, "")
+
+    col_mark, col_body = st.columns([1, 9])
+    with col_mark:
+        clicked = _render_mark_buttons(paper, preference)
+    with col_body:
+        with st.expander(f"{badge} `{score_text}` {paper['title']}{pref_icon}"):
+            meta_parts = [
+                f"{t('ps_col_source')}: {paper.get('source', '—')}",
+                f"{t('ps_col_completed')}: {(paper.get('completed_at') or '—')[:19]}",
+            ]
+            if paper.get("published_date"):
+                meta_parts.append(f"{t('ps_col_published')}: {paper['published_date']}")
+            st.caption(" ｜ ".join(meta_parts))
+
+            if paper.get("authors"):
+                st.markdown(
+                    f"**{t('ps_col_authors')}**: " + ", ".join(paper["authors"][:12])
+                )
+            if paper.get("tldr"):
+                st.markdown(f"**TL;DR**: {paper['tldr']}")
+            if paper.get("extracted_keywords"):
+                st.markdown(
+                    f"**{t('ps_col_keywords')}**: "
+                    + " · ".join(paper["extracted_keywords"])
+                )
+            if paper.get("categories"):
+                st.caption(
+                    f"{t('ps_col_categories')}: " + " ".join(paper["categories"])
+                )
+
+            links = []
+            if paper.get("url"):
+                links.append(f"[{t('ps_link_abs')}]({paper['url']})")
+            if paper.get("pdf_url"):
+                links.append(f"[{t('ps_link_pdf')}]({paper['pdf_url']})")
+            if links:
+                st.markdown(" ｜ ".join(links))
 
     if clicked is not None:
         _apply_report_mark(store, paper, clicked)
@@ -548,75 +594,40 @@ def _render_preference_profile(store: DailyResearchStore, config_values: dict) -
                 st.caption(t("fav_no_keyword_hits"))
 
 
-def _render_report_marking(report: ReportFile, config_values: dict) -> None:
-    """在报告预览下方列出该报告当日交付的论文，边看报告边随手标记。"""
+def _render_daily_paper_cards(report: ReportFile, config_values: dict) -> bool:
+    """把日报正文渲染为论文卡片（标记内联）；无对应库记录时返回 False。"""
     from webui.tabs.run_manager import _daily_db_path_from_config
 
-    if report.report_type != "daily" or not report.date_key:
-        return
+    if not report.date_key:
+        return False
 
     db_path = _daily_db_path_from_config(config_values or {})
     if not db_path.exists():
-        return
+        return False
     try:
         store = DailyResearchStore(db_path)
-    except Exception:
-        return
-
-    st.divider()
-    st.markdown(
-        f'<p class="section-title">⭐ {t("rsm_title")}</p>',
-        unsafe_allow_html=True,
-    )
-    st.caption(t("rsm_hint"))
-
-    try:
         result = store.search_papers(
             query="",
             source=report.source,
             completed_from=report.date_key,
             completed_to=report.date_key,
-            limit=_MARK_PAGE_SIZE,
-            offset=int(st.session_state.get(_report_paging_key(report), 0))
-            * _MARK_PAGE_SIZE,
+            limit=200,
         )
     except Exception:
-        st.info(t("rsm_no_papers"))
-        return
+        return False
 
-    total = result["total"]
-    if total == 0:
-        st.info(t("rsm_no_papers"))
-        return
-    st.caption(t("rsm_count").format(total=total))
+    if result["total"] == 0:
+        return False
 
+    st.caption(t("reports_cards_hint"))
     for paper in result["items"]:
-        _render_mark_row(store, paper, paper.get("preference"))
-
-    pages = max(1, -(-total // _MARK_PAGE_SIZE))
-    if pages <= 1:
-        _render_preference_profile(store, config_values)
-        return
-    page = int(st.session_state.get(_report_paging_key(report), 0))
-    col_prev, col_info, col_next = st.columns([1, 2, 1])
-    paging_key = _report_paging_key(report)
-    if col_prev.button(
-        t("ps_prev_page"), disabled=(page <= 0), use_container_width=True,
-        key=f"rsm_prev_{report.source}_{report.date_key}",
-    ):
-        st.session_state[paging_key] = max(0, page - 1)
-        st.rerun()
-    col_info.caption(t("ps_page_info").format(page=page + 1, pages=pages))
-    if col_next.button(
-        t("ps_next_page"),
-        disabled=(page >= pages - 1),
-        use_container_width=True,
-        key=f"rsm_next_{report.source}_{report.date_key}",
-    ):
-        st.session_state[paging_key] = page + 1
-        st.rerun()
+        _render_paper_card(store, paper)
 
     _render_preference_profile(store, config_values)
+
+    with st.expander(f"📄 {t('reports_raw_html')}"):
+        _render_html_iframe(report)
+    return True
 
 
 # ─── main render ──────────────────────────────────────────────────────────────
@@ -713,10 +724,7 @@ def _render_report_browser(
         return
 
     st.divider()
-    _render_preview(report, visible_reports)
-
-    # 报告下方随手标记：融合原「收藏偏好」页，边看报告边标记
-    _render_report_marking(report, config_values)
+    _render_preview(report, visible_reports, config_values)
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:

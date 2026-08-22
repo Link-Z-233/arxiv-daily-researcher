@@ -96,3 +96,150 @@ class WebUiReportPreviewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DailyPaperCardTests(unittest.TestCase):
+    """日报正文以论文卡片内联呈现，标记按钮挂在卡片上。"""
+
+    def _report(self, db_path: Path):
+        from webui.tabs.reports import ReportFile
+
+        return ReportFile(
+            path=db_path.parent / "arxiv_report.html",
+            display="2026-08-22 12:00:00",
+            source="arxiv",
+            report_type="daily",
+            date_key="2026-08-22",
+        )
+
+    def test_missing_store_falls_back_to_raw_html(self):
+        from webui.tabs import reports as reports_tab
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "daily_research.db"
+            report = self._report(db_path)
+            self.assertFalse(reports_tab._render_daily_paper_cards(report, {}))
+
+    def test_cards_render_and_mark_is_applied(self):
+        import json
+        import sqlite3
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from webui.tabs import reports as reports_tab
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "daily_research.db"
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                """
+                CREATE TABLE daily_papers (
+                    source TEXT NOT NULL, paper_id TEXT NOT NULL,
+                    canonical_id TEXT NOT NULL DEFAULT '',
+                    version INTEGER NOT NULL DEFAULT 0,
+                    first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+                    run_id TEXT, paper_json TEXT NOT NULL, score_json TEXT,
+                    score_audit_json TEXT, abstract_cn TEXT, analysis_json TEXT,
+                    scored_at TEXT, translated_at TEXT, analyzed_at TEXT,
+                    score_input_fingerprint TEXT,
+                    translation_input_fingerprint TEXT,
+                    analysis_input_fingerprint TEXT,
+                    completed_at TEXT, last_error TEXT,
+                    PRIMARY KEY (source, paper_id)
+                );
+                CREATE TABLE paper_preferences (
+                    source TEXT NOT NULL, paper_id TEXT NOT NULL,
+                    canonical_id TEXT, version INTEGER,
+                    preference TEXT NOT NULL CHECK (preference IN ('like','dislike','none')),
+                    title TEXT NOT NULL,
+                    authors_json TEXT NOT NULL DEFAULT '[]',
+                    categories_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY (source, paper_id)
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO daily_papers (source, paper_id, first_seen_at,"
+                " last_seen_at, paper_json, score_json, completed_at)"
+                " VALUES ('arxiv', '2401.00001', '2026-08-22T08:00:00',"
+                " '2026-08-22T08:05:00', ?, ?, '2026-08-22T09:00:00')",
+                (
+                    json.dumps(
+                        {
+                            "title": "Quantum Error Correction at Scale",
+                            "authors": ["A. Author"],
+                            "url": "https://arxiv.org/abs/2401.00001",
+                            "categories": ["quant-ph"],
+                            "published_date": "2026-08-20",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "total_score": 7.5,
+                            "is_qualified": True,
+                            "extracted_keywords": ["error correction"],
+                            "tldr": "A big TLDR",
+                        }
+                    ),
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            report = self._report(db_path)
+            rendered = {"caption": False, "expanders": [], "saw_button": False}
+
+            class _Ctx:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def __getattr__(self, name):
+                    return lambda *a, **k: None
+
+            class FakeST:
+                session_state = {}
+
+                def caption(self, *a, **k):
+                    rendered["caption"] = True
+
+                def columns(self, spec):
+                    count = spec if isinstance(spec, int) else len(spec)
+                    return [_Ctx() for _ in range(count)]
+
+                def expander(self, label, **k):
+                    rendered["expanders"].append(label)
+                    return _Ctx()
+
+                def button(self, label, *, key=None, **k):
+                    if key and key.startswith("rsm_like_"):
+                        rendered["saw_button"] = True
+                        return True  # 模拟点击 👍
+                    return False
+
+                def __getattr__(self, name):
+                    return lambda *a, **k: None
+
+            from utils.daily_research_store import DailyResearchStore
+
+            fake = FakeST()
+            import webui.tabs.run_manager as rm
+
+            with (
+                patch.object(reports_tab, "st", fake),
+                patch.object(rm, "_daily_db_path_from_config", lambda cfg: db_path),
+            ):
+                ok = reports_tab._render_daily_paper_cards(report, {})
+
+            self.assertTrue(ok)
+            self.assertTrue(rendered["caption"])
+            self.assertTrue(rendered["expanders"])
+            self.assertTrue(rendered["saw_button"])
+            # 点击 👍 后偏好已落库
+            store = DailyResearchStore(db_path)
+            prefs = store.list_preferences(limit=10)
+            self.assertEqual(prefs[0]["preference"], "like")
+            self.assertEqual(prefs[0]["paper_id"], "2401.00001")
