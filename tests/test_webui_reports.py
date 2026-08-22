@@ -157,11 +157,11 @@ class DailyReportInlineMarkTests(unittest.TestCase):
         bar_block = enriched[bar1 : enriched.index("</div>", bar1)]
         self.assertEqual(bar_block.count("arxiv-mark-btn"), 2)
         self.assertNotIn('data-pref="clear"', enriched)
-        # 已点赞的按钮带 active 状态
-        like_btn = enriched[bar1:enriched.index("</div>", bar1)]
-        self.assertIn('class="arxiv-mark-btn active"', like_btn)
-        # 未标记的卡片无 active
-        self.assertNotIn("active", enriched[bar2 : enriched.index("</div>", bar2)])
+        # active 态不写入 HTML：状态由宿主经 arxiv-report-states 消息下发，
+        # 标记变化时报告 HTML 逐字节不变、iframe 不重建（不闪烁）。
+        self.assertNotIn("arxiv-mark-btn active", enriched)
+        self.assertIn('data-current="none"', enriched)
+        self.assertIn("arxiv-report-states", enriched)
         # 样式与脚本注入在 </body> 之前
         self.assertIn(".arxiv-mark-btn{", enriched)
         self.assertIn("__arxivMarkInjected", enriched)
@@ -301,8 +301,13 @@ class DailyReportInlineMarkTests(unittest.TestCase):
                 "pref": "like",
                 "nonce": "n-1",
             }
+            seen_calls = []
             fake = FakeST()
             import webui.tabs.run_manager as rm
+
+            def _fake_component(report_html, states, key):
+                seen_calls.append((report_html, dict(states), key))
+                return mark_value
 
             with (
                 patch.object(reports_tab, "st", fake),
@@ -310,19 +315,24 @@ class DailyReportInlineMarkTests(unittest.TestCase):
                 patch.object(
                     reports_tab,
                     "_render_report_component",
-                    side_effect=lambda html, key: mark_value,
-                ) as comp,
+                    side_effect=_fake_component,
+                ),
             ):
                 self.assertTrue(reports_tab._render_daily_report(report, {}))
                 # 同一 nonce 再次回传（组件状态保留）不再重复落库或 rerun
                 self.assertTrue(reports_tab._render_daily_report(report, {}))
 
-            self.assertEqual(comp.call_count, 2)
+            self.assertEqual(len(seen_calls), 2)
             self.assertEqual(len(reruns), 1)
             store = DailyResearchStore(db_path)
             prefs = store.list_preferences(limit=10)
             self.assertEqual(prefs[0]["preference"], "like")
             self.assertEqual(prefs[0]["paper_id"], "2401.00001")
+            # 报告 HTML 不含偏好状态且两次渲染逐字节一致（不闪烁的前提），
+            # 偏好通过独立的 states 通道下发并在落库后更新。
+            self.assertEqual(seen_calls[0][0], seen_calls[1][0])
+            self.assertEqual(seen_calls[0][1].get("2401.00001"), "none")
+            self.assertEqual(seen_calls[1][1].get("2401.00001"), "like")
 
     def test_missing_store_falls_back_to_raw_html(self):
         import tempfile

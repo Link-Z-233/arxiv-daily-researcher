@@ -26,6 +26,8 @@
   var FALLBACK_HEIGHT = 800;
   var currentHeight = 0;
   var lastHtml = null;
+  var lastStatesText = "{}";
+  var pendingStates = null; // 报告 iframe 就绪后要下发的标记状态
 
   // 宿主可能在一秒内重发多次 render；高度上报也会再触发一轮组件渲染。
   // 两个方向都做去重/节流，避免"重建报告 iframe → 上报高度 → 再渲染"的
@@ -39,25 +41,52 @@
     send({ type: "streamlit:setFrameHeight", height: value });
   }
 
+  function statesText(states) {
+    try { return JSON.stringify(states || {}); } catch (e) { return "{}"; }
+  }
+
+  function pushStates(frame, states) {
+    if (!frame || !frame.contentWindow) return;
+    frame.contentWindow.postMessage(
+      { type: "arxiv-report-states", states: states || {} }, "*"
+    );
+  }
+
   function renderReport(args) {
     var html = String(args && args.html ? args.html : "");
+    var states = (args && args.states && typeof args.states === "object")
+      ? args.states : {};
     var host = document.getElementById("host");
-    if (html === lastHtml && host.children.length > 0) {
-      return; // 内容没变，保留现有沙箱 iframe（保住滚动位置与 KaTeX 渲染）
+    var statesChanged = statesText(states) !== lastStatesText;
+    lastStatesText = statesText(states);
+
+    if (html !== lastHtml) {
+      lastHtml = html;
+      host.innerHTML = "";
+      var frame = document.createElement("iframe");
+      frame.title = "Daily report preview";
+      // 报告 HTML 保持与旧版预览一致的沙箱：可执行脚本（KaTeX），但与面板源隔离。
+      frame.setAttribute("sandbox", "allow-scripts allow-popups");
+      frame.setAttribute("referrerpolicy", "no-referrer");
+      frame.style.height = (currentHeight || FALLBACK_HEIGHT) + "px";
+      // 通过属性赋值设置 srcdoc，由 DOM 负责编码，报告内容无法逃出 iframe。
+      frame.srcdoc = html;
+      // srcdoc 内联脚本先于 load 执行：load 后下发状态不会丢。
+      frame.addEventListener("load", function () { pushStates(frame, pendingStates); });
+      host.appendChild(frame);
+      pendingStates = states;
+      if (!currentHeight) {
+        frameHeight(FALLBACK_HEIGHT);
+      }
+      return;
     }
-    lastHtml = html;
-    host.innerHTML = "";
-    var frame = document.createElement("iframe");
-    frame.title = "Daily report preview";
-    // 报告 HTML 保持与旧版预览一致的沙箱：可执行脚本（KaTeX），但与面板源隔离。
-    frame.setAttribute("sandbox", "allow-scripts allow-popups");
-    frame.setAttribute("referrerpolicy", "no-referrer");
-    frame.style.height = (currentHeight || FALLBACK_HEIGHT) + "px";
-    // 通过属性赋值设置 srcdoc，由 DOM 负责编码，报告内容无法逃出 iframe。
-    frame.srcdoc = html;
-    host.appendChild(frame);
-    if (!currentHeight) {
-      frameHeight(FALLBACK_HEIGHT);
+
+    if (host.children.length === 0) return;
+    // 内容没变则保留现有沙箱 iframe（保住滚动位置与 KaTeX 渲染）。
+    // 仅状态变化时向现有 iframe 下发状态，报告不重载、不闪烁。
+    if (statesChanged) {
+      pendingStates = states;
+      pushStates(host.children[0], states);
     }
   }
 

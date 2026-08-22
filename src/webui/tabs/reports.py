@@ -490,6 +490,28 @@ _MARK_BAR_CSS = (
 _MARK_BAR_JS = """<script>(function(){
   if (window.__arxivMarkInjected) return; window.__arxivMarkInjected = true;
   function post(msg){ parent.postMessage(msg, "*"); }
+  // 把偏好应用到某个标记条：更新 data-current 与按钮 active 态。
+  function applyPref(bar, pref){
+    pref = (pref === "like" || pref === "dislike") ? pref : "none";
+    bar.setAttribute("data-current", pref);
+    var buttons = bar.querySelectorAll(".arxiv-mark-btn");
+    for (var i = 0; i < buttons.length; i++) {
+      var b = buttons[i];
+      if (b.getAttribute("data-pref") === pref) { b.classList.add("active"); }
+      else { b.classList.remove("active"); }
+    }
+  }
+  // 服务端权威状态（含初始状态）通过该消息下发；HTML 本体不携带状态，
+  // 标记变化时报告 iframe 不会重建，页面不闪烁。
+  window.addEventListener("message", function(ev){
+    var data = ev.data;
+    if (!data || data.type !== "arxiv-report-states") return;
+    var states = data.states || {};
+    var bars = document.querySelectorAll(".arxiv-mark-bar");
+    for (var i = 0; i < bars.length; i++) {
+      applyPref(bars[i], states[bars[i].getAttribute("data-paper")]);
+    }
+  });
   var lastHeight = 0;
   var pendingHeight = 0;
   var heightTimer = null;
@@ -517,6 +539,8 @@ _MARK_BAR_JS = """<script>(function(){
     // 再点同一个偏好即取消（切回 none）；只有 👍/👎 两个按钮。
     var want = btn.getAttribute("data-pref") === (bar.getAttribute("data-current") || "none")
       ? "none" : btn.getAttribute("data-pref");
+    // 先本地生效，避免等待服务端往返；落库后的权威状态随后校准。
+    applyPref(bar, want);
     post({
       type: "arxiv-report-mark",
       source: bar.getAttribute("data-source"),
@@ -536,24 +560,23 @@ _MARK_BAR_JS = """<script>(function(){
 
 
 def _build_mark_bar(paper: dict) -> str:
-    """构造 👍/👎 标记按钮条（插入评分行，浮动到卡片最右侧）。"""
+    """构造 👍/👎 标记按钮条（插入评分行，浮动到卡片最右侧）。
+
+    按钮的 active 态不写入 HTML：初始状态与后续变更都由宿主通过
+    ``arxiv-report-states`` 消息下发。这样标记变化时报告 HTML 保持
+    逐字节不变，沙箱 iframe 不会重建，页面也就不闪烁。
+    """
     source = html.escape(str(paper.get("source", "")), quote=True)
     paper_id = html.escape(str(paper.get("paper_id", "")), quote=True)
-    current = paper.get("preference") or "none"
-
-    def _btn(pref: str, label: str, help_text: str) -> str:
-        active = " active" if current == pref else ""
-        return (
-            f'<button type="button" class="arxiv-mark-btn{active}" data-pref="{pref}" '
-            f'title="{html.escape(help_text, quote=True)}">{label}</button>'
-        )
 
     return (
         f'<div class="arxiv-mark-bar" data-source="{source}" data-paper="{paper_id}" '
-        f'data-current="{html.escape(current, quote=True)}">'
-        + _btn("like", "👍", t("fav_like"))
-        + _btn("dislike", "👎", t("fav_dislike"))
-        + "</div>"
+        'data-current="none">'
+        f'<button type="button" class="arxiv-mark-btn" data-pref="like" '
+        f'title="{html.escape(t("fav_like"), quote=True)}">👍</button>'
+        f'<button type="button" class="arxiv-mark-btn" data-pref="dislike" '
+        f'title="{html.escape(t("fav_dislike"), quote=True)}">👎</button>'
+        "</div>"
     )
 
 
@@ -615,13 +638,17 @@ def _inject_mark_controls(report_html: str, papers: list[dict]) -> str:
     return _append_mark_assets("".join(pieces))
 
 
-def _render_report_component(report_html: str, key: str):
-    """渲染报告查看自定义组件；返回组件回传的标记动作（无则 None）。"""
+def _render_report_component(report_html: str, states: dict, key: str):
+    """渲染报告查看自定义组件；返回组件回传的标记动作（无则 None）。
+
+    ``states`` 是 {paper_id: preference} 的当前偏好快照，独立于报告
+    HTML 下发：标记变化只会更新 states，报告 iframe 不重建。
+    """
     try:
         viewer = components.declare_component(
             "arxiv_report_viewer", path=str(_COMPONENT_DIR)
         )
-        return viewer(html=report_html, key=key, default=None)
+        return viewer(html=report_html, states=states, key=key, default=None)
     except Exception:
         # 组件基础设施不可用时退回纯预览（由调用方处理）。
         return None
@@ -709,8 +736,13 @@ def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
         # 报告里没有可配对的论文卡片（旧版/异构报告），退回纯 HTML 预览。
         return False
 
+    states = {
+        str(item["paper_id"]): (item.get("preference") or "none")
+        for item in result["items"]
+        if item.get("paper_id")
+    }
     key = f"rv_{report.source}_{report.path.name}"
-    value = _render_report_component(enriched, key)
+    value = _render_report_component(enriched, states, key)
     if isinstance(value, dict) and value.get("paper_id"):
         guard_key = f"rv_consumed_{key}"
         if st.session_state.get(guard_key) != value.get("nonce"):
@@ -725,6 +757,8 @@ def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
             )
             if paper is not None:
                 _apply_report_mark(store, paper, value.get("pref") or "none")
+                # 重跑一次以刷新 states/画像；报告 HTML 不含状态，
+                # iframe 不会重建，用户看不到闪烁。
                 st.rerun()
 
     _render_preference_profile(store, config_values)
