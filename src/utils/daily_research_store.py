@@ -1113,6 +1113,139 @@ class DailyResearchStore:
             )
         return papers
 
+    @staticmethod
+    def _like_pattern(query: str) -> str:
+        """Escape LIKE wildcards so user input matches literally."""
+        escaped = (
+            query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        return f"%{escaped}%"
+
+    def search_papers(
+        self,
+        *,
+        query: str = "",
+        source: Optional[str] = None,
+        liked_only: bool = False,
+        min_score: Optional[float] = None,
+        completed_from: Optional[str] = None,
+        completed_to: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Full-archive metadata search over completed papers.
+
+        The query matches literally (LIKE wildcards escaped) against the
+        paper JSON (title, authors, abstract) and the stored score JSON
+        (TLDR, extracted keywords). Data is never deleted, so this is the
+        primary way back into old reports as the archive grows.
+        """
+        conditions = ["dp.completed_at IS NOT NULL"]
+        params: list[Any] = []
+
+        stripped = (query or "").strip()
+        if stripped:
+            pattern = self._like_pattern(stripped)
+            conditions.append(
+                "(dp.paper_json LIKE ? ESCAPE '\\' OR dp.score_json LIKE ? ESCAPE '\\')"
+            )
+            params.extend([pattern, pattern])
+        normalized_source = (source or "").strip().lower()
+        if normalized_source:
+            conditions.append("dp.source = ?")
+            params.append(normalized_source)
+        if liked_only:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM paper_preferences pp "
+                "WHERE pp.source = dp.source "
+                "AND pp.paper_id = dp.paper_id "
+                "AND pp.preference = 'like')"
+            )
+        if min_score is not None:
+            conditions.append(
+                "json_extract(dp.score_json, '$.total_score') >= ?"
+            )
+            params.append(float(min_score))
+        if completed_from:
+            conditions.append("substr(dp.completed_at, 1, 10) >= ?")
+            params.append(str(completed_from))
+        if completed_to:
+            conditions.append("substr(dp.completed_at, 1, 10) <= ?")
+            params.append(str(completed_to))
+
+        where_clause = " AND ".join(conditions)
+        bounded_limit = max(1, min(int(limit), 200))
+        bounded_offset = max(0, int(offset))
+
+        with self._connect() as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) FROM daily_papers dp WHERE {where_clause}", params
+            ).fetchone()
+            rows = conn.execute(
+                f"""
+                SELECT dp.source, dp.paper_id, dp.canonical_id, dp.completed_at,
+                       dp.paper_json, dp.score_json,
+                       (SELECT pp.preference FROM paper_preferences pp
+                        WHERE pp.source = dp.source
+                          AND pp.paper_id = dp.paper_id) AS preference
+                FROM daily_papers dp
+                WHERE {where_clause}
+                ORDER BY dp.completed_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                [*params, bounded_limit, bounded_offset],
+            ).fetchall()
+
+        items = []
+        for row in rows:
+            try:
+                metadata = (
+                    json.loads(row["paper_json"]) if row["paper_json"] else {}
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            try:
+                score = json.loads(row["score_json"]) if row["score_json"] else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                score = {}
+            if not isinstance(score, dict):
+                score = {}
+            items.append(
+                {
+                    "source": row["source"],
+                    "paper_id": row["paper_id"],
+                    "canonical_id": row["canonical_id"],
+                    "completed_at": row["completed_at"],
+                    "title": str(metadata.get("title") or row["paper_id"]),
+                    "authors": [
+                        author
+                        for author in (metadata.get("authors") or [])
+                        if isinstance(author, str)
+                    ],
+                    "url": metadata.get("url"),
+                    "pdf_url": metadata.get("pdf_url"),
+                    "categories": [
+                        category
+                        for category in (metadata.get("categories") or [])
+                        if isinstance(category, str)
+                    ],
+                    "published_date": metadata.get("published_date"),
+                    "total_score": score.get("total_score"),
+                    "is_qualified": score.get("is_qualified"),
+                    "strategy_id": score.get("strategy_id"),
+                    "tldr": score.get("tldr"),
+                    "extracted_keywords": [
+                        keyword
+                        for keyword in (score.get("extracted_keywords") or [])
+                        if isinstance(keyword, str)
+                    ],
+                    "preference": row["preference"],
+                }
+            )
+        return {"total": int(total_row[0]), "items": items}
+
     def get_recent_runs(self, limit: int = 20) -> list[Dict[str, Any]]:
         """Return recent run summaries plus receipts for local observability."""
         max_rows = max(1, min(int(limit), 200))

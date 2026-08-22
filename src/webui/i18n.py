@@ -130,6 +130,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "usage_model": {"zh": "模型", "en": "Model"},
     # ── favorites.py ────────────────────────────────────────────────────
     "tab_favorites": {"zh": "收藏偏好", "en": "Favorites"},
+    "tab_paper_search": {"zh": "论文检索", "en": "Paper Search"},
     "fav_title": {"zh": "收藏偏好", "en": "Paper Favorites"},
     "fav_hint": {
         "zh": "给论文点喜欢或不喜欢；标记只用于汇总你的兴趣画像（作者、领域、关键词），"
@@ -1227,6 +1228,47 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "dm_backup_skip_reason": {"zh": "未创建备份：{}", "en": "Backup not created: {}"},
     "dm_backup_failed": {"zh": "❌ 备份失败", "en": "❌ Backup failed"},
+    "ps_title": {"zh": "论文检索", "en": "Paper Search"},
+    "ps_hint": {
+        "zh": "在已处理论文的标题、作者、摘要、TLDR 与提取关键词中检索；数据永久存档，存量随时间增长。",
+        "en": "Search titles, authors, abstracts, TLDRs and extracted keywords of processed papers; the archive is permanent and keeps growing.",
+    },
+    "ps_query_label": {"zh": "检索词", "en": "Query"},
+    "ps_query_placeholder": {
+        "zh": "例如：diffusion model、作者名、关键词……",
+        "en": "e.g. diffusion model, an author name, a keyword...",
+    },
+    "ps_source_label": {"zh": "来源", "en": "Source"},
+    "ps_source_all": {"zh": "全部来源", "en": "All sources"},
+    "ps_date_label": {"zh": "处理日期范围", "en": "Processed date range"},
+    "ps_date_help": {
+        "zh": "可选；按论文被处理入库的日期过滤",
+        "en": "Optional; filters by the date the paper was processed",
+    },
+    "ps_min_score_label": {"zh": "最低总分", "en": "Minimum score"},
+    "ps_min_score_help": {
+        "zh": "0 表示不过滤；按历史评分总分过滤",
+        "en": "0 disables the filter; uses the historical total score",
+    },
+    "ps_liked_only_label": {"zh": "只看收藏 (👍)", "en": "Liked only (👍)"},
+    "ps_search_btn": {"zh": "🔍 检索", "en": "🔍 Search"},
+    "ps_idle_hint": {"zh": "输入条件后点击检索。留空检索词可只用过滤器浏览全库。", "en": "Enter criteria and click Search. An empty query lists the whole archive with filters."},
+    "ps_result_title": {"zh": "共 {total} 篇匹配", "en": "{total} matching papers"},
+    "ps_no_match": {"zh": "没有匹配的论文。", "en": "No matching papers."},
+    "ps_no_data": {"zh": "暂无数据库或尚未处理任何论文。", "en": "No database yet, or no papers processed."},
+    "ps_search_failed": {"zh": "检索失败：{}", "en": "Search failed: {}"},
+    "ps_col_source": {"zh": "来源", "en": "Source"},
+    "ps_col_completed": {"zh": "处理时间", "en": "Processed"},
+    "ps_col_published": {"zh": "发表日期", "en": "Published"},
+    "ps_col_strategy": {"zh": "评分策略", "en": "Strategy"},
+    "ps_col_authors": {"zh": "作者", "en": "Authors"},
+    "ps_col_keywords": {"zh": "提取关键词", "en": "Extracted keywords"},
+    "ps_col_categories": {"zh": "分类", "en": "Categories"},
+    "ps_link_abs": {"zh": "论文页", "en": "Abstract"},
+    "ps_link_pdf": {"zh": "PDF", "en": "PDF"},
+    "ps_prev_page": {"zh": "← 上一页", "en": "← Previous"},
+    "ps_next_page": {"zh": "下一页 →", "en": "Next →"},
+    "ps_page_info": {"zh": "第 {page} / {pages} 页", "en": "Page {page} of {pages}"},
 }
 
 
