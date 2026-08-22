@@ -428,24 +428,22 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "extra_sources_title": {"zh": "额外来源", "en": "Extra Sources"},
     "extra_sources_enabled": {"zh": "启用额外来源", "en": "Enable extra sources"},
     "extra_sources_help": {
-        "zh": "关闭时保留文本内容但不抓取；开启后只接受内置类型，不执行 Python 代码。",
+        "zh": "关闭时保留已配置的来源但不抓取；开启后只接受内置类型，不执行 Python 代码。",
         "en": "When off, definitions are retained but not fetched. Only built-in types are accepted; Python code is never executed.",
     },
-    "extra_sources_json_label": {
-        "zh": "来源定义（JSON 数组）",
-        "en": "Source definitions (JSON array)",
-    },
-    "extra_sources_json_help": {
-        "zh": "OpenAlex 期刊格式：type=openalex_journal、唯一 code、显示名称、全名及 ISSN 数组；也支持 type=huggingface_papers。",
-        "en": "OpenAlex journals use type=openalex_journal, a unique code, names and an ISSN array; type=huggingface_papers is also supported.",
-    },
-    "extra_sources_templates_title": {
-        "zh": "可复制的内置来源模板",
-        "en": "Copyable built-in source templates",
-    },
-    "extra_sources_templates_help": {
-        "zh": "从下方数组复制需要的对象到上方输入框；只有输入框中的定义会在开关打开时启用。",
-        "en": "Copy only the desired objects into the field above. Definitions present there are enabled when the master switch is on.",
+    "extra_sources_builtin_label": {"zh": "内置来源（多选）", "en": "Built-in sources (multi-select)"},
+    "extra_sources_custom_title": {"zh": "自定义来源", "en": "Custom sources"},
+    "extra_sources_add_title": {"zh": "➕ 新增自定义来源", "en": "➕ Add a custom source"},
+    "extra_sources_add_code": {"zh": "来源代码（小写字母/数字/下划线）", "en": "Source code (lowercase/digits/underscore)"},
+    "extra_sources_add_display": {"zh": "显示名称", "en": "Display name"},
+    "extra_sources_add_full": {"zh": "期刊全名", "en": "Full journal name"},
+    "extra_sources_add_issn": {"zh": "ISSN（逗号分隔）", "en": "ISSNs (comma separated)"},
+    "extra_sources_add_btn": {"zh": "添加来源", "en": "Add source"},
+    "extra_sources_added": {"zh": "已添加自定义来源。", "en": "Custom source added."},
+    "extra_sources_removed": {"zh": "已移除自定义来源。", "en": "Custom source removed."},
+    "extra_sources_summary": {
+        "zh": "当前启用 {builtin} 个内置来源 + {custom} 个自定义来源。",
+        "en": "{builtin} built-in + {custom} custom sources enabled.",
     },
     "extra_sources_valid": {"zh": "来源定义格式有效。", "en": "Source definitions are valid."},
     "extra_sources_invalid": {"zh": "来源定义无效", "en": "Invalid source definitions"},

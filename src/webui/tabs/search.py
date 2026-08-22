@@ -1,6 +1,5 @@
 """Search & Data Sources tab for the Streamlit config panel."""
 
-import json
 import streamlit as st
 from webui.i18n import t
 from utils.source_registry import (
@@ -83,40 +82,134 @@ def render(_env_values: dict, config_values: dict):
 
     st.markdown(f"**{t('extra_sources_title')}**")
     extra_cfg = flat.get("extra_source_definitions", [])
+    if not isinstance(extra_cfg, list):
+        extra_cfg = []
+    extra_cfg = [d for d in extra_cfg if isinstance(d, dict)]
     extra_enabled = st.toggle(
         t("extra_sources_enabled"),
         value=bool(flat.get("extra_sources_enabled", False)),
         key="extra_sources_enabled",
         help=t("extra_sources_help"),
     )
-    default_json = json.dumps(
-        extra_cfg,
-        ensure_ascii=False,
-        indent=2,
-    )
-    extra_json = st.text_area(
-        t("extra_sources_json_label"),
-        value=default_json,
-        key="extra_source_definitions_json",
-        height=220,
-        disabled=not extra_enabled,
-        help=t("extra_sources_json_help"),
-    )
-    with st.expander(t("extra_sources_templates_title"), expanded=False):
-        st.caption(t("extra_sources_templates_help"))
-        st.code(
-            json.dumps(
-                builtin_extra_source_definitions(), ensure_ascii=False, indent=2
-            ),
-            language="json",
-        )
+
+    # 内置来源模板目录：PRA/PRB/Nature/…/Hugging Face Papers
+    builtin_templates = {d["code"]: d for d in builtin_extra_source_definitions()}
+    configured_codes = {str(d.get("code", "")).lower() for d in extra_cfg}
+
+    # 自定义（非内置）来源保存在会话里，初始值来自磁盘配置
+    if "extra_custom_definitions" not in st.session_state:
+        st.session_state["extra_custom_definitions"] = [
+            d
+            for d in extra_cfg
+            if str(d.get("code", "")).lower() not in builtin_templates
+        ]
+
+    selected_builtins: list[str] = []
+    custom_definitions: list[dict] = list(st.session_state["extra_custom_definitions"])
+
+    # 额外来源启用后才展开自定义来源配置框
     if extra_enabled:
-        try:
-            parsed_extra = validate_source_definitions(json.loads(extra_json or "[]"))
-            st.caption(t("extra_sources_valid"))
-        except (ValueError, json.JSONDecodeError) as exc:
-            st.error(f"{t('extra_sources_invalid')}: {exc}")
-            parsed_extra = []
+        def _builtin_label(code: str) -> str:
+            info = builtin_templates[code]
+            return f"{info['display_name']}（{code}）"
+
+        selected_builtins = st.multiselect(
+            t("extra_sources_builtin_label"),
+            options=list(builtin_templates),
+            default=[c for c in builtin_templates if c in configured_codes],
+            format_func=_builtin_label,
+            key="extra_builtin_selected",
+        )
+
+        if custom_definitions:
+            st.markdown(f"**{t('extra_sources_custom_title')}**")
+            for index, definition in enumerate(custom_definitions):
+                col_info, col_rm = st.columns([5, 1])
+                issn_text = ", ".join(definition.get("issn", []))
+                col_info.caption(
+                    f"{definition.get('display_name', '?')} · "
+                    f"`{definition.get('code', '?')}` · "
+                    f"{definition.get('full_name', '')}"
+                    + (f" · ISSN: {issn_text}" if issn_text else "")
+                )
+                if col_rm.button(
+                    "✖",
+                    key=f"extra_custom_rm_{index}",
+                    use_container_width=True,
+                    help=t("extra_sources_removed"),
+                ):
+                    st.session_state["extra_custom_definitions"].pop(index)
+                    st.rerun()
+
+        with st.expander(t("extra_sources_add_title"), expanded=False):
+            col_add1, col_add2 = st.columns(2)
+            with col_add1:
+                st.text_input(
+                    t("extra_sources_add_code"),
+                    value="",
+                    key="extra_new_code",
+                    placeholder="optica_express",
+                )
+                st.text_input(
+                    t("extra_sources_add_full"),
+                    value="",
+                    key="extra_new_full_name",
+                    placeholder="Optics Express",
+                )
+            with col_add2:
+                st.text_input(
+                    t("extra_sources_add_display"),
+                    value="",
+                    key="extra_new_display_name",
+                    placeholder="Opt. Express",
+                )
+                st.text_input(
+                    t("extra_sources_add_issn"),
+                    value="",
+                    key="extra_new_issn",
+                    placeholder="1094-4087",
+                )
+            if st.button(t("extra_sources_add_btn"), key="extra_new_add"):
+                candidate = {
+                    "type": "openalex_journal",
+                    "code": st.session_state.get("extra_new_code", ""),
+                    "display_name": st.session_state.get("extra_new_display_name", ""),
+                    "full_name": st.session_state.get("extra_new_full_name", ""),
+                    "issn": [
+                        item.strip()
+                        for item in st.session_state.get("extra_new_issn", "").split(",")
+                        if item.strip()
+                    ],
+                }
+                try:
+                    validate_source_definitions([candidate])
+                except ValueError as exc:
+                    st.error(f"{t('extra_sources_invalid')}: {exc}")
+                else:
+                    st.session_state["extra_custom_definitions"].append(candidate)
+                    for field in (
+                        "extra_new_code",
+                        "extra_new_display_name",
+                        "extra_new_full_name",
+                        "extra_new_issn",
+                    ):
+                        st.session_state[field] = ""
+                    st.toast(t("extra_sources_added"), icon="✅")
+                    st.rerun()
+
+        st.caption(
+            t("extra_sources_summary").format(
+                builtin=len(selected_builtins), custom=len(custom_definitions)
+            )
+        )
+
+    # 由多选与自定义列表推导出最终定义（供下方 HF 参数区判断）
+    try:
+        parsed_extra = validate_source_definitions(
+            [builtin_templates[code] for code in selected_builtins] + custom_definitions
+        )
+    except ValueError:
+        parsed_extra = []
 
     st.toggle(
         t("reports_by_source_toggle"),
@@ -238,13 +331,37 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         domains.extend(d.strip() for d in custom.split(",") if d.strip())
 
     configured_extra = flat.get("extra_source_definitions", [])
-    raw_extra = st.session_state.get(
-        "extra_source_definitions_json",
-        json.dumps(configured_extra if isinstance(configured_extra, list) else []),
-    )
+    if not isinstance(configured_extra, list):
+        configured_extra = []
+    configured_extra = [d for d in configured_extra if isinstance(d, dict)]
+
+    builtin_templates = {d["code"]: d for d in builtin_extra_source_definitions()}
+    configured_codes = {
+        str(d.get("code", "")).lower() for d in configured_extra
+    }
+
+    # 页面未渲染时（保存前从未打开过本页）保留磁盘现值
+    if "extra_builtin_selected" not in st.session_state:
+        selected_builtins = [
+            code for code in builtin_templates if code in configured_codes
+        ]
+    else:
+        selected_builtins = list(st.session_state["extra_builtin_selected"])
+
+    if "extra_custom_definitions" not in st.session_state:
+        custom_definitions = [
+            d
+            for d in configured_extra
+            if str(d.get("code", "")).lower() not in builtin_templates
+        ]
+    else:
+        custom_definitions = list(st.session_state["extra_custom_definitions"])
+
     try:
-        extra_definitions = validate_source_definitions(json.loads(raw_extra or "[]"))
-    except (ValueError, json.JSONDecodeError) as exc:
+        extra_definitions = validate_source_definitions(
+            [builtin_templates[code] for code in selected_builtins] + custom_definitions
+        )
+    except ValueError as exc:
         raise ValueError(f"额外来源配置无效: {exc}") from exc
 
     return {
