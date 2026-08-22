@@ -426,6 +426,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "daily_scan_all_results": {"zh": "日报会处理时间范围内的全部新论文，不受篇数限制。", "en": "Daily research processes every new paper in the time window, with no item cap."},
     "data_sources_title": {"zh": "数据源", "en": "Data Sources"},
+    "sh_hint": {"zh": "成功率按每个数据源最近 20 次扫描计算。", "en": "Success rates cover each source's last 20 scans."},
     "extra_sources_title": {"zh": "额外来源", "en": "Extra Sources"},
     "extra_sources_enabled": {"zh": "启用额外来源", "en": "Enable extra sources"},
     "extra_sources_help": {"zh": "关闭时保留已配置的来源但不抓取。", "en": "When off, configured sources are kept but not scanned."},

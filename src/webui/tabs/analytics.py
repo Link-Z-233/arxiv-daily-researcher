@@ -411,6 +411,7 @@ def _render_source_health_section(_env_values: dict, config_values: dict) -> Non
         f'<p class="section-title">📡 {t("sh_title")}</p>',
         unsafe_allow_html=True,
     )
+    st.caption(t("sh_hint"))
 
     db_path = _daily_db_path_from_config(config_values or {})
     if not db_path.exists():
