@@ -4,27 +4,8 @@ CUSTOM_CSS = """
 <style>
 /* ==================== Global ==================== */
 .block-container {
-    padding-top: 3.5rem;
+    padding-top: 2rem;
     padding-bottom: 2rem;
-}
-
-/* ==================== Header ==================== */
-.main-header {
-    font-size: 1.8rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin-top: 0.25rem;
-    margin-bottom: 0.5rem;
-    line-height: 1.4;
-    padding: 4px 0;
-}
-.sub-header {
-    color: #6c757d;
-    font-size: 0.95rem;
-    margin-bottom: 1.5rem;
 }
 
 /* ==================== Tab Styling ==================== */

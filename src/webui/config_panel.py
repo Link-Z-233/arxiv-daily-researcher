@@ -176,13 +176,6 @@ with st.sidebar:
 
 # ==================== Main Content ====================
 
-
-st.markdown('<p class="main-header">ArXiv Daily Researcher</p>', unsafe_allow_html=True)
-st.markdown(
-    f'<p class="sub-header">{t("sub_header")}</p>',
-    unsafe_allow_html=True,
-)
-
 # Load data
 env_values = load_env()
 config_values = load_config()

@@ -38,10 +38,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "未找到",
         "en": "Not found",
     },
-    "sub_header": {
-        "zh": "配置面板 — 编辑 .env 和 configs/config.json",
-        "en": "Configuration Panel — Edit .env and configs/config.json",
-    },
     "lang_toggle": {
         "zh": "English",
         "en": "中文",
