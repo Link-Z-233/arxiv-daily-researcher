@@ -32,7 +32,7 @@ from utils.config_io import (
 from webui.styles import CUSTOM_CSS
 from webui.tabs import llm, search, keywords, scoring, notifications, advanced, reports
 from webui.tabs import run_manager, trend_runner, proxy, data_management, usage
-from webui.tabs import paper_search, source_health
+from webui.tabs import source_health
 from webui.i18n import t
 from webui.secret_fields import clear_secret_field_state
 
@@ -194,7 +194,6 @@ config_values = load_config()
 tab_labels = [
     t("tab_run_manager"),  # 运行管理
     t("tab_reports"),  # 报告查看
-    t("tab_paper_search"),  # 论文检索
     t("tab_source_health"),  # 数据源健康
     t("tab_trend_runner"),  # 趋势分析
     t("tab_keywords"),  # 关键词
@@ -211,7 +210,6 @@ tab_labels = [
 pages = [
     run_manager.render,
     reports.render,
-    paper_search.render,
     source_health.render,
     trend_runner.render,
     keywords.render,

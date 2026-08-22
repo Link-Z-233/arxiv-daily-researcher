@@ -16,6 +16,7 @@ import pandas as pd
 
 from utils.daily_research_store import DailyResearchStore
 from webui.i18n import t
+from webui.tabs import paper_search
 from utils.source_registry import source_display_names
 
 # project root: tabs/ -> webui/ -> src/ -> project_root
@@ -621,8 +622,8 @@ def _render_report_marking(report: ReportFile, config_values: dict) -> None:
 # ─── main render ──────────────────────────────────────────────────────────────
 
 
-def render(_env_values: dict, _config_values: dict) -> None:
-    """渲染报告查看 Tab。"""
+def render(env_values: dict, config_values: dict) -> None:
+    """渲染报告查看 Tab：报告浏览/预览/随手标记 + 页面最下方的论文检索。"""
 
     st.markdown(
         f'<p class="hint-text">{t("reports_hint")}</p>',
@@ -649,7 +650,7 @@ def render(_env_values: dict, _config_values: dict) -> None:
     st.divider()
 
     source_labels = source_display_names(
-        _config_values.get("extra_source_definitions", [])
+        config_values.get("extra_source_definitions", [])
     )
     all_reports = _discover_reports()
     visible_reports = _filter_visible_reports(all_reports, show_non_arxiv)
@@ -658,8 +659,20 @@ def render(_env_values: dict, _config_values: dict) -> None:
     if total == 0:
         st.info(t("reports_empty"))
         st.caption(f"📂 {t('reports_dir_label')}: `{_REPORTS_DIR}`")
-        return
+    else:
+        _render_report_browser(visible_reports, source_labels, config_values)
 
+    # ── 论文检索（页面最下方）──────────────────────────────────────────
+    st.divider()
+    paper_search.render(env_values, config_values)
+
+
+def _render_report_browser(
+    visible_reports: dict[str, list[ReportFile]],
+    source_labels: dict[str, str],
+    config_values: dict,
+) -> None:
+    """三列报告浏览器 + 预览 + 随手标记。"""
     latest_visible = _latest_visible_report(visible_reports)
     current_preview: ReportFile | None = st.session_state.get(_PREVIEW_KEY)
     visible_paths = {str(r.path) for reports in visible_reports.values() for r in reports}
@@ -703,7 +716,7 @@ def render(_env_values: dict, _config_values: dict) -> None:
     _render_preview(report, visible_reports)
 
     # 报告下方随手标记：融合原「收藏偏好」页，边看报告边标记
-    _render_report_marking(report, _config_values)
+    _render_report_marking(report, config_values)
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:
