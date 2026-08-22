@@ -68,6 +68,27 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_queue_pending": {"zh": "待处理队列", "en": "Pending queue"},
     "rm_queue_failed": {"zh": "失败待重试", "en": "Awaiting retry"},
     "rm_stop_btn": {"zh": "停止运行", "en": "Stop run"},
+    "rm_trigger_state_failed": {
+        "zh": "最近一次 WebUI 请求 {state}{suffix}；请查看运行日志。",
+        "en": "Latest WebUI request {state}{suffix}; check the run logs.",
+    },
+    "rm_trigger_docker_keep": {
+        "zh": "为避免丢失主容器尚未消费的请求，Docker 模式不从 WebUI 删除队列文件。",
+        "en": "In Docker mode the WebUI does not delete queue files the worker may not have consumed yet.",
+    },
+    "rm_lock_anchor": {
+        "zh": "锁文件保留为稳定锚点",
+        "en": "Lock file kept as a stable anchor",
+    },
+    "rm_log_truncated": {
+        "zh": "... (省略前 {skipped} 行，仅显示最后 {kept} 行) ...",
+        "en": "... ({skipped} earlier lines skipped, last {kept} shown) ...",
+    },
+    "rm_log_read_failed": {"zh": "读取日志失败", "en": "Failed to read log"},
+    "report_show_non_arxiv_help": {
+        "zh": "开启后显示所有来源；关闭后仅显示 ArXiv 来源的每日研究报告",
+        "en": "Show every source when on; only ArXiv daily reports when off",
+    },
     "rm_stop_confirm": {"zh": "确认停止", "en": "Confirm stop"},
     "rm_stop_confirm_hint": {
         "zh": "将向正在运行的进程发送停止信号：已完成阶段保留，未完成论文留队待重试。"
@@ -129,15 +150,23 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "{date} · {tokens} tokens · {runs} runs",
     },
     "usage_heatmap_none": {"zh": "{date} · 无用量", "en": "{date} · no usage"},
+    "usage_week_mon": {"zh": "一", "en": "M"},
+    "usage_week_wed": {"zh": "三", "en": "W"},
+    "usage_week_fri": {"zh": "五", "en": "F"},
+    "usage_week_sun": {"zh": "日", "en": "S"},
+    "usage_month_1": {"zh": "1月", "en": "Jan"},
+    "usage_month_2": {"zh": "2月", "en": "Feb"},
+    "usage_month_3": {"zh": "3月", "en": "Mar"},
+    "usage_month_4": {"zh": "4月", "en": "Apr"},
+    "usage_month_5": {"zh": "5月", "en": "May"},
+    "usage_month_6": {"zh": "6月", "en": "Jun"},
+    "usage_month_7": {"zh": "7月", "en": "Jul"},
+    "usage_month_8": {"zh": "8月", "en": "Aug"},
+    "usage_month_9": {"zh": "9月", "en": "Sep"},
+    "usage_month_10": {"zh": "10月", "en": "Oct"},
+    "usage_month_11": {"zh": "11月", "en": "Nov"},
+    "usage_month_12": {"zh": "12月", "en": "Dec"},
     # ── 报告查看页：随手标记（原收藏偏好页融合）─────────────────────────
-    "tab_paper_search": {"zh": "论文检索", "en": "Paper Search"},
-    "fav_hint": {
-        "zh": "给论文点喜欢或不喜欢；标记只用于汇总你的兴趣画像（作者、领域、关键词），"
-              "不会影响 AI 评分。数据永久保留。",
-        "en": "Mark papers you like or dislike. Marks only build your interest "
-              "profile (authors, categories, keywords) and never affect AI "
-              "scoring. Data is kept forever.",
-    },
     "fav_like": {"zh": "喜欢", "en": "Like"},
     "fav_dislike": {"zh": "不喜欢", "en": "Dislike"},
     "fav_clear": {"zh": "清除标记", "en": "Clear mark"},
@@ -382,6 +411,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "trend_output_formats_label": {"zh": "输出格式", "en": "Output Formats"},
     "trend_output_md_label": {"zh": "Markdown 报告", "en": "Markdown Report"},
     "trend_output_html_label": {"zh": "HTML 报告", "en": "HTML Report"},
+    "trend_keywords_placeholder": {
+        "zh": "quantum error correction · surface code",
+        "en": "quantum error correction · surface code",
+    },
     "trend_prompt_label": {"zh": "深度分析提示词", "en": "Deep-analysis prompt"},
     "trend_prompt_help": {
         "zh": "自定义「综合分析」的分析要求；留空使用内置综合分析指令。运行时立即生效，也可保存为模板复用。",
@@ -445,7 +478,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "当前启用 {builtin} 个内置来源 + {custom} 个自定义来源。",
         "en": "{builtin} built-in + {custom} custom sources enabled.",
     },
-    "extra_sources_valid": {"zh": "来源定义格式有效。", "en": "Source definitions are valid."},
     "extra_sources_invalid": {"zh": "来源定义无效", "en": "Invalid source definitions"},
     "reports_by_source_toggle": {
         "zh": "按数据源分类整理报告",
@@ -901,10 +933,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── trend_runner.py 新增 i18n ──
     "tr_section_params": {"zh": "分析参数", "en": "Analysis Parameters"},
     "tr_section_run_control": {"zh": "运行控制", "en": "Run Control"},
-    "tr_keywords_placeholder": {
-        "zh": '例如: quantum error correction "surface code"',
-        "en": 'e.g. quantum error correction "surface code"',
-    },
     "tr_categories_placeholder": {
         "zh": "例如: quant-ph cs.AI（留空则不过滤）",
         "en": "e.g. quant-ph cs.AI (leave empty for no filter)",
@@ -1003,25 +1031,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "尚无可显示的扫描收据；下一次启用持久化的日报运行后会出现。",
         "en": "No scan receipt is available yet. It will appear after the next persistent daily run.",
     },
-    "rm_scan_receipts_load_error": {
-        "zh": "无法读取本地扫描收据",
-        "en": "Could not read local scan receipts",
-    },
     "rm_scan_receipts_legacy": {
         "zh": "本地数据库尚未包含扫描收据表；下一次升级后的持久化日报运行会建立可观测记录。",
         "en": "The local database does not yet contain scan receipts. A persistent daily run after the upgrade will create observable records.",
     },
     "rm_scan_receipt_candidates": {"zh": "新候选", "en": "New candidates"},
-    "rm_scan_receipt_domains": {"zh": "领域数", "en": "Domains"},
-    "rm_scan_receipt_run_error": {"zh": "本次运行错误", "en": "Run error"},
     "rm_scan_receipt_status": {"zh": "状态", "en": "Status"},
     "rm_scan_receipt_source": {"zh": "来源", "en": "Source"},
     "rm_scan_receipt_scanned_at": {"zh": "扫描时间", "en": "Scanned at"},
-    "rm_scan_receipts_no_domain_detail": {
-        "zh": "该收据没有可用的领域明细。",
-        "en": "This receipt has no usable per-domain details.",
-    },
-    "rm_scan_receipt_raw": {"zh": "查看原始收据", "en": "View raw receipt"},
     "rm_health_empty": {
         "zh": "尚无可用于运行健康摘要的本地持久化数据库。",
         "en": "No local persistence database is available for operational health yet.",

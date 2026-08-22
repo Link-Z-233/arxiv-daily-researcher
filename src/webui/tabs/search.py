@@ -362,7 +362,7 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
             [builtin_templates[code] for code in selected_builtins] + custom_definitions
         )
     except ValueError as exc:
-        raise ValueError(f"额外来源配置无效: {exc}") from exc
+        raise ValueError(f"{t('extra_sources_invalid')}: {exc}") from exc
 
     return {
         "search_days": current("search_days", 7),

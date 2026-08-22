@@ -25,11 +25,20 @@ from webui.tabs.run_manager import _daily_db_path_from_config
 
 # GitHub 风格的五档绿色色阶；0 档为无数据灰。
 _HEAT_LEVEL_COLORS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
-_WEEK_LABELS = ["一", "", "三", "", "五", "", "日"]
-_MONTH_LABELS = [
-    "1月", "2月", "3月", "4月", "5月", "6月",
-    "7月", "8月", "9月", "10月", "11月", "12月",
-]
+
+
+def _week_labels() -> list[str]:
+    return [t("usage_week_mon"), "", t("usage_week_wed"), "", t("usage_week_fri"), "", t("usage_week_sun")]
+
+
+def _month_label(month: int) -> str:
+    labels = [
+        t("usage_month_1"), t("usage_month_2"), t("usage_month_3"),
+        t("usage_month_4"), t("usage_month_5"), t("usage_month_6"),
+        t("usage_month_7"), t("usage_month_8"), t("usage_month_9"),
+        t("usage_month_10"), t("usage_month_11"), t("usage_month_12"),
+    ]
+    return labels[month - 1]
 
 # 热力图窗口：只看近一个月。
 _HEATMAP_DAYS = 30
@@ -127,7 +136,7 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
     for weekday in range(7):
         prefix = (
             f'<td style="padding:0 6px 0 0;font-size:11px;color:#666;'
-            f'white-space:nowrap;">{_WEEK_LABELS[weekday]}</td>'
+            f'white-space:nowrap;">{_week_labels()[weekday]}</td>'
         )
         cells = [
             cell(start + timedelta(weeks=week_offset, days=weekday))
@@ -143,7 +152,7 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
         label = ""
         if week_start.month != current_month:
             current_month = week_start.month
-            label = _MONTH_LABELS[current_month - 1]
+            label = _month_label(current_month)
         month_cells.append(
             f'<td style="font-size:11px;color:#666;padding:0 0 2px 0;'
             f'white-space:nowrap;">{label}</td>'

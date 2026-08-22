@@ -644,7 +644,7 @@ def render(env_values: dict, config_values: dict) -> None:
             t("report_show_non_arxiv"),
             value=False,
             key="reports_show_non_arxiv",
-            help="开启后显示所有来源；关闭后仅显示 ArXiv 来源的每日研究报告",
+            help=t("report_show_non_arxiv_help"),
         )
 
     st.divider()

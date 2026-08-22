@@ -117,13 +117,13 @@ def _read_log_tail(log_path: Path, max_lines: int = 300) -> str:
         lines = content.splitlines()
         if len(lines) > max_lines:
             lines = [
-                f"... (省略前 {len(lines) - max_lines} 行，仅显示最后 {max_lines} 行) ..."
+                t("rm_log_truncated").format(skipped=len(lines) - max_lines, kept=max_lines)
             ] + lines[-max_lines:]
         return "\n".join(lines)
     except Exception:
         # A filesystem/decoder exception can reveal host paths.  The selected
         # log remains local, but the UI only needs a generic read failure.
-        return "读取日志失败"
+        return t("rm_log_read_failed")
 
 
 def _get_all_running_locks() -> list[tuple[Path, Optional[int]]]:
@@ -254,7 +254,7 @@ def _render_live_status_body() -> None:
             if isinstance(return_code, int) and not isinstance(return_code, bool)
             else ""
         )
-        st.warning(f"最近一次 WebUI 请求 {status['state']}{suffix}；请查看运行日志。")
+        st.warning(t("rm_trigger_state_failed").format(state=status["state"], suffix=suffix))
     else:
         _show_last_run_hint()
 
@@ -279,7 +279,7 @@ def _render_run_control() -> None:
     if trigger_stale:
         st.warning(f"⚠️ {t('rm_trigger_stale').format(n=int(trigger_age))}")
         if _IS_DOCKER_WEBUI:
-            st.caption("为避免丢失主容器尚未消费的请求，Docker 模式不从 WebUI 删除队列文件。")
+            st.caption(t("rm_trigger_docker_keep"))
         elif st.button(t("rm_clear_trigger_btn"), key="rm_clear_trigger"):
             for request_path in _TRIGGER_QUEUE_DIR.glob("*.json"):
                 request_path.unlink(missing_ok=True)
@@ -391,7 +391,7 @@ def _render_status() -> None:
             st.markdown(f"{icon} `{f.name}` — {status} | {pid_str} | {t('rm_started_at')}: {mtime}")
         with cols[1]:
             if not is_running:
-                st.caption("锁文件保留为稳定锚点")
+                st.caption(t("rm_lock_anchor"))
 
 
 # ─── 日志查看器 ──────────────────────────────────────────────────────────────
