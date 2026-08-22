@@ -21,7 +21,7 @@ class KeywordTracker:
     关键词趋势追踪器
 
     主要功能：
-    - 记录论文提取的关键词
+    - 读取论文库（daily_research.db）中论文自带的关键词
     - 每日自动 AI 标准化
     - 生成趋势图表
     """
@@ -35,13 +35,13 @@ class KeywordTracker:
         初始化追踪器
 
         Args:
-            db_path: 数据库路径（默认从 settings 获取）
+            db_path: 数据库路径（默认与每日研究状态库共用一个 SQLite 文件）
             enable_auto_normalize: 是否启用自动标准化
         """
         from config import settings
 
         if db_path is None:
-            db_path = getattr(settings, 'KEYWORD_DB_PATH', settings.DATA_DIR / "keywords" / "keywords.db")
+            db_path = settings.DAILY_RESEARCH_DB_PATH
 
         self.db = KeywordDatabase(db_path)
         self.normalizer = KeywordNormalizer()
@@ -53,36 +53,6 @@ class KeywordTracker:
         self.chart_top_n = getattr(settings, 'KEYWORD_CHART_TOP_N', 15)
         self.trend_top_n = getattr(settings, 'KEYWORD_TREND_TOP_N', 5)
         self.batch_size = getattr(settings, 'KEYWORD_NORMALIZATION_BATCH_SIZE', 25)
-
-    def record_keywords(
-        self,
-        keywords: List[str],
-        paper_id: str,
-        source: str,
-        extracted_date: Optional[date] = None
-    ) -> None:
-        """
-        记录论文提取的关键词
-
-        Args:
-            keywords: 关键词列表
-            paper_id: 论文ID
-            source: 数据源
-            extracted_date: 提取日期
-        """
-        if not keywords:
-            return
-
-        try:
-            inserted = self.db.insert_keywords(
-                keywords=keywords,
-                paper_id=paper_id,
-                source=source,
-                extracted_date=extracted_date
-            )
-            logger.debug(f"记录 {len(inserted)} 个关键词 (论文: {paper_id})")
-        except Exception as e:
-            logger.error(f"记录关键词失败: {e}")
 
     def run_daily_normalization(self, batch_size: Optional[int] = None) -> Dict[str, Any]:
         """
@@ -146,16 +116,13 @@ class KeywordTracker:
                         confidence=result.confidence
                     )
 
-                    # 链接已有记录
-                    linked = self.db.link_keywords_to_normalized(
-                        raw_keyword=raw_kw,
-                        normalized_id=normalized_id
-                    )
+                    # 别名覆盖的论文数（原始关键词就在论文库里）
+                    linked = self.db.count_papers_with_keyword(raw_kw)
                     stats["merged"] += linked
 
                 stats["processed"] += len(result.original_keywords)
 
-            # 更新每日统计
+            # 全量重建每日统计（派生数据）
             self.db.update_daily_counts()
 
             logger.info(f"标准化完成: 处理 {stats['processed']}, "

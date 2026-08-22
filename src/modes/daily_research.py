@@ -290,7 +290,6 @@ def _score_single_paper(
     all_keywords,
     translation_cache,
     cache_lock,
-    keyword_tracker,
     score_response=None,
     abstract_cn=None,
     translate=True,
@@ -348,14 +347,6 @@ def _score_single_paper(
         "published": paper.published_date.strftime("%Y-%m-%d") if paper.published_date else "N/A",
         "score_response": score_response,
     }
-
-    if keyword_tracker and score_response.extracted_keywords:
-        try:
-            keyword_tracker.record_keywords(
-                keywords=score_response.extracted_keywords, paper_id=paper.paper_id, source=source
-            )
-        except Exception as e:
-            logger.warning(f"关键词记录失败 ({paper.paper_id[:30]}...): {e}")
 
     _record_v1_learning_signals(learning_store, source, paper, score_response)
 
@@ -427,7 +418,6 @@ def _score_or_hydrate_paper(
     all_keywords,
     translation_cache,
     cache_lock,
-    keyword_tracker,
     store,
     learned_terms=None,
     previous_version_info=None,
@@ -470,7 +460,6 @@ def _score_or_hydrate_paper(
                 all_keywords,
                 translation_cache,
                 cache_lock,
-                keyword_tracker,
                 score_response=score_response,
                 abstract_cn="",
                 translate=False,
@@ -538,7 +527,6 @@ def _score_or_hydrate_paper(
         all_keywords,
         translation_cache,
         cache_lock,
-        keyword_tracker,
         learned_terms=learned_terms,
         learning_store=store,
     )
@@ -1009,16 +997,6 @@ class DailyResearchPipeline:
             analysis_agent = AnalysisAgent()
             scored_papers_by_source: Dict[str, List[Dict[str, Any]]] = {}
 
-            keyword_tracker = None
-            if settings.KEYWORD_TRACKER_ENABLED:
-                try:
-                    from keyword_tracker import KeywordTracker
-
-                    keyword_tracker = KeywordTracker()
-                    logger.debug("KeywordTracker 已初始化")
-                except Exception as e:
-                    logger.warning(f"KeywordTracker 初始化失败: {e}")
-
             translation_cache = {}
             cache_lock = threading.Lock()
             stage_errors = []
@@ -1049,7 +1027,6 @@ class DailyResearchPipeline:
                                     all_keywords,
                                     translation_cache,
                                     cache_lock,
-                                    keyword_tracker,
                                     store,
                                     (
                                         None
@@ -1092,7 +1069,6 @@ class DailyResearchPipeline:
                                     all_keywords,
                                     translation_cache,
                                     cache_lock,
-                                    keyword_tracker,
                                     store,
                                     learned_terms,
                                     (
@@ -1394,7 +1370,7 @@ class DailyResearchPipeline:
                 try:
                     from keyword_tracker import KeywordTracker
 
-                    tracker = keyword_tracker or KeywordTracker()
+                    tracker = KeywordTracker()
                     stats = tracker.run_daily_normalization()
                     logger.info(
                         f"  标准化完成: 处理 {stats['processed']} 个, 新增规范词 {stats['new_canonical']}, 合并 {stats['merged']}"

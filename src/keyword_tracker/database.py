@@ -1,29 +1,19 @@
 """
-SQLite 数据库操作模块
+SQLite 数据库操作模块（寄宿于每日研究状态库 daily_research.db）。
 
-提供关键词存储、查询和统计功能。
+原始关键词不再单独收集：每篇已完成论文的评分记录里已经带有
+``extracted_keywords``（daily_papers.score_json），本模块直接从那里读取。
+同一个数据库文件里只保存派生的标准化表：规范关键词、别名映射与每日统计。
 """
 
 import sqlite3
 import logging
 from pathlib import Path
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class KeywordRecord:
-    """原始关键词记录"""
-
-    id: int
-    keyword: str
-    paper_id: str
-    source: str
-    extracted_date: date
-    normalized_keyword_id: Optional[int] = None
 
 
 @dataclass
@@ -43,12 +33,28 @@ class KeywordTrendData:
     daily_counts: Dict[date, int]
 
 
+# 论文库中的原始关键词视图：每篇已完成论文 × 其提取关键词。
+# json_type 守卫 score_json 缺失/损坏/字段不是数组的情况。
+_PAPER_KEYWORDS_SQL = """
+SELECT LOWER(je.value) AS keyword,
+       dp.source AS source,
+       dp.paper_id AS paper_id,
+       substr(dp.completed_at, 1, 10) AS day
+FROM daily_papers dp, json_each(dp.score_json, '$.extracted_keywords') je
+WHERE dp.completed_at IS NOT NULL
+  AND dp.score_json IS NOT NULL
+  AND json_valid(dp.score_json)
+  AND json_type(dp.score_json, '$.extracted_keywords') = 'array'
+  AND je.type = 'text'
+"""
+
+
 class KeywordDatabase:
     """
-    SQLite 数据库管理器
+    SQLite 数据库管理器（与 DailyResearchStore 共用同一 db 文件）
 
-    用于存储和查询关键词数据，支持：
-    - 原始关键词插入和查询
+    用于查询论文库关键词和管理标准化结果，支持：
+    - 从论文评分记录读取原始关键词
     - 标准化关键词管理
     - 别名映射
     - 趋势统计
@@ -59,7 +65,7 @@ class KeywordDatabase:
         初始化数据库连接
 
         Args:
-            db_path: SQLite 数据库文件路径
+            db_path: SQLite 数据库文件路径（每日研究状态库）
         """
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,22 +79,10 @@ class KeywordDatabase:
         return conn
 
     def _ensure_tables(self) -> None:
-        """创建数据库表（如不存在）"""
+        """创建派生表（如不存在；与论文库表共存于同一文件）"""
         with self._get_connection() as conn:
             conn.executescript(
                 """
-                -- 原始关键词表
-                CREATE TABLE IF NOT EXISTS keywords (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    keyword TEXT NOT NULL,
-                    paper_id TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    extracted_date DATE NOT NULL,
-                    normalized_keyword_id INTEGER,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(keyword, paper_id)
-                );
-
                 -- 标准化关键词表
                 CREATE TABLE IF NOT EXISTS normalized_keywords (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +91,7 @@ class KeywordDatabase:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
-                -- 别名映射表
+                -- 别名映射表：原始关键词 → 标准形式
                 CREATE TABLE IF NOT EXISTS keyword_aliases (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     raw_keyword TEXT NOT NULL UNIQUE,
@@ -107,7 +101,7 @@ class KeywordDatabase:
                     FOREIGN KEY (normalized_keyword_id) REFERENCES normalized_keywords(id)
                 );
 
-                -- 每日统计表
+                -- 每日统计表（派生数据，每次标准化后全量重建）
                 CREATE TABLE IF NOT EXISTS keyword_daily_counts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     normalized_keyword_id INTEGER NOT NULL,
@@ -118,107 +112,15 @@ class KeywordDatabase:
                 );
 
                 -- 索引
-                CREATE INDEX IF NOT EXISTS idx_keywords_extracted_date ON keywords(extracted_date);
-                CREATE INDEX IF NOT EXISTS idx_keywords_normalized ON keywords(normalized_keyword_id);
                 CREATE INDEX IF NOT EXISTS idx_daily_counts_date ON keyword_daily_counts(count_date);
                 CREATE INDEX IF NOT EXISTS idx_aliases_raw ON keyword_aliases(raw_keyword);
-            """
-            )
-            conn.commit()
-
-    def insert_keywords(
-        self, keywords: List[str], paper_id: str, source: str, extracted_date: Optional[date] = None
-    ) -> List[int]:
-        """
-        插入原始关键词
-
-        Args:
-            keywords: 关键词列表
-            paper_id: 论文ID
-            source: 数据源
-            extracted_date: 提取日期（默认今天）
-
-        Returns:
-            插入的关键词ID列表
-        """
-        if extracted_date is None:
-            extracted_date = date.today()
-
-        inserted_ids = []
-        with self._get_connection() as conn:
-            for kw in keywords:
-                kw_lower = kw.strip().lower()
-                if not kw_lower:
-                    continue
-
-                try:
-                    # 尝试自动关联到已知别名
-                    normalized_id = self._find_normalized_id_by_alias(conn, kw_lower)
-
-                    cursor = conn.execute(
-                        """
-                        INSERT OR IGNORE INTO keywords
-                        (keyword, paper_id, source, extracted_date, normalized_keyword_id)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (kw_lower, paper_id, source, extracted_date.isoformat(), normalized_id),
-                    )
-                    if cursor.rowcount > 0:
-                        inserted_ids.append(cursor.lastrowid)
-                except sqlite3.Error as e:
-                    logger.warning(f"插入关键词失败 '{kw}': {e}")
-
-            conn.commit()
-
-        return inserted_ids
-
-    def _find_normalized_id_by_alias(
-        self, conn: sqlite3.Connection, raw_keyword: str
-    ) -> Optional[int]:
-        """通过别名表查找标准化ID"""
-        cursor = conn.execute(
-            "SELECT normalized_keyword_id FROM keyword_aliases WHERE raw_keyword = ?",
-            (raw_keyword,),
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
-
-    def get_unnormalized_keywords(self, limit: int = 100) -> List[KeywordRecord]:
-        """
-        获取未标准化的关键词
-
-        Args:
-            limit: 最大返回数量
-
-        Returns:
-            KeywordRecord 列表
-        """
-        with self._get_connection() as conn:
-            cursor = conn.execute(
                 """
-                SELECT id, keyword, paper_id, source, extracted_date, normalized_keyword_id
-                FROM keywords
-                WHERE normalized_keyword_id IS NULL
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
             )
-            return [
-                KeywordRecord(
-                    id=row["id"],
-                    keyword=row["keyword"],
-                    paper_id=row["paper_id"],
-                    source=row["source"],
-                    extracted_date=date.fromisoformat(row["extracted_date"]),
-                    normalized_keyword_id=row["normalized_keyword_id"],
-                )
-                for row in cursor.fetchall()
-            ]
+            conn.commit()
 
     def get_unique_unnormalized_keywords(self, limit: int = 100) -> List[str]:
         """
-        获取唯一的未标准化关键词（去重）
+        获取论文库中唯一、尚未建立别名的关键词（去重）
 
         Args:
             limit: 最大返回数量
@@ -228,16 +130,28 @@ class KeywordDatabase:
         """
         with self._get_connection() as conn:
             cursor = conn.execute(
-                """
-                SELECT DISTINCT keyword
-                FROM keywords
-                WHERE normalized_keyword_id IS NULL
-                AND keyword NOT IN (SELECT raw_keyword FROM keyword_aliases)
+                f"""
+                SELECT DISTINCT keyword FROM ({_PAPER_KEYWORDS_SQL})
+                WHERE keyword != ''
+                  AND keyword NOT IN (SELECT raw_keyword FROM keyword_aliases)
+                ORDER BY keyword
                 LIMIT ?
                 """,
                 (limit,),
             )
             return [row["keyword"] for row in cursor.fetchall()]
+
+    def count_papers_with_keyword(self, raw_keyword: str) -> int:
+        """包含某关键词的论文数（用于标准化统计）。"""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                SELECT COUNT(DISTINCT paper_id) FROM ({_PAPER_KEYWORDS_SQL})
+                WHERE keyword = ?
+                """,
+                (raw_keyword.strip().lower(),),
+            )
+            return int(cursor.fetchone()[0])
 
     def get_or_create_normalized_keyword(
         self, canonical_keyword: str, category: Optional[str] = None
@@ -275,7 +189,7 @@ class KeywordDatabase:
         self, raw_keyword: str, normalized_id: int, confidence: float = 1.0
     ) -> None:
         """
-        添加关键词别名映射
+        添加关键词别名映射（原始关键词 → 标准形式）
 
         Args:
             raw_keyword: 原始关键词
@@ -295,31 +209,6 @@ class KeywordDatabase:
             )
             conn.commit()
 
-    def link_keywords_to_normalized(self, raw_keyword: str, normalized_id: int) -> int:
-        """
-        将所有匹配的原始关键词链接到标准化形式
-
-        Args:
-            raw_keyword: 原始关键词
-            normalized_id: 标准化关键词ID
-
-        Returns:
-            更新的记录数
-        """
-        raw_lower = raw_keyword.strip().lower()
-
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE keywords
-                SET normalized_keyword_id = ?
-                WHERE keyword = ? AND normalized_keyword_id IS NULL
-                """,
-                (normalized_id, raw_lower),
-            )
-            conn.commit()
-            return cursor.rowcount
-
     def get_all_canonical_keywords(self) -> List[str]:
         """获取所有标准化关键词"""
         with self._get_connection() as conn:
@@ -328,33 +217,22 @@ class KeywordDatabase:
             )
             return [row["canonical_keyword"] for row in cursor.fetchall()]
 
-    def update_daily_counts(self, for_date: Optional[date] = None) -> None:
+    def update_daily_counts(self) -> None:
         """
-        更新每日统计（基于已标准化的关键词）
+        全量重建每日统计（别名 × 论文库关键词聚合）。
 
-        Args:
-            for_date: 统计日期（默认今天）
+        统计是派生数据，重建不触碰论文与标记等原始记录。
         """
-        if for_date is None:
-            for_date = date.today()
-
         with self._get_connection() as conn:
-            # 删除当天旧统计
+            conn.execute("DELETE FROM keyword_daily_counts")
             conn.execute(
-                "DELETE FROM keyword_daily_counts WHERE count_date = ?", (for_date.isoformat(),)
-            )
-
-            # 插入新统计
-            conn.execute(
-                """
+                f"""
                 INSERT INTO keyword_daily_counts (normalized_keyword_id, count_date, paper_count)
-                SELECT normalized_keyword_id, ?, COUNT(DISTINCT paper_id)
-                FROM keywords
-                WHERE normalized_keyword_id IS NOT NULL
-                AND extracted_date = ?
-                GROUP BY normalized_keyword_id
-                """,
-                (for_date.isoformat(), for_date.isoformat()),
+                SELECT ka.normalized_keyword_id, pk.day, COUNT(DISTINCT pk.paper_id)
+                FROM ({_PAPER_KEYWORDS_SQL}) pk
+                JOIN keyword_aliases ka ON ka.raw_keyword = pk.keyword
+                GROUP BY ka.normalized_keyword_id, pk.day
+                """
             )
             conn.commit()
 
@@ -447,15 +325,20 @@ class KeywordDatabase:
             return results
 
     def get_stats(self) -> Dict[str, int]:
-        """获取数据库统计信息"""
+        """获取统计信息"""
         with self._get_connection() as conn:
             stats = {}
 
-            cursor = conn.execute("SELECT COUNT(*) FROM keywords")
+            cursor = conn.execute(
+                f"SELECT COUNT(DISTINCT keyword) FROM ({_PAPER_KEYWORDS_SQL})"
+            )
             stats["total_keywords"] = cursor.fetchone()[0]
 
             cursor = conn.execute(
-                "SELECT COUNT(*) FROM keywords WHERE normalized_keyword_id IS NOT NULL"
+                f"""
+                SELECT COUNT(DISTINCT keyword) FROM ({_PAPER_KEYWORDS_SQL}) pk
+                WHERE pk.keyword IN (SELECT raw_keyword FROM keyword_aliases)
+                """
             )
             stats["normalized_keywords"] = cursor.fetchone()[0]
 

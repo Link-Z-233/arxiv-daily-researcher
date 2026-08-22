@@ -76,7 +76,6 @@ class DailyResearchStateTests(unittest.TestCase):
             keywords,
             {},
             __import__("threading").Lock(),
-            None,
             store,
         )
 
