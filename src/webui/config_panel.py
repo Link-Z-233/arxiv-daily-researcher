@@ -184,11 +184,11 @@ config_values = load_config()
 tab_labels = [
     t("tab_run_manager"),  # 运行管理
     t("tab_reports"),  # 报告查看
-    t("tab_analytics"),  # 数据分析
     t("tab_trend_runner"),  # 趋势分析
     t("tab_keywords"),  # 关键词
     t("tab_search"),  # 搜索与数据源
     t("tab_scoring"),  # 评分
+    t("tab_analytics"),  # 数据分析
     t("tab_notifications"),  # 通知
     t("tab_data_management"),  # 数据管理
     t("tab_llm"),  # API
@@ -198,11 +198,11 @@ tab_labels = [
 pages = [
     run_manager.render,
     reports.render,
-    render_analytics,
     trend_runner.render,
     keywords.render,
     search.render,
     scoring.render,
+    render_analytics,
     notifications.render,
     data_management.render,
     llm.render,
