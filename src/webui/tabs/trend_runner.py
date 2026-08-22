@@ -17,6 +17,7 @@ import streamlit as st
 
 from utils.run_lock import is_lock_held
 from utils.webui_trigger import enqueue_trigger
+from webui.arxiv_categories import ARXIV_CATEGORIES, format_arxiv_category
 from webui.i18n import t, _TRANSLATIONS
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -190,11 +191,12 @@ def render(_env_values: dict, config_values: dict) -> None:
             key="tr_date_to",
         )
 
-    categories_input = st.text_input(
+    st.multiselect(
         t("trend_categories_label"),
-        value="",
+        options=ARXIV_CATEGORIES,
+        default=[],
+        format_func=format_arxiv_category,
         key="tr_categories",
-        placeholder=t("tr_categories_placeholder"),
         help=t("trend_categories_help"),
     )
 
@@ -381,7 +383,11 @@ def render(_env_values: dict, config_values: dict) -> None:
         else:
             try:
                 keyword_list = shlex.split(keywords_input)
-                categories = shlex.split(categories_input) if categories_input.strip() else []
+                categories = [
+                    code
+                    for code in st.session_state.get("tr_categories", [])
+                    if code in ARXIV_CATEGORIES
+                ]
             except ValueError as e:
                 st.error(t("tr_start_failed").format(err=e))
                 return

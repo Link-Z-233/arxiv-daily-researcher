@@ -367,8 +367,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "ArXiv Categories Filter (optional)",
     },
     "trend_categories_help": {
-        "zh": "多个分类用空格分隔，如: quant-ph cs.AI",
-        "en": "Multiple categories separated by spaces, e.g.: quant-ph cs.AI",
+        "zh": "与搜索和数据源一致的分类下拉；不选则不过滤。",
+        "en": "Same category dropdown as Search & Data Sources; leave empty for no filter.",
     },
     "trend_run_btn": {"zh": "开始趋势分析", "en": "Start Trend Analysis"},
     "trend_config_title": {"zh": "趋势分析配置", "en": "Trend Analysis Configuration"},
@@ -494,20 +494,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Limits request rate only; it never caps result count or processing scope.",
     },
     "arxiv_domains_hint": {
-        "zh": "ArXiv 分类代码，详见 https://arxiv.org/category_taxonomy",
-        "en": "ArXiv category codes. See: https://arxiv.org/category_taxonomy",
+        "zh": "内置 arXiv 全部一级分类（按字母排序），下拉多选即可。",
+        "en": "All primary arXiv categories are built in (alphabetical); pick from the dropdown.",
     },
     "select_arxiv_cats": {
         "zh": "选择 ArXiv 分类",
         "en": "Select ArXiv categories",
-    },
-    "custom_domains_label": {
-        "zh": "其他自定义分类（逗号分隔）",
-        "en": "Additional custom domains (comma-separated)",
-    },
-    "custom_domains_help": {
-        "zh": "输入不在列表中的 ArXiv 分类代码",
-        "en": "Enter ArXiv category codes not in the list above",
     },
     # ── keywords.py ──────────────────────────────────────────────────────
     "primary_keywords_title": {"zh": "主要关键词", "en": "Primary Keywords"},
@@ -873,10 +865,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── trend_runner.py 新增 i18n ──
     "tr_section_params": {"zh": "分析参数", "en": "Analysis Parameters"},
     "tr_section_run_control": {"zh": "运行控制", "en": "Run Control"},
-    "tr_categories_placeholder": {
-        "zh": "例如: quant-ph cs.AI（留空则不过滤）",
-        "en": "e.g. quant-ph cs.AI (leave empty for no filter)",
-    },
     "tr_default_date_range_days_label": {
         "zh": "默认时间范围（天）",
         "en": "Default date range (days)",

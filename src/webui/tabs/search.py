@@ -1,6 +1,7 @@
 """Search & Data Sources tab for the Streamlit config panel."""
 
 import streamlit as st
+from webui.arxiv_categories import ARXIV_CATEGORIES, format_arxiv_category
 from webui.i18n import t
 from utils.source_registry import (
     builtin_extra_source_definitions,
@@ -8,32 +9,6 @@ from utils.source_registry import (
 )
 
 CORE_DATA_SOURCES = ("arxiv", "prl")
-
-# Common ArXiv categories
-ARXIV_CATEGORIES = [
-    "quant-ph",
-    "cond-mat",
-    "hep-th",
-    "hep-ph",
-    "hep-ex",
-    "hep-lat",
-    "gr-qc",
-    "astro-ph",
-    "nucl-th",
-    "nucl-ex",
-    "math-ph",
-    "physics.atom-ph",
-    "physics.optics",
-    "physics.comp-ph",
-    "cs.AI",
-    "cs.LG",
-    "cs.CL",
-    "cs.CV",
-    "cs.CR",
-    "cs.SE",
-    "stat.ML",
-    "math.QA",
-]
 
 
 def render(_env_values: dict, config_values: dict):
@@ -265,14 +240,8 @@ def render(_env_values: dict, config_values: dict):
         t("select_arxiv_cats"),
         options=ARXIV_CATEGORIES,
         default=[d for d in current_domains if d in ARXIV_CATEGORIES],
+        format_func=format_arxiv_category,
         key="arxiv_domains",
-    )
-
-    st.text_input(
-        t("custom_domains_label"),
-        value=", ".join(d for d in current_domains if d not in ARXIV_CATEGORIES),
-        key="custom_domains",
-        help=t("custom_domains_help"),
     )
 
     col_ax1, col_ax2 = st.columns(2)
@@ -319,10 +288,11 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
     configured_domains = flat.get("domains", ["quant-ph"])
     if not isinstance(configured_domains, list) or not configured_domains:
         configured_domains = ["quant-ph"]
-    domains = list(st.session_state.get("arxiv_domains", configured_domains))
-    custom = st.session_state.get("custom_domains", "")
-    if custom:
-        domains.extend(d.strip() for d in custom.split(",") if d.strip())
+    domains = [
+        domain
+        for domain in st.session_state.get("arxiv_domains", configured_domains)
+        if domain in ARXIV_CATEGORIES
+    ]
 
     configured_extra = flat.get("extra_source_definitions", [])
     if not isinstance(configured_extra, list):
