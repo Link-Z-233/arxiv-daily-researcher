@@ -652,6 +652,7 @@ def build_config_dict(
     daily_research_persistence_enabled: bool = True,
     daily_research_db_path: str = "data/daily_research/daily_research.db",
     daily_max_papers_per_run: int = 200,
+    daily_run_time: str = "08:00",
     daily_enable_deep_analysis: bool = True,
     pdf_parser_mode: str = "mineru",
     mineru_model_version: str = "pipeline",
@@ -710,6 +711,15 @@ def build_config_dict(
         or backup_keep < 1
     ):
         raise ValueError("backup.keep 必须是正整数")
+
+    if not isinstance(daily_run_time, str) or not re.fullmatch(
+        r"\d{1,2}:\d{2}", str(daily_run_time).strip()
+    ):
+        raise ValueError("daily_research.run_time 必须是 HH:MM 格式")
+    _rt_hour, _rt_minute = (int(part) for part in daily_run_time.strip().split(":"))
+    if not (0 <= _rt_hour <= 23 and 0 <= _rt_minute <= 59):
+        raise ValueError("daily_research.run_time 超出有效时间范围")
+    daily_run_time = f"{_rt_hour:02d}:{_rt_minute:02d}"
 
     if not isinstance(extra_sources_enabled, bool):
         raise ValueError("extra_sources_enabled 必须是布尔值")
@@ -893,6 +903,7 @@ def build_config_dict(
         "daily_research": {
             "enable_deep_analysis": daily_enable_deep_analysis,
             "max_papers_per_run": daily_max_papers_per_run,
+            "run_time": daily_run_time,
             "db_path": daily_research_db_path,
         },
         "pdf_parser": {
@@ -1180,6 +1191,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     # optional and new config files omit the obsolete switch.
     flat["daily_research_persistence_enabled"] = True
     flat["daily_max_papers_per_run"] = dr.get("max_papers_per_run", 200)
+    flat["daily_run_time"] = dr.get("run_time", "08:00")
     flat["daily_research_db_path"] = dr.get(
         "db_path", "data/daily_research/daily_research.db"
     )

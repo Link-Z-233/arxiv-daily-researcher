@@ -292,6 +292,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "单次运行最多处理的论文数，默认 200：首次部署会一次性抓到大量历史论文，上限确保不会一次处理过多，堆积由后续运行消化，消化完每天正常处理全部新论文；0 表示不限。抓取始终完整执行，剩余论文保存在 SQLite 中等待下次处理。",
         "en": "Maximum papers processed per run, default 200: a fresh deployment first collects a large backlog at once, so the cap prevents huge single runs while later runs drain the queue; once drained, each day's new papers are processed in full. 0 means unlimited. Scans always run complete; excess papers stay queued in SQLite.",
     },
+    "daily_run_time_label": {"zh": "每日运行时间", "en": "Daily run time"},
+    "daily_run_time_help": {
+        "zh": "每天定时执行每日研究的时间（容器时区）。保存后重启主研究容器生效；显式设置的 CRON_SCHEDULE 环境变量优先于此值。",
+        "en": "Time of day (container timezone) the daily research runs. Takes effect after restarting the worker container; an explicit CRON_SCHEDULE env var overrides it.",
+    },
     "markdown_report_label": {"zh": "Markdown 报告", "en": "Markdown Report"},
     "no_logs_found": {"zh": "暂未找到日志文件。", "en": "No log files found."},
     "pid_killed": {"zh": "已向进程 {pid} 发送停止信号", "en": "Sent stop signal to process {pid}"},

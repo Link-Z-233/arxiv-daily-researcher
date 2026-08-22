@@ -6,7 +6,31 @@ echo "  ArXiv Daily Researcher - Docker Container"
 echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "================================================"
 
-# Configuration with defaults
+# Configuration with defaults.
+# The daily run time is configurable from the WebUI (configs/config.json,
+# "daily_research.run_time" as HH:MM).  An explicitly set CRON_SCHEDULE env
+# var still wins so operators can pin a schedule regardless of config.
+CONFIG_RUN_TIME=""
+if [ -f /app/configs/config.json ]; then
+    CONFIG_RUN_TIME=$(python - <<'PYEOF'
+import json, re
+
+try:
+    raw = open("/app/configs/config.json", encoding="utf-8").read()
+    raw = re.sub(r"^\s*//.*$", "", raw, flags=re.M)
+    value = json.loads(raw).get("daily_research", {}).get("run_time")
+    if isinstance(value, str) and re.fullmatch(r"\d{1,2}:\d{2}", value.strip()):
+        hh, mm = value.strip().split(":")
+        if 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59:
+            print(f"{int(mm)} {int(hh)}")
+except Exception:
+    pass
+PYEOF
+)
+fi
+if [ -z "${CRON_SCHEDULE:-}" ] && [ -n "$CONFIG_RUN_TIME" ]; then
+    CRON_SCHEDULE="$CONFIG_RUN_TIME * * *"
+fi
 CRON_SCHEDULE="${CRON_SCHEDULE:-0 8 * * *}"
 RUN_ON_STARTUP="${RUN_ON_STARTUP:-false}"
 MODE="${MODE:-cron}"

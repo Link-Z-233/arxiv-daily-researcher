@@ -552,7 +552,7 @@ def render(_env_values: dict, config_values: dict) -> None:
         f'<p class="section-title">⚙️ {t("daily_research_settings_title")}</p>',
         unsafe_allow_html=True,
     )
-    col_ds1, col_ds2, col_ds3, col_ds4 = st.columns(4)
+    col_ds1, col_ds2, col_ds3 = st.columns(3)
     with col_ds1:
         st.toggle(
             t("html_reports_label"),
@@ -572,6 +572,7 @@ def render(_env_values: dict, config_values: dict) -> None:
             key="include_all_in_report",
             help=t("include_all_help"),
         )
+    col_ds4, col_ds5 = st.columns(2)
     with col_ds4:
         st.number_input(
             t("daily_max_papers_label"),
@@ -581,6 +582,20 @@ def render(_env_values: dict, config_values: dict) -> None:
             step=1,
             key="daily_max_papers_per_run",
             help=t("daily_max_papers_help"),
+        )
+    with col_ds5:
+        default_run_time = datetime.time(8, 0)
+        raw_run_time = flat.get("daily_run_time")
+        if isinstance(raw_run_time, str):
+            try:
+                default_run_time = datetime.time.fromisoformat(raw_run_time)
+            except ValueError:
+                pass
+        st.time_input(
+            t("daily_run_time_label"),
+            value=default_run_time,
+            key="daily_run_time_input",
+            help=t("daily_run_time_help"),
         )
 
     st.divider()
@@ -603,9 +618,18 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
     def current(key: str, default):
         return st.session_state.get(key, flat.get(key, default))
 
+    selected_run_time = st.session_state.get("daily_run_time_input")
+    if selected_run_time is not None:
+        run_time_value = (
+            f"{selected_run_time.hour:02d}:{selected_run_time.minute:02d}"
+        )
+    else:
+        run_time_value = str(current("daily_run_time", "08:00") or "08:00")
+
     return {
         "enable_html_report": current("enable_html_report", True),
         "enable_markdown_report": current("enable_markdown_report", True),
         "include_all_in_report": current("include_all_in_report", True),
         "daily_max_papers_per_run": int(current("daily_max_papers_per_run", 200)),
+        "daily_run_time": run_time_value,
     }

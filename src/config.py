@@ -1,5 +1,7 @@
 import os
 import json
+import re
+
 import json5  # 用于加载带注释的配置文件
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
@@ -237,6 +239,9 @@ class Settings(BaseSettings):
     # stays queued and is drained by subsequent runs, after which a normal
     # day's new papers all fit below the cap.
     DAILY_MAX_PAPERS_PER_RUN: int = 200
+    # 每日研究运行时间（HH:MM，本地时区）。entrypoint 在容器启动时据此安装
+    # cron；显式设置的 CRON_SCHEDULE 环境变量优先于该值。
+    DAILY_RUN_TIME: str = "08:00"
 
     # ==================== PDF 解析配置 ====================
     PDF_PARSER_MODE: str = "mineru"  # PDF 解析模式: "mineru" (云端API) 或 "pymupdf" (本地解析)
@@ -769,6 +774,15 @@ class Settings(BaseSettings):
                         "daily_research.max_papers_per_run 必须是非负整数（0 表示不限）"
                     )
                 self.DAILY_MAX_PAPERS_PER_RUN = max_papers_per_run
+                run_time = daily_cfg.get("run_time", self.DAILY_RUN_TIME)
+                if not isinstance(run_time, str) or not re.fullmatch(
+                    r"\d{1,2}:\d{2}", run_time.strip()
+                ):
+                    raise ValueError("daily_research.run_time 必须是 HH:MM 格式")
+                hour, minute = (int(part) for part in run_time.strip().split(":"))
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError("daily_research.run_time 超出有效时间范围")
+                self.DAILY_RUN_TIME = f"{hour:02d}:{minute:02d}"
                 if "db_path" in daily_cfg:
                     self.DAILY_RESEARCH_DB_PATH = resolve_project_relative_path(
                         self.PROJECT_ROOT,
