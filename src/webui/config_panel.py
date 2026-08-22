@@ -209,10 +209,6 @@ tab_labels = [
     t("tab_favorites"),  # 收藏偏好
 ]
 
-# 侧边栏导航：每次只渲染当前页面。st.tabs 会在每次交互时渲染全部
-# 页面的控件（实测页面上同时存在几十个 switch），既慢又让各页面的
-# 会话状态互相干扰。按页渲染后，collect() 对未访问页面回退到磁盘
-# 现值，保存行为与之前保持一致。
 pages = [
     run_manager.render,
     reports.render,
@@ -231,13 +227,9 @@ pages = [
     favorites.render,
 ]
 
-with st.sidebar:
-    selected_index = st.radio(
-        t("nav_label"),
-        range(len(tab_labels)),
-        format_func=lambda i: tab_labels[i],
-        key="nav_page_index",
-        label_visibility="collapsed",
-    )
-
-pages[selected_index](env_values, config_values)
+# 顶部 Tab 导航：所有页面常驻渲染，collect() 始终能读到会话状态；
+# 未浏览页面的控件以磁盘现值初始化，保存不会改写它们。
+tab_objects = st.tabs(tab_labels)
+for tab_object, page in zip(tab_objects, pages):
+    with tab_object:
+        page(env_values, config_values)

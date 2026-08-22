@@ -57,7 +57,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tab_run_manager": {"zh": "每日推送", "en": "Daily Push"},
     "tab_trend_runner": {"zh": "趋势分析", "en": "Trend Analysis"},
     "tab_usage": {"zh": "用量统计", "en": "Usage"},
-    "nav_label": {"zh": "导航", "en": "Navigation"},
     "rm_auto_refresh": {"zh": "自动刷新", "en": "Auto refresh"},
     "rm_auto_refresh_help": {
         "zh": "开启后运行状态与日志尾部每 5 秒自动刷新，无需手动刷新页面。",
