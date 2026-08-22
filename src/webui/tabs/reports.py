@@ -12,6 +12,9 @@ from typing import NamedTuple, Optional
 import streamlit as st
 import streamlit.components.v1 as components
 
+import pandas as pd
+
+from utils.daily_research_store import DailyResearchStore
 from webui.i18n import t
 from utils.source_registry import source_display_names
 
@@ -415,6 +418,206 @@ def _render_preview(report: ReportFile, all_reports: dict[str, list[ReportFile]]
         st.error(f"{t('reports_load_error')}: {e}")
 
 
+# ─── 报告随手标记（收藏融合）────────────────────────────────────────────────
+
+_MARK_PAGE_SIZE = 20
+
+
+def _report_paging_key(report: ReportFile) -> str:
+    return f"rsm_page_{report.source}_{report.date_key or 'na'}"
+
+
+def _match_primary_keywords(
+    keywords: list[str], liked_titles: list[str]
+) -> list[dict[str, object]]:
+    """在已喜欢论文的标题里统计主要关键词命中次数（大小写不敏感）。"""
+    lowered = [title.lower() for title in liked_titles]
+    counts: list[dict[str, object]] = []
+    for keyword in keywords:
+        needle = keyword.strip().lower()
+        if not needle:
+            continue
+        hits = sum(1 for title in lowered if needle in title)
+        if hits:
+            counts.append({"keyword": keyword, "count": hits})
+    counts.sort(key=lambda item: (-int(item["count"]), str(item["keyword"])))
+    return counts
+
+
+def _apply_report_mark(store: DailyResearchStore, paper: dict, preference: str) -> None:
+    store.set_paper_preference(
+        paper["source"],
+        paper["paper_id"],
+        preference=preference,
+        title=paper["title"],
+        canonical_id=paper.get("canonical_id"),
+        version=paper.get("version"),
+        authors=paper.get("authors"),
+        categories=paper.get("categories"),
+    )
+
+
+def _render_mark_row(store: DailyResearchStore, paper: dict, preference: str | None) -> None:
+    col_btn, col_info = st.columns([1, 4])
+    clicked = None
+    with col_btn:
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        key = f"{paper['source']}_{paper['paper_id']}"
+        if btn_col1.button(
+            "👍", key=f"rsm_like_{key}",
+            help=t("fav_like"),
+            use_container_width=True,
+            type="primary" if preference == "like" else "secondary",
+        ):
+            clicked = "like"
+        if btn_col2.button(
+            "👎", key=f"rsm_dislike_{key}",
+            help=t("fav_dislike"),
+            use_container_width=True,
+            type="primary" if preference == "dislike" else "secondary",
+        ):
+            clicked = "dislike"
+        if btn_col3.button(
+            "✖", key=f"rsm_clear_{key}",
+            help=t("fav_clear"),
+            use_container_width=True,
+            disabled=preference is None,
+        ):
+            clicked = "none"
+    with col_info:
+        score = paper.get("total_score")
+        score_text = f"{score:.1f}" if isinstance(score, (int, float)) else "—"
+        badge = "🟢" if paper.get("is_qualified") else "⚪"
+        state_label = {
+            "like": f" · {t('fav_state_like')}",
+            "dislike": f" · {t('fav_state_dislike')}",
+        }.get(preference, "")
+        st.markdown(f"{badge} **{paper['title']}**")
+        st.caption(f"`{score_text}` · {paper['source']}{state_label}")
+
+    if clicked is not None:
+        _apply_report_mark(store, paper, clicked)
+        st.rerun()
+
+
+def _render_preference_profile(store: DailyResearchStore, config_values: dict) -> None:
+    """兴趣画像汇总（折叠展示，标记数据永不删除）。"""
+    with st.expander(f"📊 {t('fav_summary_title')}", expanded=False):
+        counts = store.get_preference_counts()
+        if counts["like"] == 0 and counts["dislike"] == 0:
+            st.caption(t("fav_no_marks"))
+            return
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(t("fav_likes"), counts["like"])
+        with col2:
+            st.metric(t("fav_dislikes"), counts["dislike"])
+
+        aggregation = store.aggregate_liked_preferences()
+        col_authors, col_categories = st.columns(2)
+        with col_authors:
+            st.markdown(f"**👤 {t('fav_top_authors')}**")
+            if aggregation["authors"]:
+                st.table(
+                    pd.DataFrame(aggregation["authors"][:10], columns=["name", "count"])
+                )
+            else:
+                st.caption(t("fav_no_marks"))
+        with col_categories:
+            st.markdown(f"**🗂 {t('fav_top_categories')}**")
+            if aggregation["categories"]:
+                st.table(
+                    pd.DataFrame(aggregation["categories"][:10], columns=["name", "count"])
+                )
+            else:
+                st.caption(t("fav_no_marks"))
+
+        liked = store.list_preferences(preference="like", limit=500)
+        primary_keywords = config_values.get("primary_keywords") if config_values else None
+        if liked and isinstance(primary_keywords, list) and primary_keywords:
+            matched = _match_primary_keywords(
+                [k for k in primary_keywords if isinstance(k, str)],
+                [row["title"] for row in liked],
+            )
+            st.markdown(f"**🔑 {t('fav_matched_keywords')}**")
+            if matched:
+                st.table(pd.DataFrame(matched, columns=["keyword", "count"]))
+            else:
+                st.caption(t("fav_no_keyword_hits"))
+
+
+def _render_report_marking(report: ReportFile, config_values: dict) -> None:
+    """在报告预览下方列出该报告当日交付的论文，边看报告边随手标记。"""
+    from webui.tabs.run_manager import _daily_db_path_from_config
+
+    if report.report_type != "daily" or not report.date_key:
+        return
+
+    db_path = _daily_db_path_from_config(config_values or {})
+    if not db_path.exists():
+        return
+    try:
+        store = DailyResearchStore(db_path)
+    except Exception:
+        return
+
+    st.divider()
+    st.markdown(
+        f'<p class="section-title">⭐ {t("rsm_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption(t("rsm_hint"))
+
+    try:
+        result = store.search_papers(
+            query="",
+            source=report.source,
+            completed_from=report.date_key,
+            completed_to=report.date_key,
+            limit=_MARK_PAGE_SIZE,
+            offset=int(st.session_state.get(_report_paging_key(report), 0))
+            * _MARK_PAGE_SIZE,
+        )
+    except Exception:
+        st.info(t("rsm_no_papers"))
+        return
+
+    total = result["total"]
+    if total == 0:
+        st.info(t("rsm_no_papers"))
+        return
+    st.caption(t("rsm_count").format(total=total))
+
+    for paper in result["items"]:
+        _render_mark_row(store, paper, paper.get("preference"))
+
+    pages = max(1, -(-total // _MARK_PAGE_SIZE))
+    if pages <= 1:
+        _render_preference_profile(store, config_values)
+        return
+    page = int(st.session_state.get(_report_paging_key(report), 0))
+    col_prev, col_info, col_next = st.columns([1, 2, 1])
+    paging_key = _report_paging_key(report)
+    if col_prev.button(
+        t("ps_prev_page"), disabled=(page <= 0), use_container_width=True,
+        key=f"rsm_prev_{report.source}_{report.date_key}",
+    ):
+        st.session_state[paging_key] = max(0, page - 1)
+        st.rerun()
+    col_info.caption(t("ps_page_info").format(page=page + 1, pages=pages))
+    if col_next.button(
+        t("ps_next_page"),
+        disabled=(page >= pages - 1),
+        use_container_width=True,
+        key=f"rsm_next_{report.source}_{report.date_key}",
+    ):
+        st.session_state[paging_key] = page + 1
+        st.rerun()
+
+    _render_preference_profile(store, config_values)
+
+
 # ─── main render ──────────────────────────────────────────────────────────────
 
 
@@ -498,6 +701,9 @@ def render(_env_values: dict, _config_values: dict) -> None:
 
     st.divider()
     _render_preview(report, visible_reports)
+
+    # 报告下方随手标记：融合原「收藏偏好」页，边看报告边标记
+    _render_report_marking(report, _config_values)
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:

@@ -32,7 +32,7 @@ from utils.config_io import (
 from webui.styles import CUSTOM_CSS
 from webui.tabs import llm, search, keywords, scoring, notifications, advanced, reports
 from webui.tabs import run_manager, trend_runner, proxy, data_management, usage
-from webui.tabs import favorites, paper_search, source_health
+from webui.tabs import paper_search, source_health
 from webui.i18n import t
 from webui.secret_fields import clear_secret_field_state
 
@@ -206,7 +206,6 @@ tab_labels = [
     t("tab_proxy"),  # 网络代理
     t("tab_advanced"),  # 高级设置
     t("tab_usage"),  # 用量统计
-    t("tab_favorites"),  # 收藏偏好
 ]
 
 pages = [
@@ -224,7 +223,6 @@ pages = [
     proxy.render,
     advanced.render,
     usage.render,
-    favorites.render,
 ]
 
 # 顶部 Tab 导航：所有页面常驻渲染，collect() 始终能读到会话状态；

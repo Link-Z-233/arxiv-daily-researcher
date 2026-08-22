@@ -127,11 +127,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "usage_total_tokens": {"zh": "总 tokens", "en": "Total tokens"},
     "usage_by_model_title": {"zh": "按模型汇总", "en": "By model"},
     "usage_model": {"zh": "模型", "en": "Model"},
-    # ── favorites.py ────────────────────────────────────────────────────
-    "tab_favorites": {"zh": "收藏偏好", "en": "Favorites"},
+    # ── 报告查看页：随手标记（原收藏偏好页融合）─────────────────────────
     "tab_paper_search": {"zh": "论文检索", "en": "Paper Search"},
     "tab_source_health": {"zh": "数据源健康", "en": "Source Health"},
-    "fav_title": {"zh": "收藏偏好", "en": "Paper Favorites"},
     "fav_hint": {
         "zh": "给论文点喜欢或不喜欢；标记只用于汇总你的兴趣画像（作者、领域、关键词），"
               "不会影响 AI 评分。数据永久保留。",
@@ -139,14 +137,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
               "profile (authors, categories, keywords) and never affect AI "
               "scoring. Data is kept forever.",
     },
-    "fav_mark_title": {"zh": "论文标注", "en": "Mark papers"},
-    "fav_mark_empty": {
-        "zh": "暂无可标注的论文——完成一次每日研究后这里会出现论文列表。",
-        "en": "No papers to mark yet — complete a daily research run first.",
-    },
     "fav_like": {"zh": "喜欢", "en": "Like"},
     "fav_dislike": {"zh": "不喜欢", "en": "Dislike"},
     "fav_clear": {"zh": "清除标记", "en": "Clear mark"},
+    "rsm_title": {"zh": "随手标记", "en": "Quick marks"},
+    "rsm_hint": {
+        "zh": "上面是报告原文；这里列出该报告当日交付的论文，可一边阅读一边标记喜欢/不喜欢。标记仅进入偏好画像与学习模式，评分策略本身不受影响。",
+        "en": "The report preview is above; papers delivered on that report date are listed here so you can mark them while reading. Marks only feed the preference profile and the learned strategy.",
+    },
+    "rsm_no_papers": {
+        "zh": "该报告当日没有对应的已交付论文记录。",
+        "en": "No delivered papers match this report date.",
+    },
+    "rsm_count": {"zh": "共 {total} 篇论文", "en": "{total} papers"},
     "fav_state_like": {"zh": "已喜欢", "en": "Liked"},
     "fav_state_dislike": {"zh": "已不喜欢", "en": "Disliked"},
     "fav_summary_title": {"zh": "偏好汇总", "en": "Preference summary"},
@@ -159,10 +162,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Matched primary keywords (from liked paper titles)",
     },
     "fav_no_marks": {"zh": "还没有任何标记。", "en": "No marks yet."},
-    "fav_load_failed": {
-        "zh": "收藏数据读取失败",
-        "en": "Failed to load favorites data",
-    },
     "fav_no_keyword_hits": {
         "zh": "已喜欢的论文标题中没有命中主要关键词。",
         "en": "No primary keyword hits in liked paper titles.",

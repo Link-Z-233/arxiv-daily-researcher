@@ -1352,8 +1352,8 @@ class DailyResearchStore:
             ).fetchone()
             rows = conn.execute(
                 f"""
-                SELECT dp.source, dp.paper_id, dp.canonical_id, dp.completed_at,
-                       dp.paper_json, dp.score_json,
+                SELECT dp.source, dp.paper_id, dp.canonical_id, dp.version,
+                       dp.completed_at, dp.paper_json, dp.score_json,
                        (SELECT pp.preference FROM paper_preferences pp
                         WHERE pp.source = dp.source
                           AND pp.paper_id = dp.paper_id) AS preference
@@ -1386,6 +1386,7 @@ class DailyResearchStore:
                     "source": row["source"],
                     "paper_id": row["paper_id"],
                     "canonical_id": row["canonical_id"],
+                    "version": row["version"],
                     "completed_at": row["completed_at"],
                     "title": str(metadata.get("title") or row["paper_id"]),
                     "authors": [
