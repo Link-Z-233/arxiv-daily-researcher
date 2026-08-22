@@ -107,10 +107,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     # ── usage.py ────────────────────────────────────────────────────────
     "usage_title": {"zh": "LLM Token 用量", "en": "LLM Token Usage"},
-    "usage_hint": {
-        "zh": "统计每次运行结束落库的真实 token 消耗；数据永久保留、永不删除。",
-        "en": "Real token usage persisted at the end of every run; kept forever.",
-    },
     "usage_empty": {
         "zh": "暂无用量数据——完成一次每日研究或趋势分析后，这里会出现统计。",
         "en": "No usage yet — complete a daily or trend run and stats appear here.",
@@ -177,15 +173,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "rsm_count": {"zh": "共 {total} 篇论文", "en": "{total} papers"},
     "tab_analytics": {"zh": "数据分析", "en": "Analytics"},
-    "an_hint": {
-        "zh": "用量统计、数据源健康与运行诊断汇总在一页，全部来自 SQLite 只读查询。",
-        "en": "Token usage, source health and run diagnostics on one page, all read-only SQLite views.",
-    },
     "an_diag_title": {"zh": "运行诊断", "en": "Run diagnostics"},
-    "an_diag_hint": {
-        "zh": "只保留核心指标：近 10 次运行、及格率、通知积压与最近一次扫描收据。",
-        "en": "Core metrics only: last 10 runs, qualification rate, notification backlog and the latest scan receipts.",
-    },
     "an_diag_recent_runs": {"zh": "近 10 次运行（完成/可用）", "en": "Last 10 runs (done/avail)"},
     "an_diag_recent_runs_help": {
         "zh": "分子为 completed 状态的运行数，分母为诊断窗口内可统计的运行数。",
@@ -299,15 +287,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "run_manager_title": {"zh": "每日推送", "en": "Daily Push"},
     "run_now_section_title": {"zh": "立即运行每日研究", "en": "Run Daily Research Now"},
     "run_now_btn": {"zh": "立即运行", "en": "Run Now"},
-    "run_now_hint": {
-        "zh": "立即执行一次每日研究流水线（包含抓取论文、评分、分析和发送通知）。",
-        "en": "Immediately run the daily research pipeline (fetch, score, analyze, notify).",
-    },
     "stop_all_btn": {"zh": "停止所有进程", "en": "Stop All Processes"},
-    "stop_all_hint": {
-        "zh": "向所有正在运行的每日研究和趋势分析进程发送停止信号。",
-        "en": "Send stop signal to all running daily research and trend analysis processes.",
-    },
     "run_log_title": {"zh": "运行日志", "en": "Run Logs"},
     "daily_research_settings_title": {"zh": "每日研究设置", "en": "Daily Research Settings"},
     "daily_max_papers_label": {
@@ -444,21 +424,11 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "推荐：1（每日）、7（每周）、30（每月）",
         "en": "Recommended: 1 (daily), 7 (weekly), 30 (monthly)",
     },
-    "daily_scan_all_results": {
-        "zh": "日报会处理时间范围内的全部新论文；系统通过请求限速与重试保护上游服务，不使用篇数预算。",
-        "en": "Daily research processes every new paper in the time window. Request pacing and retries protect upstream services; there is no item budget.",
-    },
+    "daily_scan_all_results": {"zh": "日报会处理时间范围内的全部新论文，不受篇数限制。", "en": "Daily research processes every new paper in the time window, with no item cap."},
     "data_sources_title": {"zh": "数据源", "en": "Data Sources"},
-    "data_sources_hint": {
-        "zh": "核心来源只保留 arXiv 和 PRL；其他来源通过安全的声明式 JSON 添加。",
-        "en": "Core sources are arXiv and PRL; add other sources with safe declarative JSON.",
-    },
     "extra_sources_title": {"zh": "额外来源", "en": "Extra Sources"},
     "extra_sources_enabled": {"zh": "启用额外来源", "en": "Enable extra sources"},
-    "extra_sources_help": {
-        "zh": "关闭时保留已配置的来源但不抓取；开启后只接受内置类型，不执行 Python 代码。",
-        "en": "When off, definitions are retained but not fetched. Only built-in types are accepted; Python code is never executed.",
-    },
+    "extra_sources_help": {"zh": "关闭时保留已配置的来源但不抓取。", "en": "When off, configured sources are kept but not scanned."},
     "extra_sources_builtin_label": {"zh": "内置来源（多选）", "en": "Built-in sources (multi-select)"},
     "extra_sources_custom_title": {"zh": "自定义来源", "en": "Custom sources"},
     "extra_sources_add_title": {"zh": "➕ 新增自定义来源", "en": "➕ Add a custom source"},
@@ -794,10 +764,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "保存论文级评分与分析进度，用于断点续跑和失败恢复。",
         "en": "Save paper-level scoring and analysis progress for resume and recovery.",
     },
-    "daily_persistence_required": {
-        "zh": "SQLite 状态库已作为每日研究的必备基础设施启用",
-        "en": "The SQLite state store is required for daily research",
-    },
     "enable_daily_persistence": {
         "zh": "启用论文级持久化",
         "en": "Enable paper-level persistence",
@@ -868,10 +834,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "trend_research_title": {
         "zh": "趋势研究模式",
         "en": "Trend Research Mode",
-    },
-    "trend_research_hint": {
-        "zh": "--mode trend_research 分析的相关设置。",
-        "en": "Settings for the --mode research_trend analysis.",
     },
     "trend_date_range_label": {
         "zh": "默认日期范围（天）",
@@ -966,10 +928,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tr_start_failed": {"zh": "启动失败: {err}", "en": "Failed to start: {err}"},
     # skill labels (also fix time_evolution and key_researchers missing earlier)
     # run_manager 触发文件机制新 key
-    "rm_docker_trigger_hint": {
-        "zh": "Docker 模式：通过触发文件与主研究容器通信（安全，无需 Docker socket）",
-        "en": "Docker mode: communicates with the researcher container via trigger file (no Docker socket needed)",
-    },
     "rm_trigger_pending": {
         "zh": "已发送运行请求，等待主研究容器响应（最多 10 秒）...",
         "en": "Run request sent, waiting for researcher container to respond (up to 10s)...",
@@ -1206,10 +1164,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_backup_skip_reason": {"zh": "未创建备份：{}", "en": "Backup not created: {}"},
     "dm_backup_failed": {"zh": "❌ 备份失败", "en": "❌ Backup failed"},
     "ps_title": {"zh": "论文检索", "en": "Paper Search"},
-    "ps_hint": {
-        "zh": "在已处理论文的标题、作者、摘要、TLDR 与提取关键词中检索；数据永久存档，存量随时间增长。",
-        "en": "Search titles, authors, abstracts, TLDRs and extracted keywords of processed papers; the archive is permanent and keeps growing.",
-    },
+    "ps_hint": {"zh": "在已处理论文的标题、作者、摘要、TLDR 与提取关键词中检索。", "en": "Search titles, authors, abstracts, TLDRs and extracted keywords of processed papers."},
     "ps_query_label": {"zh": "检索词", "en": "Query"},
     "ps_query_placeholder": {
         "zh": "例如：diffusion model、作者名、关键词……",
@@ -1247,10 +1202,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "ps_next_page": {"zh": "下一页 →", "en": "Next →"},
     "ps_page_info": {"zh": "第 {page} / {pages} 页", "en": "Page {page} of {pages}"},
     "sh_title": {"zh": "数据源健康", "en": "Source Health"},
-    "sh_hint": {
-        "zh": "每个数据源最近 20 次扫描的终态收据聚合：成功率和最近一次错误一目了然。arXiv 是主数据源，其余为辅助源。",
-        "en": "Aggregated terminal receipts of each source's last 20 scans: success rate and the newest error at a glance. arXiv is the primary source; the rest are auxiliary.",
-    },
     "sh_no_data": {"zh": "暂无数据库，运行一次每日研究后可见。", "en": "No database yet; visible after the first daily research run."},
     "sh_no_receipts": {"zh": "尚无扫描收据。运行一次每日研究后可见。", "en": "No scan receipts yet; visible after the first daily research run."},
     "sh_load_failed": {"zh": "健康数据加载失败：{}", "en": "Failed to load health data: {}"},
@@ -1261,10 +1212,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "sh_last_scan": {"zh": "最近扫描：{time}", "en": "Last scan: {time}"},
     "sh_last_error": {"zh": "最近一次错误", "en": "Newest error"},
     "sh_window_note": {"zh": "共汇总 {scans} 条扫描收据（每个来源最近 20 次）。", "en": "Summarized {scans} scan receipts (last 20 per source)."},
-    "learned_strategy_info": {
-        "zh": "学习模式：在旧版加权总分之上叠加学习库修正。学习库来自你的收藏/不喜欢（强信号）与 v1 及格历史（弱信号），学到的关键词和作者权重先限幅再衰减，单个学习项的影响始终低于直接配置的评分关键词。",
-        "en": "Learned mode: adds a learned-library adjustment on top of the legacy weighted score. The library learns from your likes/dislikes (strong signal) and legacy v1 passes (weak signal); learned keyword/author weights are capped and dampened, so each learned term always matters less than directly configured keywords.",
-    },
+    "learned_strategy_info": {"zh": "学习模式：在旧版加权总分之上叠加学习库修正。学习库来自你的收藏/不喜欢与 v1 及格历史，学到的权重有上限且始终低于直接配置的评分关键词。", "en": "Learned mode adds a learned-library adjustment on top of the legacy weighted score. The library learns from your likes/dislikes and legacy v1 passes; learned weights are capped so they always matter less than directly configured keywords."},
     "learned_weight_dampening_label": {"zh": "学习权重衰减系数", "en": "Learned weight dampening"},
     "learned_weight_dampening_help": {
         "zh": "0-1；学习到的权重统一乘以该系数，越小学习项影响越弱",

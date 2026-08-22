@@ -110,15 +110,11 @@ def render(env_values: dict, config_values: dict):
     )
     st.markdown(f'<p class="hint-text">{t("daily_persistence_hint")}</p>', unsafe_allow_html=True)
 
-    col4d, col4e = st.columns(2)
-    with col4d:
-        st.info(t("daily_persistence_required"))
-    with col4e:
-        st.toggle(
-            t("daily_deep_analysis_label"),
-            value=flat.get("daily_enable_deep_analysis", True),
-            key="daily_enable_deep_analysis",
-        )
+    st.toggle(
+        t("daily_deep_analysis_label"),
+        value=flat.get("daily_enable_deep_analysis", True),
+        key="daily_enable_deep_analysis",
+    )
     st.text_input(
         t("daily_db_path_label"),
         value=flat.get("daily_research_db_path", "data/daily_research/daily_research.db"),

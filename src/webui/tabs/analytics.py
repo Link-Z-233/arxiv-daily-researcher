@@ -308,10 +308,6 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
         f'<p class="section-title">📊 {t("usage_title")}</p>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        f'<p class="hint-text">{t("usage_hint")}</p>',
-        unsafe_allow_html=True,
-    )
 
     db_path: Path = _daily_db_path_from_config(config_values)
     if not db_path.exists():
@@ -415,10 +411,6 @@ def _render_source_health_section(_env_values: dict, config_values: dict) -> Non
         f'<p class="section-title">📡 {t("sh_title")}</p>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        f'<p class="hint-text">{t("sh_hint")}</p>',
-        unsafe_allow_html=True,
-    )
 
     db_path = _daily_db_path_from_config(config_values or {})
     if not db_path.exists():
@@ -517,7 +509,6 @@ def _render_diagnostics_section(config_values: dict) -> None:
         f'<p class="section-title">🩺 {t("an_diag_title")}</p>',
         unsafe_allow_html=True,
     )
-    st.caption(t("an_diag_hint"))
 
     database_path = _daily_db_path_from_config(config_values)
     if not database_path.is_file():
@@ -610,10 +601,6 @@ def _render_diagnostics_section(config_values: dict) -> None:
 
 def render(env_values: dict, config_values: dict) -> None:
     """渲染数据分析 Tab：用量统计 → 数据源健康 → 运行诊断（精简）。"""
-    st.markdown(
-        f'<p class="hint-text">{t("an_hint")}</p>',
-        unsafe_allow_html=True,
-    )
     _render_usage_section(env_values, config_values)
 
     st.divider()

@@ -63,7 +63,6 @@ def render(_env_values: dict, config_values: dict):
     st.markdown(
         f'<p class="section-title">🧭 {t("data_sources_title")}</p>', unsafe_allow_html=True
     )
-    st.markdown(f'<p class="hint-text">{t("data_sources_hint")}</p>', unsafe_allow_html=True)
 
     current_sources = flat.get("enabled_sources", ["arxiv"])
     if not isinstance(current_sources, list):
