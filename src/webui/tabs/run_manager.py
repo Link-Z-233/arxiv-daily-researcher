@@ -215,11 +215,9 @@ def _render_live_status_body() -> None:
     is_running = bool(active_locks)
 
     if is_running:
-        lock_info = ", ".join(
-            f"`{f.name}`" + (f" PID={pid}" if pid is not None else "")
-            for f, pid in active_locks
-        )
-        st.info(f"🟢 {t('rm_status_running')} — {lock_info}")
+        f, pid = active_locks[0]
+        pid_info = f" · PID {pid}" if pid is not None else ""
+        st.markdown(f"**🟢 {t('rm_status_running')}** · `{f.name}`{pid_info}")
         # 停止控件放在自动刷新的 fragment 里：整页脚本不会自动重跑，
         # 只有这里能随运行状态自动出现/消失。
         with st.popover("⏹ " + t("rm_stop_btn")):
@@ -290,23 +288,19 @@ def _render_run_control() -> None:
         st.info(f"⏳ {t('rm_trigger_pending')}")
 
     can_run = not trigger_pending and not is_running
-    col_run, col_status = st.columns([1, 4])
+    col_run, col_refresh = st.columns(2)
     with col_run:
         run_clicked = st.button(
             "▶ " + t("run_now_btn"), key="rm_run_now",
             type="primary", use_container_width=True, disabled=not can_run,
         )
-    with col_status:
-        auto_refresh = st.toggle(
+    with col_refresh:
+        st.toggle(
             t("rm_auto_refresh"),
             value=st.session_state.get("rm_auto_refresh_on", True),
             key="rm_auto_refresh_on",
             help=t("rm_auto_refresh_help"),
         )
-        if auto_refresh:
-            _live_status_fragment()
-        else:
-            _render_live_status_body()
 
     if run_clicked:
         if _IS_DOCKER_WEBUI:
@@ -372,26 +366,14 @@ def _daily_db_path_from_config(config_values: dict) -> Path:
 # ─── 状态面板 ────────────────────────────────────────────────────────────────
 
 
-def _render_status() -> None:
-    lock_files = _get_lock_files()
-    if not lock_files:
-        st.success(f"✅ {t('rm_no_running_tasks')}")
-        return
-
-    for f in lock_files:
-        pid        = _read_pid_from_file(f)
-        is_running = _is_lock_held(f)
-        icon       = "🟢" if is_running else "🔴"
-        status     = t("rm_status_running") if is_running else t("rm_status_stopped")
-        pid_str    = f"PID={pid}" if pid else t("rm_no_pid")
-        mtime      = datetime.datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-
-        cols = st.columns([5, 1])
-        with cols[0]:
-            st.markdown(f"{icon} `{f.name}` — {status} | {pid_str} | {t('rm_started_at')}: {mtime}")
-        with cols[1]:
-            if not is_running:
-                st.caption(t("rm_lock_anchor"))
+def _render_status_panel(config_values: dict) -> None:
+    """运行状态 + 待处理队列合并为一个卡片，避免零散的提示块。"""
+    with st.container(border=True):
+        if st.session_state.get("rm_auto_refresh_on", True):
+            _live_status_fragment()
+        else:
+            _render_live_status_body()
+        _render_queue_metrics(config_values)
 
 
 # ─── 日志查看器 ──────────────────────────────────────────────────────────────
@@ -561,17 +543,7 @@ def render(_env_values: dict, config_values: dict) -> None:
         unsafe_allow_html=True,
     )
     _render_run_control()
-    _render_queue_metrics(config_values)
-
-    st.divider()
-
-    st.markdown(
-        f'<p class="section-title">📊 {t("rm_status_title")}</p>',
-        unsafe_allow_html=True,
-    )
-    _render_status()
-
-    # 高级诊断已并入「数据分析」页（精简展示）。
+    _render_status_panel(config_values)
 
     st.divider()
 

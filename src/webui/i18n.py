@@ -65,16 +65,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_queue_failed": {"zh": "失败待重试", "en": "Awaiting retry"},
     "rm_stop_btn": {"zh": "停止运行", "en": "Stop run"},
     "rm_trigger_state_failed": {
-        "zh": "最近一次 WebUI 请求 {state}{suffix}；请查看运行日志。",
-        "en": "Latest WebUI request {state}{suffix}; check the run logs.",
+        "zh": "上次请求 {state}{suffix}；详情见运行日志。",
+        "en": "Last request {state}{suffix}; see run logs.",
     },
     "rm_trigger_docker_keep": {
         "zh": "为避免丢失主容器尚未消费的请求，Docker 模式不从 WebUI 删除队列文件。",
         "en": "In Docker mode the WebUI does not delete queue files the worker may not have consumed yet.",
-    },
-    "rm_lock_anchor": {
-        "zh": "锁文件保留为稳定锚点",
-        "en": "Lock file kept as a stable anchor",
     },
     "rm_log_truncated": {
         "zh": "... (省略前 {skipped} 行，仅显示最后 {kept} 行) ...",
@@ -277,7 +273,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "report_no_next": {"zh": "已是最新的报告", "en": "No newer reports"},
     # ── run_manager.py ──
     "run_manager_title": {"zh": "每日推送", "en": "Daily Push"},
-    "run_now_section_title": {"zh": "立即运行每日研究", "en": "Run Daily Research Now"},
+    "run_now_section_title": {"zh": "每日研究", "en": "Daily Research"},
     "run_now_btn": {"zh": "立即运行", "en": "Run Now"},
     "stop_all_btn": {"zh": "停止所有进程", "en": "Stop All Processes"},
     "run_log_title": {"zh": "运行日志", "en": "Run Logs"},
@@ -302,15 +298,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Process started. Logs will appear shortly.",
     },
     # run_manager 状态标签
-    "rm_status_title": {"zh": "当前运行状态", "en": "Current Run Status"},
-    "rm_no_running_tasks": {
-        "zh": "当前无正在运行的任务（无锁/PID 文件）。",
-        "en": "No running tasks (no lock/PID files).",
-    },
     "rm_status_running": {"zh": "运行中", "en": "Running"},
     "rm_status_stopped": {"zh": "已停止（文件未清除）", "en": "Stopped (file not cleaned)"},
     "rm_no_pid": {"zh": "无 PID", "en": "No PID"},
-    "rm_started_at": {"zh": "启动于", "en": "Started at"},
     "rm_process_running_label": {
         "zh": "面板触发的进程正在运行",
         "en": "Panel-triggered process is running",

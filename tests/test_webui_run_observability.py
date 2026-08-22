@@ -53,6 +53,18 @@ class _FakeStreamlit:
     def __init__(self):
         self.calls = []
 
+    def container(self, *args, **kwargs):
+        self.calls.append(("container", args, kwargs))
+
+        class _Box:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Box()
+
     def markdown(self, *args, **kwargs):
         self.calls.append(("markdown", args, kwargs))
 
@@ -314,7 +326,13 @@ class WebUiRunObservabilityTests(unittest.TestCase):
                 },
             ),
         ):
-            run_manager._render_run_control()
+            # 状态渲染已并入状态面板；fragment 在裸模式下退化为直接调用
+            with patch.object(
+                run_manager,
+                "_live_status_fragment",
+                run_manager._render_live_status_body,
+            ):
+                run_manager._render_status_panel({})
 
         rendered = repr(fake_st.calls)
         self.assertIn("failed", rendered)
