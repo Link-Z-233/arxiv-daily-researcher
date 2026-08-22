@@ -23,8 +23,13 @@
 
   var MIN_HEIGHT = 240;
   var MAX_HEIGHT = 60000;
+  var FALLBACK_HEIGHT = 800;
   var currentHeight = 0;
+  var lastHtml = null;
 
+  // 宿主可能在一秒内重发多次 render；高度上报也会再触发一轮组件渲染。
+  // 两个方向都做去重/节流，避免"重建报告 iframe → 上报高度 → 再渲染"的
+  // 自激循环把报告翻个不停。
   function frameHeight(height) {
     var value = Math.round(Number(height)) || 0;
     if (value < MIN_HEIGHT) value = MIN_HEIGHT;
@@ -35,18 +40,25 @@
   }
 
   function renderReport(args) {
+    var html = String(args && args.html ? args.html : "");
     var host = document.getElementById("host");
+    if (html === lastHtml && host.children.length > 0) {
+      return; // 内容没变，保留现有沙箱 iframe（保住滚动位置与 KaTeX 渲染）
+    }
+    lastHtml = html;
     host.innerHTML = "";
     var frame = document.createElement("iframe");
     frame.title = "Daily report preview";
     // 报告 HTML 保持与旧版预览一致的沙箱：可执行脚本（KaTeX），但与面板源隔离。
     frame.setAttribute("sandbox", "allow-scripts allow-popups");
     frame.setAttribute("referrerpolicy", "no-referrer");
-    frame.style.height = (currentHeight || 800) + "px";
+    frame.style.height = (currentHeight || FALLBACK_HEIGHT) + "px";
     // 通过属性赋值设置 srcdoc，由 DOM 负责编码，报告内容无法逃出 iframe。
-    frame.srcdoc = String(args && args.html ? args.html : "");
+    frame.srcdoc = html;
     host.appendChild(frame);
-    frameHeight(800);
+    if (!currentHeight) {
+      frameHeight(FALLBACK_HEIGHT);
+    }
   }
 
   window.addEventListener("message", function (event) {
@@ -58,6 +70,7 @@
         break;
       case "arxiv-report-mark":
         // 沙箱报告里的标记点击，转发给 Python 侧（组件返回值）。
+        // nonce 用于 Python 端防重：组件值会跨 rerun 保留，同一次点击只落库一次。
         send({
           type: "streamlit:setComponentValue",
           dataType: "json",
@@ -65,6 +78,7 @@
             source: String(data.source || ""),
             paper_id: String(data.paper_id || ""),
             pref: String(data.pref || "none"),
+            nonce: String(data.nonce || ""),
           },
         });
         break;

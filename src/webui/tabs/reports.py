@@ -491,9 +491,22 @@ _MARK_BAR_JS = """<script>(function(){
   if (window.__arxivMarkInjected) return; window.__arxivMarkInjected = true;
   function post(msg){ parent.postMessage(msg, "*"); }
   var lastHeight = 0;
+  var pendingHeight = 0;
+  var heightTimer = null;
+  // 高度上报做 200ms 节流：宿主侧 setFrameHeight 会再触发组件渲染，
+  // 不节流会形成"上报→渲染→重建→再上报"的自激循环。
+  function flushHeight(){
+    heightTimer = null;
+    if (pendingHeight && pendingHeight !== lastHeight){
+      lastHeight = pendingHeight;
+      post({type:"arxiv-report-height", height:pendingHeight});
+    }
+  }
   function reportHeight(){
     var h = document.documentElement && document.documentElement.scrollHeight;
-    if (h && h !== lastHeight){ lastHeight = h; post({type:"arxiv-report-height", height:h}); }
+    if (!h) return;
+    pendingHeight = h;
+    if (!heightTimer){ heightTimer = setTimeout(flushHeight, 200); }
   }
   document.addEventListener("click", function(ev){
     var target = ev.target;
@@ -516,8 +529,8 @@ _MARK_BAR_JS = """<script>(function(){
   window.addEventListener("resize", reportHeight);
   if (document.readyState === "complete") { reportHeight(); }
   if (window.MutationObserver) {
-    new MutationObserver(reportHeight).observe(
-      document.documentElement, {subtree: true, childList: true, attributes: true});
+    var observer = new MutationObserver(reportHeight);
+    observer.observe(document.documentElement, {subtree: true, childList: true, attributes: true});
   }
 })();</script>"""
 
