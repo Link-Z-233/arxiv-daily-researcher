@@ -579,7 +579,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "No keywords extracted from reference PDFs yet; they appear here after a daily run.",
     },
     "kw_extracted_count": {"zh": "共 {total} 个（按权重排序）", "en": "{total} total (by weight)"},
-    "kw_extracted_more": {"zh": "…其余 {n} 个略", "en": "…{n} more omitted"},
     "research_context_title": {"zh": "研究背景", "en": "Research Context"},
     "research_context_hint": {
         "zh": "描述你的研究领域，帮助 LLM 更好地理解相关性。",

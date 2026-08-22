@@ -46,15 +46,16 @@ def _render_extracted_keywords_box() -> None:
         st.info(t("kw_extracted_empty"))
         return
     ordered = sorted(extracted.items(), key=lambda pair: (-pair[1], pair[0]))
-    shown = ordered[:100]
-    text = "  ·  ".join(f"{name}（{weight:g}）" for name, weight in shown)
+    lines = "\n".join(
+        f'<div style="padding:1px 0;">{name}<span style="color:#888;'
+        f'float:right;">{weight:g}</span></div>'
+        for name, weight in ordered
+    )
     with st.container(border=True):
         st.caption(t("kw_extracted_count").format(total=len(ordered)))
         st.markdown(
-            f'<p style="font-size:0.9rem;line-height:1.8;margin:0;">{text}'
-            + (f"<br>{t('kw_extracted_more').format(n=len(ordered) - len(shown))}"
-               if len(ordered) > len(shown) else "")
-            + "</p>",
+            f'<div style="max-height:260px;overflow-y:auto;font-size:0.9rem;'
+            f'line-height:1.7;">{lines}</div>',
             unsafe_allow_html=True,
         )
 
