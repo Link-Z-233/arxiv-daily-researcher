@@ -50,8 +50,13 @@ class KeywordNormalizer:
         """初始化，使用 settings 中的 cheap_llm 配置"""
         from config import settings
 
+        # 关键词标准化是辅助步骤，绝不能拖住整个日报收尾。SDK 默认
+        # 600s 超时 × 重试会让一次 API 挂起阻塞阶段 7 半小时以上。
         self.client = OpenAI(
-            api_key=settings.CHEAP_LLM.api_key, base_url=settings.CHEAP_LLM.base_url
+            api_key=settings.CHEAP_LLM.api_key,
+            base_url=settings.CHEAP_LLM.base_url,
+            timeout=60.0,
+            max_retries=1,
         )
         self.model = settings.CHEAP_LLM.model_name
 
