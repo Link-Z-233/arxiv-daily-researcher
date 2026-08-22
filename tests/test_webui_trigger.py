@@ -66,6 +66,32 @@ class WebUITriggerTests(unittest.TestCase):
         self.assertIn("quant-ph", command)
         self.assertIn("123", command)
 
+    def test_trend_analysis_prompt_is_optional_bounded_and_forwarded(self):
+        base = dict(
+            keywords=["quantum"],
+            sort_order="ascending",
+            max_results=10,
+        )
+        # 缺省：不带 --analysis-prompt
+        command = build_main_command(
+            build_trigger_payload("trend_research", **base), Path("/worker")
+        )
+        self.assertNotIn("--analysis-prompt", command)
+
+        prompt = "请重点分析纠错码实验进展，按主题分节输出。" * 20
+        payload = build_trigger_payload("trend_research", analysis_prompt=prompt, **base)
+        self.assertEqual(payload["args"]["analysis_prompt"], prompt.strip())
+        command = build_main_command(payload, Path("/worker"))
+        prompt_index = command.index("--analysis-prompt")
+        self.assertEqual(command[prompt_index + 1], prompt)
+
+        with self.assertRaises(TriggerValidationError):
+            build_trigger_payload(
+                "trend_research", analysis_prompt="x" * 8001, **base
+            )
+        with self.assertRaises(TriggerValidationError):
+            build_trigger_payload("trend_research", analysis_prompt=42, **base)
+
     def test_invalid_request_is_rejected_before_a_command_can_be_built(self):
         payload = {
             "schema_version": 1,

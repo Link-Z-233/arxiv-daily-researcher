@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -22,15 +25,52 @@ _LOCK_DIR = _PROJECT_ROOT / "data" / "run"
 _LOGS_DIR = _PROJECT_ROOT / "logs"
 _IS_DOCKER_WEBUI = not _MAIN_PY.exists()
 
-# 所有可用的趋势分析技能
+# 分析技能只保留综合分析；细分技能由自定义提示词取代
 ALL_TREND_SKILL_IDS = [
-    "hot_topics",
-    "time_evolution",
-    "key_researchers",
-    "research_gaps",
-    "methodology_trends",
     "comprehensive_analysis",
 ]
+
+_MAX_PROMPT_LENGTH = 8000
+
+
+def _templates_path() -> Path:
+    from config import settings
+
+    return settings.DATA_DIR / "trend_prompt_templates.json"
+
+
+def _load_prompt_templates() -> dict[str, str]:
+    path = _templates_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(name): str(text)
+        for name, text in data.items()
+        if isinstance(name, str) and isinstance(text, str) and name.strip()
+    }
+
+
+def _write_prompt_templates(templates: dict[str, str]) -> None:
+    path = _templates_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # 先写临时文件再原子替换，避免半写状态被读到
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(templates, handle, ensure_ascii=False, indent=2)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _get_trend_lock_files() -> list[Path]:
@@ -235,17 +275,105 @@ def render(_env_values: dict, config_values: dict) -> None:
             key="trend_output_html",
         )
 
-    # 启用的技能
+    # 分析技能：只保留综合分析（默认勾选）
     st.markdown(f"**{t('trend_skills_label')}**")
     current_skills = flat.get("trend_enabled_skills", ALL_TREND_SKILL_IDS)
     skill_cols = st.columns(3)
-    for i, skill_id in enumerate(ALL_TREND_SKILL_IDS):
-        with skill_cols[i % 3]:
-            st.checkbox(
-                _skill_label(skill_id),
-                value=skill_id in current_skills,
-                key=f"skill_{skill_id}",
-            )
+    with skill_cols[0]:
+        st.checkbox(
+            _skill_label("comprehensive_analysis"),
+            value="comprehensive_analysis" in current_skills,
+            key="skill_comprehensive_analysis",
+        )
+
+    # 深度分析提示词 + 模板
+    templates = _load_prompt_templates()
+    template_names = sorted(templates)
+    col_tpl, col_tpl_del = st.columns([3, 1])
+    with col_tpl:
+        st.selectbox(
+            t("trend_prompt_template_label"),
+            [t("trend_prompt_template_none"), *template_names],
+            key="tr_prompt_template",
+            help=t("trend_prompt_template_help"),
+        )
+    selected_template = st.session_state.get("tr_prompt_template", "")
+    if selected_template and selected_template != t("trend_prompt_template_none"):
+        if selected_template in templates:
+            # 每次选中模板时把内容带入提示词框（仅当用户未手动改过）
+            if st.session_state.get("tr_prompt_template_applied") != selected_template:
+                st.session_state["trend_analysis_prompt"] = templates[selected_template]
+                st.session_state["tr_prompt_template_applied"] = selected_template
+    with col_tpl_del:
+        st.write("")
+        can_delete = bool(
+            selected_template
+            and selected_template != t("trend_prompt_template_none")
+            and selected_template in templates
+        )
+        if st.button(
+            t("trend_prompt_template_delete"),
+            key="tr_prompt_template_delete",
+            disabled=not can_delete,
+            use_container_width=True,
+        ):
+            updated = {
+                name: text
+                for name, text in templates.items()
+                if name != selected_template
+            }
+            try:
+                _write_prompt_templates(updated)
+                st.session_state["tr_prompt_template"] = t("trend_prompt_template_none")
+                st.session_state["tr_prompt_template_applied"] = None
+                st.toast(t("trend_prompt_template_deleted"), icon="🗑")
+                st.rerun()
+            except OSError as exc:
+                st.error(t("tr_start_failed").format(err=exc))
+
+    st.text_area(
+        t("trend_prompt_label"),
+        value=flat.get("trend_analysis_prompt", ""),
+        height=180,
+        max_chars=_MAX_PROMPT_LENGTH,
+        key="trend_analysis_prompt",
+        placeholder=t("trend_prompt_placeholder"),
+        help=t("trend_prompt_help"),
+    )
+
+    col_save_name, col_save_btn = st.columns([3, 1])
+    with col_save_name:
+        st.text_input(
+            t("trend_prompt_template_name_label"),
+            value="",
+            key="tr_prompt_template_name",
+            placeholder=t("trend_prompt_template_name_placeholder"),
+        )
+    with col_save_btn:
+        st.write("")
+        if st.button(
+            t("trend_prompt_template_save"),
+            key="tr_prompt_template_save",
+            use_container_width=True,
+        ):
+            name = (st.session_state.get("tr_prompt_template_name", "") or "").strip()
+            text = (st.session_state.get("trend_analysis_prompt", "") or "").strip()
+            if not name:
+                st.error(t("trend_prompt_template_name_required"))
+            elif not text:
+                st.error(t("trend_prompt_template_text_required"))
+            else:
+                updated = dict(_load_prompt_templates())
+                updated[name] = text
+                try:
+                    _write_prompt_templates(updated)
+                    st.session_state["tr_prompt_template_name"] = ""
+                    st.session_state["tr_prompt_template"] = name
+                    st.session_state["tr_prompt_template_applied"] = name
+                    st.toast(t("trend_prompt_template_saved"), icon="💾")
+                    st.rerun()
+                except OSError as exc:
+                    st.error(t("tr_start_failed").format(err=exc))
 
     # ── 处理按钮逻辑 ────────────────────────────────────────────────────────
 
@@ -270,6 +398,9 @@ def render(_env_values: dict, config_values: dict) -> None:
                 "categories": categories,
                 "sort_order": st.session_state.get("trend_sort_order", "ascending"),
                 "max_results": int(st.session_state.get("trend_max_results", 500)),
+                "analysis_prompt": (
+                    st.session_state.get("trend_analysis_prompt", "") or ""
+                ).strip(),
             }
             try:
                 if _IS_DOCKER_WEBUI:
@@ -296,6 +427,10 @@ def render(_env_values: dict, config_values: dict) -> None:
                     ]
                     if categories:
                         command.extend(["--categories", *categories])
+                    if request_args["analysis_prompt"]:
+                        command.extend(
+                            ["--analysis-prompt", request_args["analysis_prompt"]]
+                        )
                     _LOGS_DIR.mkdir(parents=True, exist_ok=True)
                     log_file = _LOGS_DIR / f"manual_trend_{datetime.now():%Y%m%d_%H%M%S}.log"
                     with log_file.open("w", encoding="utf-8") as handle:
@@ -355,4 +490,5 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         "trend_tldr_batch_size": current("trend_tldr_batch_size", 10),
         "trend_output_formats": current_formats(),
         "trend_enabled_skills": enabled_skills,
+        "trend_analysis_prompt": str(current("trend_analysis_prompt", "") or "").strip(),
     }

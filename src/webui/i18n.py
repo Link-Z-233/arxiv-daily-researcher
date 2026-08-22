@@ -378,10 +378,33 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "trend_sort_label": {"zh": "时间排序", "en": "Time Sort Order"},
     "trend_generate_tldr_label": {"zh": "生成 TLDR", "en": "Generate TLDR"},
     "trend_tldr_batch_label": {"zh": "TLDR 批次并发数", "en": "TLDR Batch Size"},
-    "trend_skills_label": {"zh": "启用的分析技能", "en": "Enabled Analysis Skills"},
+    "trend_skills_label": {"zh": "分析技能", "en": "Analysis skills"},
     "trend_output_formats_label": {"zh": "输出格式", "en": "Output Formats"},
     "trend_output_md_label": {"zh": "Markdown 报告", "en": "Markdown Report"},
     "trend_output_html_label": {"zh": "HTML 报告", "en": "HTML Report"},
+    "trend_prompt_label": {"zh": "深度分析提示词", "en": "Deep-analysis prompt"},
+    "trend_prompt_help": {
+        "zh": "自定义「综合分析」的分析要求；留空使用内置综合分析指令。运行时立即生效，也可保存为模板复用。",
+        "en": "Custom instructions for the comprehensive analysis; leave blank to use the built-in one. Applies immediately on run and can be saved as a template.",
+    },
+    "trend_prompt_placeholder": {
+        "zh": "例如：请重点分析……并按……结构输出（留空使用内置指令）",
+        "en": "e.g. Focus on ... and structure the output as ... (blank = built-in)",
+    },
+    "trend_prompt_template_label": {"zh": "提示词模板", "en": "Prompt template"},
+    "trend_prompt_template_help": {
+        "zh": "选择已保存的模板并应用到提示词框。",
+        "en": "Pick a saved template to load it into the prompt box.",
+    },
+    "trend_prompt_template_none": {"zh": "不使用模板", "en": "No template"},
+    "trend_prompt_template_delete": {"zh": "删除模板", "en": "Delete"},
+    "trend_prompt_template_deleted": {"zh": "模板已删除", "en": "Template deleted"},
+    "trend_prompt_template_save": {"zh": "保存为模板", "en": "Save template"},
+    "trend_prompt_template_saved": {"zh": "模板已保存", "en": "Template saved"},
+    "trend_prompt_template_name_label": {"zh": "模板名称", "en": "Template name"},
+    "trend_prompt_template_name_placeholder": {"zh": "给当前提示词起个名字", "en": "Name this prompt"},
+    "trend_prompt_template_name_required": {"zh": "请先填写模板名称。", "en": "Enter a template name first."},
+    "trend_prompt_template_text_required": {"zh": "提示词为空，无需保存模板。", "en": "The prompt is empty; nothing to save."},
     # ── search.py ────────────────────────────────────────────────────────
     "search_settings_title": {"zh": "搜索设置", "en": "Search Settings"},
     "search_settings_hint": {
@@ -838,26 +861,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "**Enabled Analysis Skills**",
     },
     # Skill names
-    "skill_temporal_evolution": {
-        "zh": "技术演进时间线",
-        "en": "Technology Evolution Timeline",
-    },
-    "skill_hot_topics": {
-        "zh": "热点话题聚类",
-        "en": "Hot Topics Clustering",
-    },
-    "skill_key_authors": {
-        "zh": "关键研究者分析",
-        "en": "Key Researchers Analysis",
-    },
-    "skill_research_gaps": {
-        "zh": "研究空白识别",
-        "en": "Research Gap Identification",
-    },
-    "skill_methodology_trends": {
-        "zh": "方法论趋势",
-        "en": "Methodology Trends",
-    },
     "skill_comprehensive_analysis": {
         "zh": "综合趋势分析",
         "en": "Comprehensive Trend Analysis",
@@ -934,8 +937,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "tr_start_failed": {"zh": "启动失败: {err}", "en": "Failed to start: {err}"},
     # skill labels (also fix time_evolution and key_researchers missing earlier)
-    "skill_time_evolution": {"zh": "技术演进时间线", "en": "Technology Evolution Timeline"},
-    "skill_key_researchers": {"zh": "关键研究者分析", "en": "Key Researchers Analysis"},
     # run_manager 触发文件机制新 key
     "rm_docker_trigger_hint": {
         "zh": "Docker 模式：通过触发文件与主研究容器通信（安全，无需 Docker socket）",

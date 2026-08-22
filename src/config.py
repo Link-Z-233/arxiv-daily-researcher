@@ -346,6 +346,7 @@ class Settings(BaseSettings):
     RESEARCH_ENABLED_SKILLS: List[str] = [  # 启用的趋势分析技能
         "comprehensive_analysis",
     ]
+    RESEARCH_ANALYSIS_PROMPT: str = ""  # 自定义深度分析提示词；空则用技能库内置指令
 
     # ==================== Pydantic Settings配置 ====================
     # 指定从.env文件加载配置，支持嵌套参数用双下划线分隔
@@ -877,12 +878,12 @@ class Settings(BaseSettings):
                 self.RESEARCH_ENABLED_SKILLS = tr.get(
                     "enabled_skills",
                     [
-                        "temporal_evolution",
-                        "hot_topics",
-                        "key_authors",
-                        "research_gaps",
-                        "methodology_trends",
+                        "comprehensive_analysis",
                     ],
+                )
+                analysis_prompt = tr.get("analysis_prompt", "")
+                self.RESEARCH_ANALYSIS_PROMPT = (
+                    analysis_prompt.strip() if isinstance(analysis_prompt, str) else ""
                 )
 
             # Assignments on a Pydantic model are deliberately lightweight in

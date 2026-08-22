@@ -77,6 +77,11 @@ def parse_args(argv: Optional[Sequence[str]] = None):
         default=None,
         help="[trend_research] 限制搜索的 ArXiv 分类，多个用空格分隔，如 quant-ph cond-mat.mes-hall；不指定则不限制分类",
     )
+    parser.add_argument(
+        "--analysis-prompt",
+        default=None,
+        help="[trend_research] 自定义深度分析提示词；不指定则使用配置文件或技能库内置指令",
+    )
     return parser.parse_args(argv)
 
 
@@ -143,6 +148,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         max_results = (
             args.max_results if args.max_results is not None else settings.RESEARCH_MAX_RESULTS
         )
+        # 面板传入的自定义深度分析提示词优先于配置文件
+        if args.analysis_prompt:
+            settings.RESEARCH_ANALYSIS_PROMPT = args.analysis_prompt
 
         from modes.trend_research import TrendResearchPipeline
 

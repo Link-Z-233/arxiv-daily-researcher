@@ -34,6 +34,7 @@ _MAX_KEYWORDS = 32
 _MAX_KEYWORD_LENGTH = 500
 _MAX_CATEGORIES = 64
 _MAX_RESULTS = 5000
+_MAX_ANALYSIS_PROMPT = 8000
 
 
 class TriggerValidationError(ValueError):
@@ -178,6 +179,17 @@ def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
     if date_from and date_to and date_from > date_to:
         raise TriggerValidationError("date_from must not be after date_to")
 
+    analysis_prompt = args.get("analysis_prompt", "")
+    if analysis_prompt is None:
+        analysis_prompt = ""
+    if not isinstance(analysis_prompt, str):
+        raise TriggerValidationError("analysis_prompt must be a string")
+    analysis_prompt = analysis_prompt.strip()
+    if len(analysis_prompt) > _MAX_ANALYSIS_PROMPT:
+        raise TriggerValidationError(
+            f"analysis_prompt must be at most {_MAX_ANALYSIS_PROMPT} characters"
+        )
+
     normalized["args"] = {
         "keywords": keywords,
         "date_from": date_from,
@@ -185,6 +197,7 @@ def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "categories": categories,
         "sort_order": sort_order,
         "max_results": max_results,
+        "analysis_prompt": analysis_prompt,
     }
     return normalized
 
@@ -238,6 +251,8 @@ def build_main_command(payload: Mapping[str, Any], project_root: Path) -> list[s
         if args["categories"]:
             command.extend(["--categories", *args["categories"]])
         command.extend(["--sort-order", args["sort_order"], "--max-results", str(args["max_results"])])
+        if args.get("analysis_prompt"):
+            command.extend(["--analysis-prompt", args["analysis_prompt"]])
     return command
 
 

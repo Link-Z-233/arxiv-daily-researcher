@@ -77,7 +77,7 @@ class LazyPageCollectTests(unittest.TestCase):
             "concurrency_workers": 6,
             "trend_max_results": 250,
             "trend_sort_order": "descending",
-            "trend_enabled_skills": ["hot_topics"],
+            "trend_enabled_skills": ["comprehensive_analysis"],
             "trend_output_formats": ["markdown"],
             "pdf_download_max_bytes": 80 * 1024 * 1024,
             "passing_score_base": 1.5,
@@ -119,7 +119,7 @@ class LazyPageCollectTests(unittest.TestCase):
         self.assertEqual(adv["pdf_parser_mode"], "pymupdf")
         self.assertEqual(tr["trend_max_results"], 250)
         self.assertEqual(tr["trend_sort_order"], "descending")
-        self.assertEqual(tr["trend_enabled_skills"], ["hot_topics"])
+        self.assertEqual(tr["trend_enabled_skills"], ["comprehensive_analysis"])
         self.assertEqual(tr["trend_output_formats"], ["markdown"])
 
     def test_unvisited_env_pages_keep_dotenv_values(self):

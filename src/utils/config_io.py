@@ -670,6 +670,7 @@ def build_config_dict(
     trend_tldr_batch_size: int = 10,
     trend_output_formats: Optional[List[str]] = None,
     trend_enabled_skills: Optional[List[str]] = None,
+    trend_analysis_prompt: str = "",
     proxy_enabled: bool = False,
     proxy_url: str = "",
     proxy_no_proxy: str = "localhost,127.0.0.1",
@@ -954,6 +955,7 @@ def build_config_dict(
             or [
                 "comprehensive_analysis",
             ],
+            "analysis_prompt": trend_analysis_prompt or "",
         },
     }
 
@@ -1252,6 +1254,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
             "comprehensive_analysis",
         ],
     )
+    flat["trend_analysis_prompt"] = tr.get("analysis_prompt", "")
 
     return flat
 

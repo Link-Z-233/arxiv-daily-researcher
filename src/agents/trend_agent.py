@@ -174,6 +174,16 @@ class TrendAgent:
         all_skills = {s["name"]: s for s in self.skills.get("skills", [])}
         active_skills = [all_skills[sid] for sid in enabled_skill_ids if sid in all_skills]
 
+        # 自定义深度分析提示词：非空时替换综合分析的内置指令
+        custom_prompt = (getattr(settings, "RESEARCH_ANALYSIS_PROMPT", "") or "").strip()
+        if custom_prompt:
+            active_skills = [
+                {**skill, "instruction": custom_prompt}
+                if skill["name"] == "comprehensive_analysis"
+                else skill
+                for skill in active_skills
+            ]
+
         if not active_skills:
             logger.warning("没有可用的趋势分析技能")
             return {}

@@ -4,16 +4,6 @@ import streamlit as st
 from webui.i18n import t
 
 
-ALL_TREND_SKILL_IDS = [
-    "temporal_evolution",
-    "hot_topics",
-    "key_authors",
-    "research_gaps",
-    "methodology_trends",
-    "comprehensive_analysis",
-]
-
-
 def render(_env_values: dict, config_values: dict):
     """Render the Advanced Settings tab."""
 
