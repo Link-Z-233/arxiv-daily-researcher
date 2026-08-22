@@ -110,7 +110,7 @@ class DailyReportInlineMarkTests(unittest.TestCase):
         '<div class="field"><span class="score">7.5</span></div></div>'
         '<div class="card fail">'
         '<div class="card-title">2. Classical Shadows Revisited</div>'
-        "</div>"
+        '<div class="field"><span class="score">3.2</span></div></div>'
         "</body></html>"
     )
 
@@ -145,20 +145,37 @@ class DailyReportInlineMarkTests(unittest.TestCase):
         self.assertEqual(enriched.count('<div class="card '), 2)
         # 两张卡片都注入了标记条，标题配对正确
         self.assertEqual(enriched.count('class="arxiv-mark-bar"'), 2)
+        # 标记条位于评分行内（第一个 field 行的开头，浮动到最右侧）
         bar1 = enriched.index('data-paper="2401.00001"')
-        card1 = enriched.index("Quantum Error Correction")
-        self.assertGreater(bar1, enriched.index('<div class="card pass">'))
-        self.assertLess(bar1, card1)
+        field1 = enriched.index('<div class="field">', enriched.index("Quantum Error"))
+        self.assertGreater(bar1, field1)
+        self.assertLess(bar1, enriched.index('<span class="score">7.5', field1))
+        bar2 = enriched.index('data-paper="2401.00002"')
+        field2 = enriched.index('<div class="field">', enriched.index("Classical Shadows"))
+        self.assertGreater(bar2, field2)
+        # 只有两个按钮：👍/👎（没有清除按钮）
+        bar_block = enriched[bar1 : enriched.index("</div>", bar1)]
+        self.assertEqual(bar_block.count("arxiv-mark-btn"), 2)
+        self.assertNotIn('data-pref="clear"', enriched)
         # 已点赞的按钮带 active 状态
         like_btn = enriched[bar1:enriched.index("</div>", bar1)]
         self.assertIn('class="arxiv-mark-btn active"', like_btn)
         # 未标记的卡片无 active
-        bar2 = enriched.index('data-paper="2401.00002"')
         self.assertNotIn("active", enriched[bar2 : enriched.index("</div>", bar2)])
         # 样式与脚本注入在 </body> 之前
         self.assertIn(".arxiv-mark-btn{", enriched)
         self.assertIn("__arxivMarkInjected", enriched)
         self.assertLess(enriched.rfind("__arxivMarkInjected"), enriched.rfind("</body>"))
+
+    def test_card_without_field_row_gets_no_bar(self):
+        from webui.tabs.reports import _inject_mark_controls
+
+        report = (
+            '<div class="card pass"><div class="card-title">'
+            "1. Quantum Error Correction at Scale</div></div>"
+        )
+        # 卡片没有评分行（field）时不注入，避免破坏布局
+        self.assertIs(_inject_mark_controls(report, self._papers()), report)
 
     def test_no_matching_cards_returns_original(self):
         from webui.tabs.reports import _inject_mark_controls

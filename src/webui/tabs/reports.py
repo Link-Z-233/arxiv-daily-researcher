@@ -472,12 +472,12 @@ def _apply_report_mark(store: DailyResearchStore, paper: dict, preference: str) 
 _COMPONENT_DIR = Path(__file__).resolve().parent.parent / "report_component"
 
 _CARD_OPEN_RE = re.compile(r'<div class="card (?:pass|fail)">')
+# 卡片内第一个 field 行就是评分行；标记按钮插入该行行首并 float 到最右。
+_SCORE_FIELD_RE = re.compile(r'<div class="field">')
 
 _MARK_BAR_CSS = (
-    "<style>.card{position:relative;}"
-    ".arxiv-mark-bar{position:absolute;top:10px;right:12px;display:flex;gap:4px;"
-    "z-index:9;opacity:.85;}"
-    ".arxiv-mark-bar:hover{opacity:1;}"
+    "<style>"
+    ".arxiv-mark-bar{float:right;display:flex;gap:4px;margin-left:12px;}"
     ".arxiv-mark-btn{border:1px solid rgba(127,127,127,.45);border-radius:8px;"
     "background:rgba(255,255,255,.78);cursor:pointer;font-size:13px;line-height:1;"
     "padding:4px 7px;color:inherit;}"
@@ -514,9 +514,9 @@ _MARK_BAR_JS = """<script>(function(){
     if (!btn) return;
     ev.preventDefault();
     var bar = btn.closest(".arxiv-mark-bar");
-    var want = btn.getAttribute("data-pref");
-    if (want === "clear") { want = "none"; }
-    else if (want === (bar.getAttribute("data-current") || "none")) { want = "none"; }
+    // 再点同一个偏好即取消（切回 none）；只有 👍/👎 两个按钮。
+    var want = btn.getAttribute("data-pref") === (bar.getAttribute("data-current") || "none")
+      ? "none" : btn.getAttribute("data-pref");
     post({
       type: "arxiv-report-mark",
       source: bar.getAttribute("data-source"),
@@ -536,13 +536,13 @@ _MARK_BAR_JS = """<script>(function(){
 
 
 def _build_mark_bar(paper: dict) -> str:
-    """在报告卡片右上角注入 👍/👎/✖ 标记按钮（不动报告原有布局）。"""
+    """构造 👍/👎 标记按钮条（插入评分行，浮动到卡片最右侧）。"""
     source = html.escape(str(paper.get("source", "")), quote=True)
     paper_id = html.escape(str(paper.get("paper_id", "")), quote=True)
     current = paper.get("preference") or "none"
 
     def _btn(pref: str, label: str, help_text: str) -> str:
-        active = " active" if pref != "clear" and current == pref else ""
+        active = " active" if current == pref else ""
         return (
             f'<button type="button" class="arxiv-mark-btn{active}" data-pref="{pref}" '
             f'title="{html.escape(help_text, quote=True)}">{label}</button>'
@@ -553,7 +553,6 @@ def _build_mark_bar(paper: dict) -> str:
         f'data-current="{html.escape(current, quote=True)}">'
         + _btn("like", "👍", t("fav_like"))
         + _btn("dislike", "👎", t("fav_dislike"))
-        + _btn("clear", "✖", t("fav_clear"))
         + "</div>"
     )
 
@@ -568,10 +567,11 @@ def _append_mark_assets(report_html: str) -> str:
 
 
 def _inject_mark_controls(report_html: str, papers: list[dict]) -> str:
-    """按卡片标题把论文与 HTML 卡片配对，注入标记按钮；返回原样的场景返回原文。
+    """按卡片标题把论文与 HTML 卡片配对，把标记按钮插入评分行最右侧。
 
-    报告本体（样式/结构/内容）保持生成时的原样，只在每张卡片的开标签后
-    插入一个绝对定位的按钮条，并在文档末尾追加样式与脚本。
+    报告本体（样式/结构/内容）保持生成时的原样：只在每张卡片的评分行
+    （第一个 field 行）开头插入一个浮动到行尾的按钮条，并在文档末尾
+    追加样式与脚本。找不到评分行的卡片不注入。
     """
     candidates: list[tuple[str, dict]] = []
     for paper in papers:
@@ -599,10 +599,14 @@ def _inject_mark_controls(report_html: str, papers: list[dict]) -> str:
                 break
         if chosen is None:
             continue
+        field = _SCORE_FIELD_RE.search(block)
+        if field is None:
+            continue
         used.add(chosen[0])
-        pieces.append(report_html[last : match.end()])
+        insert_at = match.end() + field.end()
+        pieces.append(report_html[last:insert_at])
         pieces.append(_build_mark_bar(chosen[1]))
-        last = match.end()
+        last = insert_at
         injected += 1
 
     if not injected:
