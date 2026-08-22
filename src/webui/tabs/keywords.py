@@ -1,13 +1,78 @@
 """Keywords Configuration tab for the Streamlit config panel."""
 
+import json
+
 import streamlit as st
 from webui.i18n import t
+
+
+@st.cache_data(ttl=60)
+def _load_extracted_keywords() -> dict[str, float]:
+    """读取参考文献 PDF 已提取并缓存的关键词（只读展示）。"""
+    from config import settings
+
+    path = settings.DATA_DIR / "keywords" / "keywords_cache.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    keywords = data.get("keywords")
+    if not isinstance(keywords, dict):
+        return {}
+    return {
+        str(name): float(weight)
+        for name, weight in keywords.items()
+        if isinstance(weight, (int, float))
+    }
+
+
+def _render_extracted_keywords_box() -> None:
+    extracted = _load_extracted_keywords()
+    st.markdown(
+        f"**{t('kw_extracted_title')}**",
+        unsafe_allow_html=True,
+    )
+    if not extracted:
+        st.info(t("kw_extracted_empty"))
+        return
+    ordered = sorted(extracted.items(), key=lambda pair: (-pair[1], pair[0]))
+    shown = ordered[:100]
+    text = "  ·  ".join(f"{name}（{weight:g}）" for name, weight in shown)
+    with st.container(border=True):
+        st.caption(t("kw_extracted_count").format(total=len(ordered)))
+        st.markdown(
+            f'<p style="font-size:0.9rem;line-height:1.8;margin:0;">{text}'
+            + (f"<br>{t('kw_extracted_more').format(n=len(ordered) - len(shown))}"
+               if len(ordered) > len(shown) else "")
+            + "</p>",
+            unsafe_allow_html=True,
+        )
 
 
 def render(_env_values: dict, config_values: dict):
     """Render the Keywords configuration tab."""
 
     flat = config_values
+
+    # ---- Research Context（最顶部：评分与提取都依赖它）----
+    st.markdown(
+        f'<p class="section-title">🧭 {t("research_context_title")}</p>', unsafe_allow_html=True
+    )
+    st.markdown(f'<p class="hint-text">{t("research_context_hint")}</p>', unsafe_allow_html=True)
+
+    st.text_area(
+        t("research_context_label"),
+        value=flat.get("research_context", ""),
+        height=120,
+        key="research_context",
+        placeholder=t("research_context_placeholder"),
+    )
+
+    st.divider()
 
     # ---- Primary Keywords ----
     st.markdown(
@@ -44,6 +109,8 @@ def render(_env_values: dict, config_values: dict):
         value=flat.get("enable_reference_extraction", False),
         key="enable_reference_extraction",
     )
+
+    _render_extracted_keywords_box()
 
     with st.expander(t("ref_extract_expander"), expanded=False):
         col1, col2 = st.columns(2)
@@ -119,22 +186,6 @@ def render(_env_values: dict, config_values: dict):
                 max_value=20,
                 key="ref_count_low",
             )
-
-    st.divider()
-
-    # ---- Research Context ----
-    st.markdown(
-        f'<p class="section-title">🧭 {t("research_context_title")}</p>', unsafe_allow_html=True
-    )
-    st.markdown(f'<p class="hint-text">{t("research_context_hint")}</p>', unsafe_allow_html=True)
-
-    st.text_area(
-        t("research_context_label"),
-        value=flat.get("research_context", ""),
-        height=120,
-        key="research_context",
-        placeholder=t("research_context_placeholder"),
-    )
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:

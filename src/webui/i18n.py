@@ -577,6 +577,13 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "low_importance": {"zh": "*低重要性*", "en": "*Low Importance*"},
     "weight_label": {"zh": "权重", "en": "Weight"},
     "count_label": {"zh": "数量", "en": "Count"},
+    "kw_extracted_title": {"zh": "已提取的关键词", "en": "Extracted keywords"},
+    "kw_extracted_empty": {
+        "zh": "还没有从参考文献 PDF 提取到关键词；运行一次每日研究后会出现在这里。",
+        "en": "No keywords extracted from reference PDFs yet; they appear here after a daily run.",
+    },
+    "kw_extracted_count": {"zh": "共 {total} 个（按权重排序）", "en": "{total} total (by weight)"},
+    "kw_extracted_more": {"zh": "…其余 {n} 个略", "en": "…{n} more omitted"},
     "research_context_title": {"zh": "研究背景", "en": "Research Context"},
     "research_context_hint": {
         "zh": "描述你的研究领域，帮助 LLM 更好地理解相关性。",
