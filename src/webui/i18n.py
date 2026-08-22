@@ -410,6 +410,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "daily_scan_all_results": {"zh": "日报会处理时间范围内的全部新论文，不受篇数限制。", "en": "Daily research processes every new paper in the time window, with no item cap."},
     "data_sources_title": {"zh": "数据源", "en": "Data Sources"},
+    "arxiv_settings_title": {"zh": "ArXiv 设置", "en": "ArXiv Settings"},
     "sh_hint": {"zh": "成功率按每个数据源最近 20 次扫描计算。", "en": "Success rates cover each source's last 20 scans."},
     "extra_sources_title": {"zh": "额外来源", "en": "Extra Sources"},
     "extra_sources_enabled": {"zh": "启用额外来源", "en": "Enable extra sources"},
@@ -485,7 +486,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "只限制请求速率，不限制结果数量或处理范围。",
         "en": "Limits request rate only; it never caps result count or processing scope.",
     },
-    "arxiv_domains_title": {"zh": "ArXiv 目标分类", "en": "ArXiv Target Domains"},
     "arxiv_domains_hint": {
         "zh": "ArXiv 分类代码，详见 https://arxiv.org/category_taxonomy",
         "en": "ArXiv category codes. See: https://arxiv.org/category_taxonomy",

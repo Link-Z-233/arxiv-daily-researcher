@@ -45,7 +45,6 @@ def render(_env_values: dict, config_values: dict):
     st.markdown(
         f'<p class="section-title">🔎 {t("search_settings_title")}</p>', unsafe_allow_html=True
     )
-    st.markdown(f'<p class="hint-text">{t("search_settings_hint")}</p>', unsafe_allow_html=True)
 
     st.number_input(
         t("search_days_label"),
@@ -79,7 +78,66 @@ def render(_env_values: dict, config_values: dict):
             "PRL", value="prl" in current_sources, key="source_prl"
         )
 
-    st.markdown(f"**{t('extra_sources_title')}**")
+    st.toggle(
+        t("reports_by_source_toggle"),
+        value=flat.get("reports_by_source", True),
+        key="reports_by_source",
+        help=t("reports_by_source_help"),
+    )
+
+    st.divider()
+
+    # ---- ArXiv Settings（目标分类 + 抓取参数放在一起）----
+    st.markdown(
+        f'<p class="section-title">🗂️ {t("arxiv_settings_title")}</p>', unsafe_allow_html=True
+    )
+    st.markdown(f'<p class="hint-text">{t("arxiv_domains_hint")}</p>', unsafe_allow_html=True)
+
+    current_domains = flat.get("domains", ["quant-ph"])
+    if not isinstance(current_domains, list):
+        current_domains = []
+
+    st.multiselect(
+        t("select_arxiv_cats"),
+        options=ARXIV_CATEGORIES,
+        default=[d for d in current_domains if d in ARXIV_CATEGORIES],
+        key="arxiv_domains",
+    )
+
+    st.text_input(
+        t("custom_domains_label"),
+        value=", ".join(d for d in current_domains if d not in ARXIV_CATEGORIES),
+        key="custom_domains",
+        help=t("custom_domains_help"),
+    )
+
+    col_ax1, col_ax2 = st.columns(2)
+    with col_ax1:
+        st.number_input(
+            t("arxiv_fetch_timeout_label"),
+            min_value=30,
+            max_value=1800,
+            value=flat.get("arxiv_fetch_timeout_seconds", 180),
+            key="arxiv_fetch_timeout_seconds",
+            help=t("arxiv_fetch_timeout_help"),
+        )
+    with col_ax2:
+        st.number_input(
+            t("arxiv_announcement_lookback_grace_label"),
+            min_value=0,
+            max_value=30,
+            value=flat.get("arxiv_announcement_lookback_grace_days", 2),
+            key="arxiv_announcement_lookback_grace_days",
+            help=t("arxiv_announcement_lookback_grace_help"),
+        )
+
+    st.divider()
+
+    # ---- Extra Sources（放最后）----
+    st.markdown(
+        f'<p class="section-title">➕ {t("extra_sources_title")}</p>', unsafe_allow_html=True
+    )
+
     extra_cfg = flat.get("extra_source_definitions", [])
     if not isinstance(extra_cfg, list):
         extra_cfg = []
@@ -106,7 +164,7 @@ def render(_env_values: dict, config_values: dict):
     selected_builtins: list[str] = []
     custom_definitions: list[dict] = list(st.session_state["extra_custom_definitions"])
 
-    # 额外来源启用后才展开自定义来源配置框
+    # 额外来源启用后才展开来源配置
     if extra_enabled:
         def _builtin_label(code: str) -> str:
             info = builtin_templates[code]
@@ -202,38 +260,13 @@ def render(_env_values: dict, config_values: dict):
             )
         )
 
-    # 由多选与自定义列表推导出最终定义（供下方 HF 参数区判断）
+    # 由多选与自定义列表推导出最终定义（供 HF 参数区判断）
     try:
         parsed_extra = validate_source_definitions(
             [builtin_templates[code] for code in selected_builtins] + custom_definitions
         )
     except ValueError:
         parsed_extra = []
-
-    st.toggle(
-        t("reports_by_source_toggle"),
-        value=flat.get("reports_by_source", True),
-        key="reports_by_source",
-        help=t("reports_by_source_help"),
-    )
-
-    st.number_input(
-        t("arxiv_fetch_timeout_label"),
-        min_value=30,
-        max_value=1800,
-        value=flat.get("arxiv_fetch_timeout_seconds", 180),
-        key="arxiv_fetch_timeout_seconds",
-        help=t("arxiv_fetch_timeout_help"),
-    )
-
-    st.number_input(
-        t("arxiv_announcement_lookback_grace_label"),
-        min_value=0,
-        max_value=30,
-        value=flat.get("arxiv_announcement_lookback_grace_days", 2),
-        key="arxiv_announcement_lookback_grace_days",
-        help=t("arxiv_announcement_lookback_grace_help"),
-    )
 
     extra_codes = {item["code"] for item in parsed_extra} if extra_enabled else set()
     if "huggingface_papers" in extra_codes:
@@ -273,32 +306,6 @@ def render(_env_values: dict, config_values: dict):
                 key="huggingface_papers_request_interval_seconds",
                 help=t("huggingface_papers_request_interval_help"),
             )
-
-    st.divider()
-
-    # ---- ArXiv Domains ----
-    st.markdown(
-        f'<p class="section-title">🗂️ {t("arxiv_domains_title")}</p>', unsafe_allow_html=True
-    )
-    st.markdown(f'<p class="hint-text">{t("arxiv_domains_hint")}</p>', unsafe_allow_html=True)
-
-    current_domains = flat.get("domains", ["quant-ph"])
-    if not isinstance(current_domains, list):
-        current_domains = []
-
-    st.multiselect(
-        t("select_arxiv_cats"),
-        options=ARXIV_CATEGORIES,
-        default=[d for d in current_domains if d in ARXIV_CATEGORIES],
-        key="arxiv_domains",
-    )
-
-    st.text_input(
-        t("custom_domains_label"),
-        value=", ".join(d for d in current_domains if d not in ARXIV_CATEGORIES),
-        key="custom_domains",
-        help=t("custom_domains_help"),
-    )
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:
