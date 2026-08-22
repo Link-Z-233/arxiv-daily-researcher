@@ -322,6 +322,9 @@
     ],
     "enabled_skills": [
       "comprehensive_analysis"
-    ]
+    ],
+    // Custom deep-analysis prompt for the comprehensive skill. Blank keeps
+    // the built-in instruction; the WebUI can save reusable templates.
+    "analysis_prompt": ""
   }
 }
