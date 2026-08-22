@@ -136,6 +136,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "usage_today_prompt": {"zh": "当日输入 tokens", "en": "Today prompt tokens"},
     "usage_today_completion": {"zh": "当日输出 tokens", "en": "Today completion tokens"},
     "usage_month_total": {"zh": "近30天累计用量", "en": "30-day total usage"},
+    "usage_range_totals": {"zh": "所选区间 · 输入 {prompt} · 输出 {completion} · 合计 {total} tokens", "en": "Selected range · prompt {prompt} · completion {completion} · total {total} tokens"},
     "usage_heatmap_tip": {
         "zh": "{date} · {tokens} tokens · {runs} 次运行",
         "en": "{date} · {tokens} tokens · {runs} runs",

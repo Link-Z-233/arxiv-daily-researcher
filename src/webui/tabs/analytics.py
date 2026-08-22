@@ -198,25 +198,52 @@ def _nice_ceiling(value: float) -> float:
     return 10 * (10**exponent)
 
 
+def _fill_daily_gaps(rows: list[dict]) -> list[dict]:
+    """把窗口内缺失的日期补成 0 用量，让 x 轴按真实日期等距分布。"""
+    if not rows:
+        return []
+    by_date = {row["date"]: row for row in rows}
+    start = date.fromisoformat(rows[0]["date"])
+    end = date.fromisoformat(rows[-1]["date"])
+    zero = {"prompt": 0, "completion": 0, "total": 0, "runs": 0}
+    filled = []
+    day = start
+    while day <= end:
+        key = day.isoformat()
+        row = by_date.get(key, zero)
+        filled.append(
+            {
+                "date": key,
+                "prompt": row.get("prompt", 0),
+                "completion": row.get("completion", 0),
+            }
+        )
+        day += timedelta(days=1)
+    return filled
+
+
 def _render_trend_chart_html(rows: list[dict]) -> str:
-    """静态 SVG 折线图：坐标轴随数据自适应，无任何手动缩放/平移交互。"""
+    """静态 SVG 堆叠面积图：输入叠在输出上方，双系列都清晰可见。
+
+    坐标轴随数据自适应，无任何手动缩放/平移交互；x 轴按日期等距
+    分布（缺失日补 0），切换时间段会真实改变图形密度。
+    """
     label_prompt = t("usage_prompt_tokens")
     label_completion = t("usage_completion_tokens")
+
+    rows = _fill_daily_gaps(rows)
+    # 超长历史抽稀采样（一年内不会触发），保证折线可读。
+    if len(rows) > 366:
+        step = -(-len(rows) // 366)
+        rows = rows[::step]
 
     width, height = 760, 280
     pad_left, pad_right, pad_top, pad_bottom = 64, 16, 16, 40
     plot_w = width - pad_left - pad_right
     plot_h = height - pad_top - pad_bottom
 
-    max_value = max(
-        (max(row["prompt"], row["completion"]) for row in rows), default=0
-    )
-    ceiling = _nice_ceiling(max_value * 1.05)
-
-    # 日期过多时抽稀采样，保证折线可读。
-    if len(rows) > 160:
-        step = -(-len(rows) // 160)
-        rows = rows[::step]
+    totals = [row["prompt"] + row["completion"] for row in rows]
+    ceiling = _nice_ceiling(max(totals, default=0) * 1.05)
 
     count = len(rows)
     xs = [
@@ -227,13 +254,26 @@ def _render_trend_chart_html(rows: list[dict]) -> str:
     def y_of(value: float) -> float:
         return pad_top + plot_h * (1 - value / ceiling)
 
-    def polyline(values: list[int]) -> str:
-        return " ".join(
-            f"{x:.1f},{y_of(v):.1f}" for x, v in zip(xs, values)
-        )
+    base_y = pad_top + plot_h
 
-    prompts = [row["prompt"] for row in rows]
+    # 直接构造两个堆叠多边形：输出在底（绿），输入叠在上方（蓝）。
     completions = [row["completion"] for row in rows]
+    prompts = [row["prompt"] for row in rows]
+
+    def stacked_polygon(upper: list[float], lower: list[float], fill: str) -> str:
+        top = [f"{x:.1f},{y_of(v):.1f}" for x, v in zip(xs, upper)]
+        bottom = [
+            f"{x:.1f},{y_of(v):.1f}"
+            for x, v in zip(reversed(xs), reversed(lower))
+        ]
+        return f'<polygon points="{" ".join(top + bottom)}" fill="{fill}" stroke="none"/>'
+
+    def top_line(values: list[float], stroke: str) -> str:
+        pts = " ".join(f"{x:.1f},{y_of(v):.1f}" for x, v in zip(xs, values))
+        return (
+            f'<polyline points="{pts}" fill="none" stroke="{stroke}" '
+            f'stroke-width="1.6" stroke-linejoin="round"/>'
+        )
 
     parts = [
         f'<svg viewBox="0 0 {width} {height}" '
@@ -241,7 +281,7 @@ def _render_trend_chart_html(rows: list[dict]) -> str:
         f'xmlns="http://www.w3.org/2000/svg">'
     ]
 
-    # 网格线 + Y 轴刻度（自适应数据量级）
+    # 网格线 + Y 轴刻度（总量自适应量级）
     for tick in range(5):
         value = ceiling * tick / 4
         y = y_of(value)
@@ -254,27 +294,16 @@ def _render_trend_chart_html(rows: list[dict]) -> str:
             f'font-size="11" fill="#6b7280">{_format_compact(value)}</text>'
         )
 
-    def area(points: str, base_y: float, fill: str) -> str:
-        first_x = points.split(" ")[0].split(",")[0]
-        last_x = points.split(" ")[-1].split(",")[0]
-        return (
-            f'<polygon points="{first_x},{base_y:.1f} {points} {last_x},{base_y:.1f}" '
-            f'fill="{fill}" stroke="none"/>'
-        )
-
-    prompt_line = polyline(prompts)
-    completion_line = polyline(completions)
-    base_y = pad_top + plot_h
-    parts.append(area(prompt_line, base_y, "rgba(37,99,235,0.10)"))
-    parts.append(area(completion_line, base_y, "rgba(22,163,74,0.10)"))
+    # 输出（绿）垫底，输入（蓝）叠在上方；两条上缘线便于读数。
     parts.append(
-        f'<polyline points="{prompt_line}" fill="none" stroke="#2563eb" '
-        f'stroke-width="2" stroke-linejoin="round"/>'
+        stacked_polygon(completions, [0.0] * count, "rgba(22,163,74,0.35)")
     )
+    totals_upper = [p + c for p, c in zip(prompts, completions)]
     parts.append(
-        f'<polyline points="{completion_line}" fill="none" stroke="#16a34a" '
-        f'stroke-width="2" stroke-linejoin="round"/>'
+        stacked_polygon(totals_upper, completions, "rgba(37,99,235,0.28)")
     )
+    parts.append(top_line(completions, "#16a34a"))
+    parts.append(top_line(totals_upper, "#2563eb"))
 
     # X 轴日期标签（最多 6 个，均匀取点）
     label_count = min(6, count)
@@ -370,9 +399,16 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
         st.info(t("usage_empty"))
         return
 
-    components_html(
-        _scroll_right_document(_render_trend_chart_html(window_rows)),
-        height=300,
+    components_html(_render_trend_chart_html(window_rows), height=300)
+
+    range_prompt = sum(row["prompt"] for row in window_rows)
+    range_completion = sum(row["completion"] for row in window_rows)
+    st.caption(
+        t("usage_range_totals").format(
+            prompt=_format_tokens(range_prompt),
+            completion=_format_tokens(range_completion),
+            total=_format_tokens(range_prompt + range_completion),
+        )
     )
 
     st.markdown(

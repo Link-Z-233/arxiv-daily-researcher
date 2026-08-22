@@ -54,25 +54,47 @@ class HeatmapTests(unittest.TestCase):
 
 
 class TrendChartTests(unittest.TestCase):
-    def _rows(self, count: int) -> list[dict]:
-        return [
-            {"date": f"2026-08-{day:02d}", "prompt": 100 * day, "completion": 20 * day}
-            for day in range(1, count + 1)
-        ]
+    def _rows(self, count: int, *, gap_after: int | None = None) -> list[dict]:
+        start = date(2026, 8, 1)
+        rows = []
+        for i in range(count):
+            if gap_after is not None and i == gap_after:
+                start += timedelta(days=5)  # 制造 5 天缺口
+            rows.append(
+                {
+                    "date": (start + timedelta(days=i)).isoformat(),
+                    "prompt": 100 * (i + 1),
+                    "completion": 20 * (i + 1),
+                }
+            )
+        return rows
 
-    def test_chart_is_static_svg_with_adaptive_axis_labels(self):
+    def test_chart_is_stacked_svg_with_adaptive_axis_labels(self):
         html = analytics._render_trend_chart_html(self._rows(30))
         self.assertIn("<svg", html)
-        self.assertIn("<polyline", html)
-        # 最大值 3000 → 好看刻度 5000 出现在 Y 轴标签里
+        self.assertIn("<polygon", html)
+        # 最大总量 3600 → 好看刻度 5000 出现在 Y 轴标签里
         self.assertIn("5.0k", html)
         self.assertNotIn("vega", html.lower())
 
+    def test_missing_days_are_filled_with_zero_usage(self):
+        rows = analytics._fill_daily_gaps(self._rows(4, gap_after=1))
+        dates = [row["date"] for row in rows]
+        # 缺口内日期补 0，x 轴按真实日期等距
+        self.assertEqual(dates[0], "2026-08-01")
+        self.assertIn("2026-08-04", dates)
+        self.assertIn("2026-08-07", dates)
+        gap_row = next(
+            row for row in rows if row["date"] == "2026-08-03"
+        )
+        self.assertEqual(gap_row["prompt"], 0)
+        self.assertEqual(gap_row["completion"], 0)
+
     def test_many_dates_are_downsampled(self):
         html = analytics._render_trend_chart_html(self._rows(400))
-        # 抽稀后每个点仍是 x,y 形式；仅断言可渲染且不异常
-        self.assertIn("<polyline", html)
-        self.assertIn("2026-08-01"[5:], html)
+        # 抽稀后仍可渲染；首日标签来自第一条数据
+        self.assertIn("<polygon", html)
+        self.assertIn("08-01", html)
 
 
 if __name__ == "__main__":
