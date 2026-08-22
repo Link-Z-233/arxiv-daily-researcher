@@ -126,6 +126,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "usage_total_tokens": {"zh": "总 tokens", "en": "Total tokens"},
     "usage_by_model_title": {"zh": "按模型汇总", "en": "By model"},
     "usage_model": {"zh": "模型", "en": "Model"},
+    "usage_today_prompt": {"zh": "当日输入 tokens", "en": "Today prompt tokens"},
+    "usage_today_completion": {"zh": "当日输出 tokens", "en": "Today completion tokens"},
+    "usage_month_prompt": {"zh": "近30天输入 tokens", "en": "30-day prompt tokens"},
+    "usage_month_total": {"zh": "近30天累计用量", "en": "30-day total usage"},
+    "usage_heatmap_tip": {
+        "zh": "{date} · {tokens} tokens · {runs} 次运行",
+        "en": "{date} · {tokens} tokens · {runs} runs",
+    },
+    "usage_heatmap_none": {"zh": "{date} · 无用量", "en": "{date} · no usage"},
     # ── 报告查看页：随手标记（原收藏偏好页融合）─────────────────────────
     "tab_paper_search": {"zh": "论文检索", "en": "Paper Search"},
     "fav_hint": {

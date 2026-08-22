@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from utils.daily_research_store import DailyResearchStore
 from utils.scoring_evaluation import (
@@ -30,6 +31,9 @@ _MONTH_LABELS = [
     "7月", "8月", "9月", "10月", "11月", "12月",
 ]
 
+# 热力图窗口：只看近一个月。
+_HEATMAP_DAYS = 30
+
 _RANGE_DAYS = [
     ("7", 7),
     ("30", 30),
@@ -37,6 +41,23 @@ _RANGE_DAYS = [
     ("365", 365),
     ("all", None),
 ]
+
+
+def components_html(html: str, *, height: int) -> None:
+    """components.html 的薄封装，便于测试替换。"""
+    components.html(html, height=height, scrolling=False)
+
+
+def _scroll_right_document(body_html: str) -> str:
+    """包一层文档并让横向滚动容器默认滚到最右（展示最新日期）。"""
+    return (
+        '<!doctype html><html><head><meta charset="utf-8"><style>'
+        "html,body{margin:0;padding:4px 0;}</style></head><body>"
+        f"{body_html}"
+        "<script>(function(){var w=document.getElementById('usage-heatmap');"
+        "if(w){w.scrollLeft=w.scrollWidth;}})();</script>"
+        "</body></html>"
+    )
 
 
 # ─── 用量统计 ─────────────────────────────────────────────────────────────────
@@ -49,6 +70,14 @@ def _load_daily_totals(store: DailyResearchStore) -> dict[str, dict]:
 
 def _format_tokens(value: int) -> str:
     return f"{value:,}"
+
+
+def _format_compact(value: float) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}k"
+    return f"{value:.0f}"
 
 
 def _heat_level(total: int, daily_max: int) -> int:
@@ -65,13 +94,18 @@ def _heat_level(total: int, daily_max: int) -> int:
 
 
 def _render_heatmap_html(daily: dict[str, dict]) -> str:
-    """最近 53 周的日用量热力图，纯 HTML/CSS，无外部依赖。"""
+    """近一个月的日用量热力图；容器默认滚动到最右（最新日期可见）。"""
     today = date.today()
-    # 网格从 52 周前的周一开始，到本周为止（GitHub 布局，列为周、行为星期）。
-    this_monday = today - timedelta(days=today.weekday())
-    start = this_monday - timedelta(weeks=52)
+    first_day = today - timedelta(days=_HEATMAP_DAYS - 1)
+    # 网格从 first_day 所在周的周一开始（GitHub 布局，列为周、行为星期）。
+    start = first_day - timedelta(days=first_day.weekday())
+    weeks = -(-(today - start).days // 7)
 
-    daily_max = max(d["total"] for d in daily.values()) if daily else 0
+    daily_max = 0
+    for offset in range(_HEATMAP_DAYS):
+        row = daily.get((first_day + timedelta(days=offset)).isoformat())
+        if row:
+            daily_max = max(daily_max, row["total"])
 
     def cell(day: date) -> str:
         key = day.isoformat()
@@ -80,61 +114,184 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
         level = _heat_level(total, daily_max)
         runs = row["runs"] if row else 0
         tooltip = (
-            f"{key} · {total:,} tokens · {runs} 次运行"
+            t("usage_heatmap_tip").format(date=key, tokens=f"{total:,}", runs=runs)
             if total
-            else f"{key} · 无用量"
+            else t("usage_heatmap_none").format(date=key)
         )
         return (
-            f'<td title="{tooltip}" style="width:11px;height:11px;'
-            f'border-radius:2px;background:{_HEAT_LEVEL_COLORS[level]};"></td>'
+            f'<td title="{tooltip}" style="width:16px;height:16px;'
+            f'border-radius:3px;background:{_HEAT_LEVEL_COLORS[level]};"></td>'
         )
 
     grid_rows = []
     for weekday in range(7):
         prefix = (
-            f'<td style="padding:0 4px 0 0;font-size:10px;color:#666;'
+            f'<td style="padding:0 6px 0 0;font-size:11px;color:#666;'
             f'white-space:nowrap;">{_WEEK_LABELS[weekday]}</td>'
         )
         cells = [
             cell(start + timedelta(weeks=week_offset, days=weekday))
-            for week_offset in range(53)
+            for week_offset in range(weeks)
         ]
         grid_rows.append("<tr>" + prefix + "".join(cells) + "</tr>")
 
     # 月份标签行：每周的起始日进入新月份时打一个标签。
     month_cells = []
     current_month = -1
-    for week_offset in range(53):
+    for week_offset in range(weeks):
         week_start = start + timedelta(weeks=week_offset)
         label = ""
         if week_start.month != current_month:
             current_month = week_start.month
             label = _MONTH_LABELS[current_month - 1]
         month_cells.append(
-            f'<td style="font-size:10px;color:#666;padding:0 0 2px 0;'
+            f'<td style="font-size:11px;color:#666;padding:0 0 2px 0;'
             f'white-space:nowrap;">{label}</td>'
         )
     header_row = '<tr><td style="width:26px;"></td>' + "".join(month_cells) + "</tr>"
 
     legend = "".join(
-        f'<span style="display:inline-block;width:11px;height:11px;'
-        f'border-radius:2px;background:{color};margin:0 1px;"></span>'
+        f'<span style="display:inline-block;width:16px;height:16px;'
+        f'border-radius:3px;background:{color};margin:0 1px;"></span>'
         for color in _HEAT_LEVEL_COLORS
     )
     legend_html = (
-        f'<div style="font-size:10px;color:#666;margin-top:6px;">'
+        f'<div style="font-size:11px;color:#666;margin-top:6px;">'
         f'{t("usage_heatmap_less")} {legend} {t("usage_heatmap_more")}</div>'
     )
 
     return (
-        '<div style="overflow-x:auto;">'
-        '<table style="border-collapse:separate;border-spacing:2px 2px;">'
+        '<div id="usage-heatmap" style="overflow-x:auto;">'
+        '<table style="border-collapse:separate;border-spacing:3px 3px;">'
         f"{header_row}"
         + "".join(grid_rows)
         + "</table>"
         + legend_html
         + "</div>"
     )
+
+
+def _nice_ceiling(value: float) -> float:
+    """把数据最大值向上取整到 1/2/5×10^k 的"好看"刻度。"""
+    if value <= 0:
+        return 1.0
+    exponent = 0
+    scaled = value
+    while scaled > 10:
+        scaled /= 10
+        exponent += 1
+    while scaled < 1:
+        scaled *= 10
+        exponent -= 1
+    for step in (1, 2, 5, 10):
+        if scaled <= step:
+            return step * (10**exponent)
+    return 10 * (10**exponent)
+
+
+def _render_trend_chart_html(rows: list[dict]) -> str:
+    """静态 SVG 折线图：坐标轴随数据自适应，无任何手动缩放/平移交互。"""
+    label_prompt = t("usage_prompt_tokens")
+    label_completion = t("usage_completion_tokens")
+
+    width, height = 760, 280
+    pad_left, pad_right, pad_top, pad_bottom = 64, 16, 16, 40
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
+
+    max_value = max(
+        (max(row["prompt"], row["completion"]) for row in rows), default=0
+    )
+    ceiling = _nice_ceiling(max_value * 1.05)
+
+    # 日期过多时抽稀采样，保证折线可读。
+    if len(rows) > 160:
+        step = -(-len(rows) // 160)
+        rows = rows[::step]
+
+    count = len(rows)
+    xs = [
+        pad_left + (i * plot_w / (count - 1) if count > 1 else plot_w / 2)
+        for i in range(count)
+    ]
+
+    def y_of(value: float) -> float:
+        return pad_top + plot_h * (1 - value / ceiling)
+
+    def polyline(values: list[int]) -> str:
+        return " ".join(
+            f"{x:.1f},{y_of(v):.1f}" for x, v in zip(xs, values)
+        )
+
+    prompts = [row["prompt"] for row in rows]
+    completions = [row["completion"] for row in rows]
+
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" '
+        f'style="width:100%;height:auto;font-family:sans-serif;" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+    ]
+
+    # 网格线 + Y 轴刻度（自适应数据量级）
+    for tick in range(5):
+        value = ceiling * tick / 4
+        y = y_of(value)
+        parts.append(
+            f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" '
+            f'y2="{y:.1f}" stroke="#e5e7eb" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{pad_left - 8}" y="{y + 4:.1f}" text-anchor="end" '
+            f'font-size="11" fill="#6b7280">{_format_compact(value)}</text>'
+        )
+
+    def area(points: str, base_y: float, fill: str) -> str:
+        first_x = points.split(" ")[0].split(",")[0]
+        last_x = points.split(" ")[-1].split(",")[0]
+        return (
+            f'<polygon points="{first_x},{base_y:.1f} {points} {last_x},{base_y:.1f}" '
+            f'fill="{fill}" stroke="none"/>'
+        )
+
+    prompt_line = polyline(prompts)
+    completion_line = polyline(completions)
+    base_y = pad_top + plot_h
+    parts.append(area(prompt_line, base_y, "rgba(37,99,235,0.10)"))
+    parts.append(area(completion_line, base_y, "rgba(22,163,74,0.10)"))
+    parts.append(
+        f'<polyline points="{prompt_line}" fill="none" stroke="#2563eb" '
+        f'stroke-width="2" stroke-linejoin="round"/>'
+    )
+    parts.append(
+        f'<polyline points="{completion_line}" fill="none" stroke="#16a34a" '
+        f'stroke-width="2" stroke-linejoin="round"/>'
+    )
+
+    # X 轴日期标签（最多 6 个，均匀取点）
+    label_count = min(6, count)
+    for i in range(label_count):
+        index = round(i * (count - 1) / (label_count - 1)) if label_count > 1 else 0
+        parts.append(
+            f'<text x="{xs[index]:.1f}" y="{height - 16}" text-anchor="middle" '
+            f'font-size="11" fill="#6b7280">{rows[index]["date"][5:]}</text>'
+        )
+
+    # 图例
+    parts.append(
+        f'<rect x="{pad_left}" y="4" width="12" height="12" fill="#2563eb"/>'
+        f'<text x="{pad_left + 18}" y="14" font-size="12" fill="#374151">'
+        f"{label_prompt}</text>"
+    )
+    prompt_text_width = 18 + len(label_prompt) * 12
+    parts.append(
+        f'<rect x="{pad_left + prompt_text_width}" y="4" width="12" height="12" '
+        f'fill="#16a34a"/>'
+        f'<text x="{pad_left + prompt_text_width + 18}" y="14" font-size="12" '
+        f'fill="#374151">{label_completion}</text>'
+    )
+
+    parts.append("</svg>")
+    return "".join(parts)
 
 
 def _render_usage_section(_env_values: dict, config_values: dict) -> None:
@@ -163,15 +320,34 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
         st.info(t("usage_empty"))
         return
 
+    # ── 顶部汇总：当日输入/输出 + 近 30 天累计 ────────────────────────────
+    today_row = daily.get(date.today().isoformat()) or {"prompt": 0, "completion": 0}
+    month_rows = store.get_daily_token_totals(days=30)
+    month_prompt = sum(row["prompt"] for row in month_rows)
+    month_completion = sum(row["completion"] for row in month_rows)
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(t("usage_today_prompt"), _format_tokens(today_row["prompt"]))
+    with col2:
+        st.metric(t("usage_today_completion"), _format_tokens(today_row["completion"]))
+    with col3:
+        st.metric(t("usage_month_prompt"), _format_tokens(month_prompt))
+    with col4:
+        st.metric(
+            t("usage_month_total"),
+            _format_tokens(month_prompt + month_completion),
+        )
+
+    # ── 热力图（近一个月，默认滚动到最右/最新）────────────────────────────
     st.markdown(
         f'<p class="subsection-title">{t("usage_heatmap_title")}</p>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        _render_heatmap_html(daily),
-        unsafe_allow_html=True,
-    )
+    heatmap_html = _render_heatmap_html(daily)
+    components_html(_scroll_right_document(heatmap_html), height=190)
 
+    # ── 用量趋势（静态自适应折线图）────────────────────────────────────────
     st.markdown(
         f'<p class="subsection-title">{t("usage_trend_title")}</p>',
         unsafe_allow_html=True,
@@ -191,24 +367,10 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
         st.info(t("usage_empty"))
         return
 
-    frame = pd.DataFrame(
-        {
-            t("usage_prompt_tokens"): [row["prompt"] for row in window_rows],
-            t("usage_completion_tokens"): [row["completion"] for row in window_rows],
-        },
-        index=pd.to_datetime([row["date"] for row in window_rows]),
+    components_html(
+        _scroll_right_document(_render_trend_chart_html(window_rows)),
+        height=300,
     )
-    st.area_chart(frame, height=280)
-
-    total_prompt = sum(row["prompt"] for row in window_rows)
-    total_completion = sum(row["completion"] for row in window_rows)
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(t("usage_prompt_tokens"), _format_tokens(total_prompt))
-    with col2:
-        st.metric(t("usage_completion_tokens"), _format_tokens(total_completion))
-    with col3:
-        st.metric(t("usage_total_tokens"), _format_tokens(total_prompt + total_completion))
 
     st.markdown(
         f'<p class="subsection-title">{t("usage_by_model_title")}</p>',

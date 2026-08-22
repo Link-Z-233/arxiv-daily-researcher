@@ -1,0 +1,76 @@
+"""数据分析页用量统计改版的回归测试：近一月热力图 + 静态自适应折线图。"""
+
+import sys
+import unittest
+from datetime import date, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from webui.tabs import analytics  # noqa: E402
+
+
+def _row(prompt: int, completion: int, runs: int = 1) -> dict:
+    return {
+        "prompt": prompt,
+        "completion": completion,
+        "total": prompt + completion,
+        "runs": runs,
+    }
+
+
+class NiceCeilingTests(unittest.TestCase):
+    def test_ceiling_is_rounded_up_to_nice_steps(self):
+        self.assertEqual(analytics._nice_ceiling(0), 1.0)
+        self.assertEqual(analytics._nice_ceiling(3), 5.0)
+        self.assertEqual(analytics._nice_ceiling(60), 100.0)
+        self.assertEqual(analytics._nice_ceiling(4_800), 5_000.0)
+        self.assertEqual(analytics._nice_ceiling(1_200_000), 2_000_000.0)
+
+
+class HeatmapTests(unittest.TestCase):
+    def test_heatmap_covers_only_the_last_month_and_autoscrolls_right(self):
+        today = date.today()
+        inside = today - timedelta(days=10)
+        outside = today - timedelta(days=40)
+        daily = {
+            today.isoformat(): _row(100, 50),
+            inside.isoformat(): _row(200, 80),
+            outside.isoformat(): _row(9_999, 9_999),  # 近一月之外，不应出现
+        }
+        html = analytics._render_heatmap_html(daily)
+
+        self.assertIn('id="usage-heatmap"', html)
+        self.assertNotIn(outside.isoformat(), html)
+        self.assertIn(today.isoformat(), html)
+        self.assertIn(inside.isoformat(), html)
+
+    def test_heatmap_document_autoscrolls_to_the_latest(self):
+        document = analytics._scroll_right_document(analytics._render_heatmap_html({}))
+        self.assertIn("scrollLeft=w.scrollWidth", document)
+
+
+class TrendChartTests(unittest.TestCase):
+    def _rows(self, count: int) -> list[dict]:
+        return [
+            {"date": f"2026-08-{day:02d}", "prompt": 100 * day, "completion": 20 * day}
+            for day in range(1, count + 1)
+        ]
+
+    def test_chart_is_static_svg_with_adaptive_axis_labels(self):
+        html = analytics._render_trend_chart_html(self._rows(30))
+        self.assertIn("<svg", html)
+        self.assertIn("<polyline", html)
+        # 最大值 3000 → 好看刻度 5000 出现在 Y 轴标签里
+        self.assertIn("5.0k", html)
+        self.assertNotIn("vega", html.lower())
+
+    def test_many_dates_are_downsampled(self):
+        html = analytics._render_trend_chart_html(self._rows(400))
+        # 抽稀后每个点仍是 x,y 形式；仅断言可渲染且不异常
+        self.assertIn("<polyline", html)
+        self.assertIn("2026-08-01"[5:], html)
+
+
+if __name__ == "__main__":
+    unittest.main()
