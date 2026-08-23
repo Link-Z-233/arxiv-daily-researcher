@@ -1162,6 +1162,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Read the v3.2 JSON history and all HTML reports into SQLite in one click: duplicated analyses resolve to the newest report, papers with missing data or missed by old scans are queued for a supplement run. The job starts automatically when the daily/trend tasks are idle.",
     },
     "dm_legacy_import_btn": {"zh": "📜 读取旧历史", "en": "📜 Read Legacy History"},
+    "dm_supplement_btn": {"zh": "🧾 生成补充报告", "en": "🧾 Build Supplement Report"},
+    "dm_supplement_help": {
+        "zh": "把补充积压中的论文（缺数据/遗漏）按「本次最多处理论文数」重跑评分/翻译/分析并生成一份补充报告；会消耗 LLM 额度，任务在空闲时自动运行。",
+        "en": "Re-run the backlogged papers (incomplete/missed) through scoring/translation/analysis, capped by max papers per run, into one supplement report; consumes LLM quota and starts when idle.",
+    },
+    "dm_supplement_queued": {
+        "zh": "已加入触发队列：worker 空闲时自动生成补充报告。",
+        "en": "Queued: the worker will build the supplement report when idle.",
+    },
     "dm_legacy_queued": {
         "zh": "已加入触发队列：worker 空闲时自动开始读取旧历史。",
         "en": "Queued: the worker will read the legacy history when idle.",

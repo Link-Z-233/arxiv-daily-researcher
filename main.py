@@ -38,8 +38,8 @@ def parse_args(argv: Optional[Sequence[str]] = None):
     parser.add_argument(
         "--mode",
         default="daily_research",
-        choices=["daily_research", "trend_research", "legacy_import"],
-        help="运行模式：daily_research（每日研究，默认）、trend_research（研究趋势分析）或 legacy_import（旧版本历史导入）",
+        choices=["daily_research", "trend_research", "legacy_import", "supplement_run"],
+        help="运行模式：daily_research（每日研究，默认）、trend_research（研究趋势分析）、legacy_import（旧版本历史导入）或 supplement_run（补充报告）",
     )
     parser.add_argument(
         "--keywords",
@@ -180,6 +180,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         from modes.legacy_import import main as legacy_import_main
 
         return legacy_import_main()
+
+    if args.mode == "supplement_run":
+        # 补充报告：重跑旧历史缺失/遗漏论文，产出一份补充报告。
+        log_file = setup_run_log("supplement_run")
+        logger.info(f"补充运行日志文件: {log_file}")
+
+        from modes.daily_research import DailyResearchPipeline
+        from utils.run_lock import AUX_JOB_MODES, wait_for_idle
+
+        wait_for_idle(
+            ("daily_research", "trend_research_*", *AUX_JOB_MODES),
+            poll_seconds=30,
+            timeout_seconds=12 * 3600,
+            logger=logger,
+            wait_note="补充运行等待其他任务空闲",
+        )
+        with run_lock("supplement_run"):
+            result = DailyResearchPipeline().run(run_kind="supplement")
+        return _result_exit_code(result)
 
     # 每日研究模式（默认）
     log_file = setup_run_log("daily_research")

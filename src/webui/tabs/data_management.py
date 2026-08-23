@@ -328,18 +328,35 @@ def _render_legacy_import_section(config_values: dict) -> None:
     queue_dir = trigger_directory(_PROJECT_ROOT / "data")
     trigger_pending = bool(list(queue_dir.glob("*.json"))) if queue_dir.exists() else False
 
-    if st.button(
-        t("dm_legacy_import_btn"),
-        use_container_width=True,
-        disabled=trigger_pending,
-        type="primary",
-    ):
-        _enqueue_legacy_import()
+    col_import, col_supplement = st.columns(2)
+    with col_import:
+        if st.button(
+            t("dm_legacy_import_btn"),
+            use_container_width=True,
+            disabled=trigger_pending,
+            type="primary",
+        ):
+            _enqueue_legacy_import()
+    with col_supplement:
+        backlog_pending = None
+        store_probe = _legacy_import_store(config_values)
+        if store_probe is not None:
+            try:
+                backlog_pending = store_probe.supplement_backlog_summary().get("pending", 0)
+            except Exception:
+                backlog_pending = None
+        if st.button(
+            t("dm_supplement_btn"),
+            use_container_width=True,
+            disabled=trigger_pending or not backlog_pending,
+            help=t("dm_supplement_help"),
+        ):
+            _enqueue_legacy_import(mode="supplement_run", queued_key="dm_supplement_queued")
 
     if trigger_pending:
         st.info(t("dm_legacy_running_hint"))
 
-    store = _legacy_import_store(config_values)
+    store = store_probe
     if store is None:
         return
 
@@ -394,31 +411,31 @@ def _render_legacy_import_section(config_values: dict) -> None:
         )
 
 
-def _enqueue_legacy_import() -> None:
-    """Docker 模式走触发队列；本地模式直接后台启动导入进程。"""
+def _enqueue_legacy_import(mode: str = "legacy_import", queued_key: str = "dm_legacy_queued") -> None:
+    """Docker 模式走触发队列；本地模式直接后台启动对应进程。"""
     main_py = _PROJECT_ROOT / "main.py"
     if not main_py.exists():
         try:
-            enqueue_trigger(_PROJECT_ROOT / "data", "legacy_import")
+            enqueue_trigger(_PROJECT_ROOT / "data", mode)
         except Exception as e:
             st.error(f"{t('dm_legacy_failed')}: {e}")
             return
-        st.toast(t("dm_legacy_queued"), icon="📜")
+        st.toast(t(queued_key), icon="📜")
         st.rerun()
 
     logs_dir = _PROJECT_ROOT / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    log_file = logs_dir / f"legacy_import_{datetime.now():%Y%m%d_%H%M%S}.log"
+    log_file = logs_dir / f"{mode}_{datetime.now():%Y%m%d_%H%M%S}.log"
     try:
         with open(log_file, "w") as lf:
             subprocess.Popen(
-                [sys.executable, str(main_py), "--mode", "legacy_import"],
+                [sys.executable, str(main_py), "--mode", mode],
                 cwd=str(_PROJECT_ROOT),
                 stdout=lf,
                 stderr=lf,
                 start_new_session=True,
             )
-        st.toast(t("dm_legacy_queued"), icon="📜")
+        st.toast(t(queued_key), icon="📜")
         st.rerun()
     except Exception as e:
         st.error(f"{t('dm_legacy_failed')}: {e}")

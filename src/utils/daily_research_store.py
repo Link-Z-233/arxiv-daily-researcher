@@ -2632,6 +2632,28 @@ class DailyResearchStore:
             ).fetchone()
             return row is not None
 
+    def is_paper_delivered_strict(self, source: str, paper_id: str) -> bool:
+        """Ledger-only delivery check without the ``completed_at`` fallback.
+
+        Supplement candidates may carry a historical ``completed_at`` from the
+        legacy import while still needing one real delivery; only an exact
+        ledger row counts as delivered for them.
+        """
+        from sources.base_source import paper_identity
+
+        canonical_id, version = paper_identity(source, paper_id)
+        normalized_version = version if version is not None else 0
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM paper_deliveries
+                WHERE source = ? AND canonical_id = ? AND version = ?
+                LIMIT 1
+                """,
+                (source, canonical_id, normalized_version),
+            ).fetchone()
+            return row is not None
+
     def has_delivered_arxiv_canonical(self, canonical_id: str) -> bool:
         """Return whether any delivered arXiv version exists for a canonical ID.
 

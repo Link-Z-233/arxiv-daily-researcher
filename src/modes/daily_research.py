@@ -22,7 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -578,6 +578,112 @@ def _add_paper_delivery_context(
         }
 
 
+def _paper_metadata_from_backlog_payload(
+    payload: Dict[str, Any], source: str
+) -> Optional[PaperMetadata]:
+    """从积压行持久化的 paper_json 重建 PaperMetadata（缺字段容错）。"""
+    try:
+        published = payload.get("published_date")
+        return PaperMetadata(
+            paper_id=str(payload["paper_id"]),
+            title=str(payload.get("title") or payload["paper_id"]),
+            authors=[str(item) for item in (payload.get("authors") or [])],
+            abstract=str(payload.get("abstract") or ""),
+            published_date=(
+                datetime.fromisoformat(published) if published else datetime.now()
+            ),
+            url=str(payload.get("url") or ""),
+            source=source,
+            pdf_url=payload.get("pdf_url"),
+            doi=payload.get("doi"),
+            journal=payload.get("journal"),
+            categories=[str(item) for item in (payload.get("categories") or [])],
+            semantic_scholar_tldr=payload.get("semantic_scholar_tldr"),
+            arxiv_id=payload.get("arxiv_id"),
+            arxiv_url=payload.get("arxiv_url"),
+            canonical_id=payload.get("canonical_id"),
+            version=payload.get("version"),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _load_supplement_candidates(
+    store: DailyResearchStore,
+    run_id: str,
+) -> Tuple[
+    Dict[str, List[PaperMetadata]], List[Tuple[str, str, int]], int
+]:
+    """装载本次补充运行要处理的积压论文。
+
+    返回 (papers_by_source, 选中的 (source, canonical, version) 身份列表,
+    元数据获取失败条数)。缺 paper_json 的 arXiv 行按 ID 补抓元数据；
+    抓不到或其他来源无法补抓的行记为 failed 留待再次重试。
+    """
+    limit = int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0) or 0)
+    rows = store.claim_supplement_backlog(limit if limit > 0 else 10000)
+
+    need_fetch_ids: List[str] = []
+    for row in rows:
+        if row["source"] == "arxiv" and not row.get("paper_json"):
+            paper_id = str(row.get("paper_id") or "").strip()
+            if paper_id:
+                need_fetch_ids.append(paper_id)
+
+    fetched: Dict[str, PaperMetadata] = {}
+    if need_fetch_ids:
+        try:
+            from sources.arxiv_source import ArxivSource
+
+            arxiv_source = ArxivSource(
+                history_dir=settings.HISTORY_DIR,
+                proxy_dict=settings.get_proxy_dict("arxiv"),
+                load_legacy_history=False,
+            )
+            fetched = arxiv_source.fetch_papers_by_ids(need_fetch_ids)
+            logger.info("补充积压按 ID 补抓元数据: 请求 %s，成功 %s", len(need_fetch_ids), len(fetched))
+        except Exception as exc:
+            logger.warning("补充积压元数据补抓失败（本次跳过这些论文）: %s", exc)
+
+    papers_by_source: Dict[str, List[PaperMetadata]] = {}
+    selected: List[Tuple[str, str, int]] = []
+    failed: List[Tuple[str, str, int]] = []
+    for row in rows:
+        source = row["source"]
+        canonical_id = row["canonical_id"]
+        version = int(row.get("version") or 0)
+        identity = (source, canonical_id, version)
+
+        paper = None
+        if row.get("paper_json"):
+            paper = _paper_metadata_from_backlog_payload(row["paper_json"], source)
+        if paper is None and source == "arxiv":
+            paper = fetched.get(canonical_id)
+        if paper is None:
+            failed.append(identity)
+            logger.warning(
+                "补充积压论文无法获取元数据，记为失败待重试: %s:%sv%s",
+                source, canonical_id, version,
+            )
+            continue
+
+        if store.is_paper_delivered_strict(source, paper.paper_id):
+            # 导入之后已被其他运行交付：直接销账，避免重复推送。
+            store.resolve_supplement_backlog(
+                run_id, [identity], status="delivered", detail="已由其他运行交付"
+            )
+            continue
+
+        papers_by_source.setdefault(source, []).append(paper)
+        selected.append(identity)
+
+    if failed:
+        store.resolve_supplement_backlog(
+            run_id, failed, status="failed", detail="无法获取论文元数据"
+        )
+    return papers_by_source, selected, len(failed)
+
+
 def _delivered_papers_for_finalization(
     scored_papers_by_source: Dict[str, List[Dict[str, Any]]],
     analyses_by_source: Dict[str, List[Dict[str, Any]]],
@@ -654,9 +760,14 @@ class DailyResearchPipeline:
     从多个数据源抓取论文，评分筛选，深度分析，生成报告，发送通知。
     """
 
-    def run(self):
+    def run(self, run_kind: str = "daily"):
         """
         执行每日研究完整流程。
+
+        ``run_kind``:
+        - "daily"（默认）：正常扫描-评分-报告流程；
+        - "supplement"：跳过扫描，从补充积压（旧历史缺数据/遗漏论文）
+          装载候选，走同一评分/分析/报告/原子交付流程，产出补充报告。
         """
         store = None
         run_id = None
@@ -785,182 +896,218 @@ class DailyResearchPipeline:
             logger.info(">>> 阶段3: 从多个数据源抓取论文...")
             store.record_run_phase(run_id, "scan")
 
-            search_agent = SearchAgent(
-                history_dir=settings.HISTORY_DIR,
-                enabled_sources=settings.ENABLED_SOURCES,
-                arxiv_domains=settings.TARGET_DOMAINS,
-                journals=settings.TARGET_JOURNALS,
-                openalex_email=settings.OPENALEX_EMAIL,
-                openalex_api_key=settings.OPENALEX_API_KEY,
-                enable_semantic_scholar=settings.ENABLE_SEMANTIC_SCHOLAR_TLDR,
-                semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
-                extra_source_definitions=getattr(settings, "EXTRA_SOURCE_DEFINITIONS", []),
-                # SQLite is the sole daily-history authority. Legacy JSON files
-                # are neither read as a filter nor updated after delivery.
-                use_legacy_history_filter=False,
-            )
+            search_agent = None
+            supplement_identities: List[Tuple[str, str, int]] = []
 
-            # Semantic Scholar is optional enrichment, but a synchronous
-            # lookup can take a while for journal-heavy scans.  Establish the
-            # recovery checkpoint immediately before the source queries, not
-            # before construction/configuration work, so a successful scan
-            # window starts where the APIs were actually queried.
-            effective_scan_days = settings.SEARCH_DAYS
-            if store and run_id:
-                # A failed run must not let its unreported papers age out of
-                # the user-configured window.  The store records a per-source
-                # checkpoint only after a complete report/no-paper scan has
-                # committed, so this recovery window is expanded precisely
-                # when a prior scan did not reach a durable terminal state.
-                effective_scan_days = store.prepare_scan(
-                    run_id,
-                    settings.SEARCH_DAYS,
-                    search_agent.get_enabled_sources(),
+            if run_kind == "supplement":
+                # 补充运行不扫描：候选来自旧历史导入/时间段扫描写入的
+                # 补充积压表；无 prepare_scan → 交付时不要求扫描收据，
+                # 也不会推进任何来源的扫描水位线。
+                (
+                    papers_by_source,
+                    supplement_identities,
+                    fetch_failures,
+                ) = _load_supplement_candidates(store, run_id)
+                registered_candidate_count = sum(
+                    len(papers) for papers in papers_by_source.values()
                 )
-                if effective_scan_days > settings.SEARCH_DAYS:
+                total_papers_count = registered_candidate_count
+                backlog_summary = store.supplement_backlog_summary()
+                pending_paper_count = backlog_summary["pending"]
+                deferred_paper_count = pending_paper_count - total_papers_count
+                if fetch_failures:
                     logger.warning(
-                        "日报恢复扫描窗口已扩展: 配置 %s 天 -> %s 天；"
-                        "已交付版本会由 SQLite 账本过滤，不会重复推送",
-                        settings.SEARCH_DAYS,
-                        effective_scan_days,
+                        "补充积压 %s 条论文无法获取元数据，已记为失败（下次触发会重试）",
+                        fetch_failures,
                     )
+                logger.info(
+                    "补充运行：积压待处理 %s 篇，本次处理 %s 篇，留待后续 %s 篇（%s 个数据源）",
+                    pending_paper_count,
+                    total_papers_count,
+                    deferred_paper_count,
+                    len(papers_by_source),
+                )
+            else:
+                search_agent = SearchAgent(
+                    history_dir=settings.HISTORY_DIR,
+                    enabled_sources=settings.ENABLED_SOURCES,
+                    arxiv_domains=settings.TARGET_DOMAINS,
+                    journals=settings.TARGET_JOURNALS,
+                    openalex_email=settings.OPENALEX_EMAIL,
+                    openalex_api_key=settings.OPENALEX_API_KEY,
+                    enable_semantic_scholar=settings.ENABLE_SEMANTIC_SCHOLAR_TLDR,
+                    semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
+                    extra_source_definitions=getattr(settings, "EXTRA_SOURCE_DEFINITIONS", []),
+                    # SQLite is the sole daily-history authority. Legacy JSON files
+                    # are neither read as a filter nor updated after delivery.
+                    use_legacy_history_filter=False,
+                )
 
-            try:
-                scan_receipt_callbacks = {}
+                # Semantic Scholar is optional enrichment, but a synchronous
+                # lookup can take a while for journal-heavy scans.  Establish the
+                # recovery checkpoint immediately before the source queries, not
+                # before construction/configuration work, so a successful scan
+                # window starts where the APIs were actually queried.
+                effective_scan_days = settings.SEARCH_DAYS
                 if store and run_id:
-                    # Receipt persistence is part of source completeness, not
-                    # optional analytics. Every configured report source gets
-                    # one callback: arXiv emits a rich domain receipt, while
-                    # supplementary feeds/each OpenAlex journal emit a source
-                    # summary. A callback failure aborts before reports or
-                    # watermarks can make an incomplete scan look complete.
-                    for receipt_source in search_agent.get_enabled_sources():
-                        scan_receipt_callbacks[receipt_source] = (
-                            lambda receipt, source=receipt_source: store.record_scan_receipt(
-                                run_id, source, receipt
+                    # A failed run must not let its unreported papers age out of
+                    # the user-configured window.  The store records a per-source
+                    # checkpoint only after a complete report/no-paper scan has
+                    # committed, so this recovery window is expanded precisely
+                    # when a prior scan did not reach a durable terminal state.
+                    effective_scan_days = store.prepare_scan(
+                        run_id,
+                        settings.SEARCH_DAYS,
+                        search_agent.get_enabled_sources(),
+                    )
+                    if effective_scan_days > settings.SEARCH_DAYS:
+                        logger.warning(
+                            "日报恢复扫描窗口已扩展: 配置 %s 天 -> %s 天；"
+                            "已交付版本会由 SQLite 账本过滤，不会重复推送",
+                            settings.SEARCH_DAYS,
+                            effective_scan_days,
+                        )
+
+                try:
+                    scan_receipt_callbacks = {}
+                    if store and run_id:
+                        # Receipt persistence is part of source completeness, not
+                        # optional analytics. Every configured report source gets
+                        # one callback: arXiv emits a rich domain receipt, while
+                        # supplementary feeds/each OpenAlex journal emit a source
+                        # summary. A callback failure aborts before reports or
+                        # watermarks can make an incomplete scan look complete.
+                        for receipt_source in search_agent.get_enabled_sources():
+                            scan_receipt_callbacks[receipt_source] = (
+                                lambda receipt, source=receipt_source: store.record_scan_receipt(
+                                    run_id, source, receipt
+                                )
                             )
-                        )
-                papers_by_source: Dict[str, List[PaperMetadata]] = search_agent.fetch_all_papers(
-                    days=effective_scan_days,
-                    scan_receipt_callbacks=scan_receipt_callbacks,
-                )
-            except SourceScanReceiptError as sre:
-                error_detail = str(sre)
-                logger.error("数据源扫描收据持久化失败，终止本次运行: %s", error_detail)
-                receipt_fail_result = RunResult(
-                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    success=False,
-                    error_message=f"数据源扫描收据失败: {error_detail}",
-                )
-                if settings.ENABLE_NOTIFICATIONS:
-                    try:
-                        NotifierAgent().notify(receipt_fail_result)
-                        NotifierAgent().notify_error(
-                            "source_scan_receipt",
-                            "数据源扫描收据持久化失败；本次日报已终止，"
-                            "以避免将无完整扫描证据的结果标记为成功。",
-                        )
-                    except Exception as ne:
-                        logger.warning("发送扫描收据错误通知失败: %s", ne)
-                if store and run_id:
-                    store.fail_run(run_id, error_detail)
-                return receipt_fail_result
-            except ArxivFetchError as afe:
-                # ArXiv 抓取彻底失败（多次重试后仍无法获取任何论文）
-                error_detail = str(afe)
-                logger.error(f"ArXiv 抓取失败，终止本次运行: {error_detail}")
-                fetch_fail_result = RunResult(
-                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    success=False,
-                    error_message=f"ArXiv 抓取失败: {error_detail}",
-                )
-                if settings.ENABLE_NOTIFICATIONS:
-                    try:
-                        NotifierAgent().notify(fetch_fail_result)
-                        NotifierAgent().notify_error(
-                            "arxiv_fetch",
-                            f"ArXiv 论文抓取失败\n\n错误详情：{error_detail}\n\n建议检查网络连接及 ArXiv 服务状态。",
-                        )
-                    except Exception as ne:
-                        logger.warning(f"发送错误通知失败: {ne}")
-                if store and run_id:
-                    store.fail_run(run_id, error_detail)
-                return fetch_fail_result
-            except HuggingFacePapersFetchError as hfe:
-                # The optional source is still fail-closed once enabled: an
-                # incomplete curated feed must not be reported as an empty
-                # success, because its missed entries could fall outside the
-                # recovery window before the next run.
-                error_detail = str(hfe)
-                logger.error("Hugging Face Papers 抓取失败，终止本次运行: %s", error_detail)
-                fetch_fail_result = RunResult(
-                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    success=False,
-                    error_message=f"Hugging Face Papers 抓取失败: {error_detail}",
-                )
-                if settings.ENABLE_NOTIFICATIONS:
-                    try:
-                        NotifierAgent().notify(fetch_fail_result)
-                        NotifierAgent().notify_error(
-                            "huggingface_papers_fetch",
-                            "Hugging Face Papers 抓取失败\n\n"
-                            f"错误详情：{error_detail}\n\n"
-                            "已终止本次日报，以避免产生不完整的数据源结果。",
-                        )
-                    except Exception as ne:
-                        logger.warning("发送错误通知失败: %s", ne)
-                if store and run_id:
-                    store.fail_run(run_id, error_detail)
-                return fetch_fail_result
-            except OpenAlexFetchError as oae:
-                # Enabled journals are part of the requested daily scope.  A
-                # malformed entry, failed page, or partial journal list must
-                # not fall through to the generic exception path: return a
-                # normal failed result so schedulers observe it, while leaving
-                # the source watermark unchanged for a full retry next run.
-                error_detail = str(oae)
-                logger.error("OpenAlex 期刊抓取失败，终止本次运行: %s", error_detail)
-                fetch_fail_result = RunResult(
-                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    success=False,
-                    error_message=f"OpenAlex 期刊抓取失败: {error_detail}",
-                )
-                if settings.ENABLE_NOTIFICATIONS:
-                    try:
-                        NotifierAgent().notify(fetch_fail_result)
-                        NotifierAgent().notify_error(
-                            "openalex_fetch",
-                            "OpenAlex 期刊论文抓取失败\n\n"
-                            f"错误详情：{error_detail}\n\n"
-                            "已终止本次日报，以避免产生不完整的期刊数据源结果。",
-                        )
-                    except Exception as ne:
-                        logger.warning("发送错误通知失败: %s", ne)
-                if store and run_id:
-                    store.fail_run(run_id, error_detail)
-                return fetch_fail_result
+                    papers_by_source: Dict[str, List[PaperMetadata]] = search_agent.fetch_all_papers(
+                        days=effective_scan_days,
+                        scan_receipt_callbacks=scan_receipt_callbacks,
+                    )
+                except SourceScanReceiptError as sre:
+                    error_detail = str(sre)
+                    logger.error("数据源扫描收据持久化失败，终止本次运行: %s", error_detail)
+                    receipt_fail_result = RunResult(
+                        run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        success=False,
+                        error_message=f"数据源扫描收据失败: {error_detail}",
+                    )
+                    if settings.ENABLE_NOTIFICATIONS:
+                        try:
+                            NotifierAgent().notify(receipt_fail_result)
+                            NotifierAgent().notify_error(
+                                "source_scan_receipt",
+                                "数据源扫描收据持久化失败；本次日报已终止，"
+                                "以避免将无完整扫描证据的结果标记为成功。",
+                            )
+                        except Exception as ne:
+                            logger.warning("发送扫描收据错误通知失败: %s", ne)
+                    if store and run_id:
+                        store.fail_run(run_id, error_detail)
+                    return receipt_fail_result
+                except ArxivFetchError as afe:
+                    # ArXiv 抓取彻底失败（多次重试后仍无法获取任何论文）
+                    error_detail = str(afe)
+                    logger.error(f"ArXiv 抓取失败，终止本次运行: {error_detail}")
+                    fetch_fail_result = RunResult(
+                        run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        success=False,
+                        error_message=f"ArXiv 抓取失败: {error_detail}",
+                    )
+                    if settings.ENABLE_NOTIFICATIONS:
+                        try:
+                            NotifierAgent().notify(fetch_fail_result)
+                            NotifierAgent().notify_error(
+                                "arxiv_fetch",
+                                f"ArXiv 论文抓取失败\n\n错误详情：{error_detail}\n\n建议检查网络连接及 ArXiv 服务状态。",
+                            )
+                        except Exception as ne:
+                            logger.warning(f"发送错误通知失败: {ne}")
+                    if store and run_id:
+                        store.fail_run(run_id, error_detail)
+                    return fetch_fail_result
+                except HuggingFacePapersFetchError as hfe:
+                    # The optional source is still fail-closed once enabled: an
+                    # incomplete curated feed must not be reported as an empty
+                    # success, because its missed entries could fall outside the
+                    # recovery window before the next run.
+                    error_detail = str(hfe)
+                    logger.error("Hugging Face Papers 抓取失败，终止本次运行: %s", error_detail)
+                    fetch_fail_result = RunResult(
+                        run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        success=False,
+                        error_message=f"Hugging Face Papers 抓取失败: {error_detail}",
+                    )
+                    if settings.ENABLE_NOTIFICATIONS:
+                        try:
+                            NotifierAgent().notify(fetch_fail_result)
+                            NotifierAgent().notify_error(
+                                "huggingface_papers_fetch",
+                                "Hugging Face Papers 抓取失败\n\n"
+                                f"错误详情：{error_detail}\n\n"
+                                "已终止本次日报，以避免产生不完整的数据源结果。",
+                            )
+                        except Exception as ne:
+                            logger.warning("发送错误通知失败: %s", ne)
+                    if store and run_id:
+                        store.fail_run(run_id, error_detail)
+                    return fetch_fail_result
+                except OpenAlexFetchError as oae:
+                    # Enabled journals are part of the requested daily scope.  A
+                    # malformed entry, failed page, or partial journal list must
+                    # not fall through to the generic exception path: return a
+                    # normal failed result so schedulers observe it, while leaving
+                    # the source watermark unchanged for a full retry next run.
+                    error_detail = str(oae)
+                    logger.error("OpenAlex 期刊抓取失败，终止本次运行: %s", error_detail)
+                    fetch_fail_result = RunResult(
+                        run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        success=False,
+                        error_message=f"OpenAlex 期刊抓取失败: {error_detail}",
+                    )
+                    if settings.ENABLE_NOTIFICATIONS:
+                        try:
+                            NotifierAgent().notify(fetch_fail_result)
+                            NotifierAgent().notify_error(
+                                "openalex_fetch",
+                                "OpenAlex 期刊论文抓取失败\n\n"
+                                f"错误详情：{error_detail}\n\n"
+                                "已终止本次日报，以避免产生不完整的期刊数据源结果。",
+                            )
+                        except Exception as ne:
+                            logger.warning("发送错误通知失败: %s", ne)
+                    if store and run_id:
+                        store.fail_run(run_id, error_detail)
+                    return fetch_fail_result
 
-            # SQLite is the only authoritative delivery ledger. Filter exact
-            # source/version deliveries before registering new queue entries.
-            papers_by_source = _exclude_sqlite_delivered_papers(store, papers_by_source)
+                # SQLite is the only authoritative delivery ledger. Filter exact
+                # source/version deliveries before registering new queue entries.
+                papers_by_source = _exclude_sqlite_delivered_papers(store, papers_by_source)
 
-            papers_by_source = _exclude_cross_source_arxiv_mirrors(
-                store, papers_by_source
-            )
+                papers_by_source = _exclude_cross_source_arxiv_mirrors(
+                    store, papers_by_source
+                )
 
-            registered_candidate_count = store.register_paper_candidates(
-                run_id, papers_by_source
-            )
-            papers_by_source, pending_paper_count = store.select_pending_papers(
-                search_agent.get_enabled_sources(),
-                int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0)),
-            )
-            total_papers_count = sum(len(papers) for papers in papers_by_source.values())
-            deferred_paper_count = pending_paper_count - total_papers_count
+                registered_candidate_count = store.register_paper_candidates(
+                    run_id, papers_by_source
+                )
+                papers_by_source, pending_paper_count = store.select_pending_papers(
+                    search_agent.get_enabled_sources(),
+                    int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0)),
+                )
+                total_papers_count = sum(len(papers) for papers in papers_by_source.values())
+                deferred_paper_count = pending_paper_count - total_papers_count
 
             if total_papers_count == 0:
-                logger.info("未找到新的或待恢复的论文。")
-                print("\n未找到新的或待恢复的论文，程序退出。")
+                if run_kind == "supplement":
+                    logger.info("补充积压中没有可处理的论文。")
+                    print("\n补充积压中没有可处理的论文，程序退出。")
+                else:
+                    logger.info("未找到新的或待恢复的论文。")
+                    print("\n未找到新的或待恢复的论文，程序退出。")
                 no_papers_result = RunResult(
                     run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), success=True
                 )
@@ -980,15 +1127,16 @@ class DailyResearchPipeline:
                         logger.warning("无新论文通知发送失败，运行状态仍保持已完成: %s", exc)
                 return no_papers_result
 
-            logger.info(
-                "完整扫描发现 %s 篇未交付候选；SQLite 当前待处理 %s 篇，"
-                "本次处理 %s 篇，留待后续 %s 篇（%s 个数据源）",
-                registered_candidate_count,
-                pending_paper_count,
-                total_papers_count,
-                deferred_paper_count,
-                len(papers_by_source),
-            )
+            if run_kind != "supplement":
+                logger.info(
+                    "完整扫描发现 %s 篇未交付候选；SQLite 当前待处理 %s 篇，"
+                    "本次处理 %s 篇，留待后续 %s 篇（%s 个数据源）",
+                    registered_candidate_count,
+                    pending_paper_count,
+                    total_papers_count,
+                    deferred_paper_count,
+                    len(papers_by_source),
+                )
 
             if store and run_id:
                 store.set_run_total(run_id, total_papers_count)
@@ -1033,7 +1181,7 @@ class DailyResearchPipeline:
                                     store,
                                     (
                                         None
-                                        if store
+                                        if store or search_agent is None
                                         else search_agent.get_previous_processed_version(
                                             paper.paper_id, source
                                         )
@@ -1076,7 +1224,7 @@ class DailyResearchPipeline:
                                     learned_terms,
                                     (
                                         None
-                                        if store
+                                        if store or search_agent is None
                                         else search_agent.get_previous_processed_version(
                                             paper.paper_id, source
                                         )
@@ -1321,6 +1469,7 @@ class DailyResearchPipeline:
                 keywords_dict=all_keywords,
                 analyses_by_source=analyses_by_source,
                 token_usage=token_counter.get_summary() if settings.TOKEN_TRACKING_ENABLED else None,
+                report_kind="supplement" if run_kind == "supplement" else "daily",
             )
             _validate_report_paths(report_paths, scored_papers_by_source)
 
@@ -1355,6 +1504,14 @@ class DailyResearchPipeline:
                     [maintenance_entry] if maintenance_entry is not None else [],
                 )
                 report_delivery_committed = True
+
+                if run_kind == "supplement" and supplement_identities:
+                    # 交付事务已提交：本批积压论文正式销账；失败/未选中的
+                    # 行保持原状态，等待下一次补充运行。
+                    resolved = store.resolve_supplement_backlog(
+                        run_id, supplement_identities, status="delivered"
+                    )
+                    logger.info("补充运行交付完成，销账积压 %s 条", resolved)
 
                 # Report delivery has already committed.  A WebDAV failure now
                 # only reschedules its own outbox row and can never make this
@@ -1405,7 +1562,7 @@ class DailyResearchPipeline:
                 print(f"   [{source.upper()}]")
                 print(f"     • 抓取: {len(scored_papers)} 篇")
                 print(f"     • 及格: {source_qualified} 篇 ({pct:.1f}%)")
-                if search_agent.can_download_pdf(source):
+                if search_agent is None or search_agent.can_download_pdf(source):
                     print(f"     • 深度分析: {source_analyzed} 篇")
 
             print("\n📁 报告位置:")

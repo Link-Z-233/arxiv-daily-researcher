@@ -28,7 +28,7 @@ LOCK_SKIPPED_EXIT_CODE = 75
 
 # 面板触发的后台作业模式。它们启动前等待主流程空闲，daily 模式也会等待
 # 这些作业释放锁，避免与 cron 每日运行在同一个 SQLite 库上互相踩踏。
-AUX_JOB_MODES = ("legacy_import",)
+AUX_JOB_MODES = ("legacy_import", "supplement_run")
 
 
 def _lock_dir() -> Path:

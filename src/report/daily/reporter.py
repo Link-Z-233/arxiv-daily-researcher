@@ -153,6 +153,8 @@ class Reporter:
         keywords_dict: Dict[str, float],
         analyses_by_source: Dict[str, List[Dict[str, Any]]] = None,
         token_usage: Optional[Dict[str, Any]] = None,
+        report_kind: str = "daily",
+        report_timestamp: Optional[datetime] = None,
     ) -> Dict[str, Path]:
         """
         按数据源生成分开的报告。
@@ -161,6 +163,8 @@ class Reporter:
             scored_papers_by_source: {数据源: 论文列表}
             keywords_dict: 关键词-权重字典
             analyses_by_source: {数据源: 深度分析列表}（可选）
+            report_kind: "daily"（每日报告）或 "supplement"（补充报告）
+            report_timestamp: 报告时间戳（过去日期补跑时指定；缺省为当前时间）
 
         返回:
             Dict[str, Path]: {数据源: 报告文件路径}
@@ -168,7 +172,8 @@ class Reporter:
         if analyses_by_source is None:
             analyses_by_source = {}
 
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+        generated_at = report_timestamp or datetime.now()
+        timestamp = generated_at.strftime("%Y-%m-%d_%H-%M-%S_%f")
         report_paths = {}
 
         for source, papers in scored_papers_by_source.items():
@@ -209,6 +214,8 @@ class Reporter:
                         analyses=analyses,
                         has_deep_analysis=has_deep_analysis,
                         token_usage=token_usage,
+                        report_kind=report_kind,
+                        generated_at=generated_at,
                     )
                 except ReportGenerationError:
                     raise
@@ -239,6 +246,8 @@ class Reporter:
                         analyses=analyses,
                         has_deep_analysis=has_deep_analysis,
                         token_usage=token_usage,
+                        report_kind=report_kind,
+                        generated_at=generated_at,
                     )
                 except ReportGenerationError:
                     raise
@@ -262,10 +271,13 @@ class Reporter:
         qualified_count: Optional[int] = None,
         qualified_only: bool = False,
         token_usage: Optional[Dict[str, Any]] = None,
+        report_kind: str = "daily",
+        generated_at: Optional[datetime] = None,
     ) -> Path:
         """生成单个数据源的报告"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        today = datetime.now().strftime("%Y-%m-%d")
+        generated_at = generated_at or datetime.now()
+        timestamp = generated_at.strftime("%Y-%m-%d %H:%M:%S")
+        today = generated_at.strftime("%Y-%m-%d")
 
         # 计算统计信息
         total_papers = all_paper_count if all_paper_count is not None else len(papers)
@@ -294,6 +306,8 @@ class Reporter:
         report_title = title_template.format(
             source_name=markdown_text(display_name, multiline=False), date=today
         )
+        if report_kind == "supplement":
+            report_title += " · 补充报告"
         lines.append(f"# {markdown_text(report_title, multiline=False)}")
         lines.append("")
         lines.append(f"> 生成时间: {timestamp}")
@@ -626,13 +640,17 @@ class Reporter:
         qualified_count: Optional[int] = None,
         qualified_only: bool = False,
         token_usage: Optional[Dict[str, Any]] = None,
+        report_kind: str = "daily",
+        generated_at: Optional[datetime] = None,
     ) -> Path:
         """生成 HTML 格式报告"""
         html_path = filepath
         h = self._h
 
-        today = datetime.now().strftime("%Y-%m-%d")
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        generated_at = generated_at or datetime.now()
+        today = generated_at.strftime("%Y-%m-%d")
+        timestamp = generated_at.strftime("%Y-%m-%d %H:%M:%S")
+        title_suffix = " Supplement Report" if report_kind == "supplement" else ""
 
         total_papers = all_paper_count if all_paper_count is not None else len(papers)
         if qualified_count is None:
@@ -657,7 +675,7 @@ class Reporter:
         parts.append('<html lang="zh-CN"><head>')
         parts.append('<meta charset="UTF-8">')
         parts.append('<meta name="viewport" content="width=device-width,initial-scale=1">')
-        parts.append(f"<title>{h(display_name)} Report {today}</title>")
+        parts.append(f"<title>{h(display_name)} Report {today}{title_suffix}</title>")
         parts.append(f"<style>{self._get_report_css()}</style>")
         # KaTeX 数学公式渲染
         parts.append(
@@ -679,7 +697,12 @@ class Reporter:
         parts.append("</head><body>")
 
         # 标题
-        parts.append(f"<h1>{h(display_name)} Research Report</h1>")
+        if report_kind == "supplement":
+            parts.append(
+                f"<h1>{h(display_name)} 补充报告 (Supplement Report)</h1>"
+            )
+        else:
+            parts.append(f"<h1>{h(display_name)} Research Report</h1>")
         if settings.normalized_score_strategy() == CORE_RELEVANCE_V2:
             policy_label = (
                 f"Core relevance threshold: {settings.CORE_RELEVANCE_THRESHOLD:.1f} / "

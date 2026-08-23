@@ -27,9 +27,11 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 TRIGGER_SCHEMA_VERSION = 1
 TRIGGER_DIRECTORY_NAME = "webui_triggers"
 TRIGGER_STATUS_DIRECTORY_NAME = "status"
-SUPPORTED_MODES = frozenset({"daily_research", "trend_research", "legacy_import"})
+SUPPORTED_MODES = frozenset(
+    {"daily_research", "trend_research", "legacy_import", "supplement_run"}
+)
 # 面板触发的后台作业：不接受任何参数。
-_NO_ARGS_MODES = frozenset({"daily_research", "legacy_import"})
+_NO_ARGS_MODES = frozenset({"daily_research", "legacy_import", "supplement_run"})
 _CATEGORY_RE = re.compile(r"^[A-Za-z0-9.-]{1,64}$")
 _MAX_REQUEST_BYTES = 32 * 1024
 _MAX_KEYWORDS = 32

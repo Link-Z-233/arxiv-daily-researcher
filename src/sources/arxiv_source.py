@@ -814,3 +814,57 @@ class ArxivSource(BasePaperSource):
 
         logger.info("[ArXiv] 时间段扫描完成: 共 %s 篇", len(all_papers))
         return list(all_papers.values())
+
+    def fetch_papers_by_ids(
+        self, paper_ids: List[str]
+    ) -> Dict[str, PaperMetadata]:
+        """按 arXiv ID 批量抓取元数据（补充积压重试缺卡片论文）。
+
+        返回 {canonical_id: metadata}；请求了但 API 未返回的 ID 不在结果里，
+        由调用方决定记失败还是跳过。
+        """
+        wanted = [str(pid).strip() for pid in paper_ids if str(pid).strip()]
+        if not wanted:
+            return {}
+
+        try:
+            from config import settings as _settings
+
+            fetch_timeout_seconds = int(getattr(_settings, "ARXIV_FETCH_TIMEOUT_SECONDS", 180))
+        except Exception:
+            fetch_timeout_seconds = 180
+
+        found: Dict[str, PaperMetadata] = {}
+        max_retries = 3
+        # arXiv id_list 单次请求上限宽松，分块保持与分页一致的请求规模。
+        for offset in range(0, len(wanted), 50):
+            chunk = wanted[offset : offset + 50]
+            retry_count = 0
+            last_error: Exception | None = None
+            while retry_count <= max_retries:
+                try:
+                    search = arxiv.Search(id_list=chunk)
+                    guard = _timeout_guard(fetch_timeout_seconds)
+                    with guard:
+                        for result in self.client.results(search):
+                            guard.touch()
+                            metadata = self._metadata_from_result(result)
+                            canonical = metadata.canonical_id or metadata.paper_id
+                            found[canonical] = metadata
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        wait_time = _arxiv_retry_wait(e, retry_count)
+                        logger.warning(
+                            f"  按 ID 抓取出错: {e}，{wait_time} 秒后重试 "
+                            f"({retry_count}/{max_retries})"
+                        )
+                        time.sleep(wait_time)
+            if last_error is not None:
+                raise ArxivFetchError(
+                    f"ArXiv 按 ID 抓取失败: {last_error}"
+                ) from last_error
+        return found
