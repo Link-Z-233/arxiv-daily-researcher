@@ -310,29 +310,36 @@ class WebUiRunObservabilityTests(unittest.TestCase):
 
     def test_trigger_failure_status_does_not_echo_worker_exception_text(self):
         fake_st = _FakeStreamlit()
-        with (
-            patch.object(run_manager, "st", fake_st),
-            patch.object(run_manager, "t", side_effect=lambda key: key),
-            patch.object(run_manager, "_IS_DOCKER_WEBUI", True),
-            patch.object(run_manager, "_trigger_age_seconds", return_value=None),
-            patch.object(run_manager, "_get_all_running_locks", return_value=[]),
-            patch.object(
-                run_manager,
-                "_latest_trigger_status",
-                return_value={
-                    "state": "failed",
-                    "return_code": 1,
-                    "error": "supersecret-worker-error https://leaky.example/?token=1",
-                },
-            ),
-        ):
-            # 状态渲染已并入状态面板；fragment 在裸模式下退化为直接调用
-            with patch.object(
-                run_manager,
-                "_live_status_fragment",
-                run_manager._render_live_status_body,
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(run_manager, "st", fake_st),
+                patch.object(run_manager, "t", side_effect=lambda key: key),
+                patch.object(run_manager, "_IS_DOCKER_WEBUI", True),
+                patch.object(run_manager, "_trigger_age_seconds", return_value=None),
+                patch.object(run_manager, "_get_all_running_locks", return_value=[]),
+                # 指向不存在的临时 DB，隔离宿主机 data/ 下的真实队列
+                patch.object(
+                    run_manager,
+                    "_daily_db_path_from_config",
+                    return_value=Path(temp_dir) / "absent.db",
+                ),
+                patch.object(
+                    run_manager,
+                    "_latest_trigger_status",
+                    return_value={
+                        "state": "failed",
+                        "return_code": 1,
+                        "error": "supersecret-worker-error https://leaky.example/?token=1",
+                    },
+                ),
             ):
-                run_manager._render_status_panel({})
+                # 状态渲染已并入状态面板；fragment 在裸模式下退化为直接调用
+                with patch.object(
+                    run_manager,
+                    "_live_status_fragment",
+                    run_manager._render_live_status_body,
+                ):
+                    run_manager._render_status_panel({})
 
         rendered = repr(fake_st.calls)
         self.assertIn("failed", rendered)
