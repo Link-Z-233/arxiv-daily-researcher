@@ -221,19 +221,8 @@ def render(env_values: dict, config_values: dict):
     )
 
     if st.session_state.get("backup_enabled", flat.get("backup_enabled", True)):
-        col_b1, col_b2 = st.columns([3, 1])
-        with col_b1:
-            st.number_input(
-                t("dm_backup_keep_label"),
-                min_value=1,
-                max_value=60,
-                value=int(flat.get("backup_keep", 5)),
-                key="backup_keep",
-                help=t("dm_backup_keep_help"),
-            )
-        with col_b2:
-            if st.button(t("dm_backup_now_btn"), use_container_width=True):
-                _do_backup(env_values)
+        if st.button(t("dm_backup_now_btn"), use_container_width=True):
+            _do_backup(env_values)
 
     # 导入 / 导出：都是压缩包，导入端自动识别 zip / gzip / 原始 SQLite
     st.divider()
@@ -475,7 +464,6 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         "webdav_sync_keywords": current_cfg("webdav_sync_keywords", True),
         "webdav_sync_reports": current_cfg("webdav_sync_reports", False),
         "backup_enabled": current_cfg("backup_enabled", True),
-        "backup_keep": current_cfg("backup_keep", 5),
     }
 
     return env_updates, config_updates
@@ -549,11 +537,8 @@ def _do_backup(env_values: dict):
         else:
             st.info(t("dm_backup_local_only"))
 
-        keep = int(st.session_state.get("backup_keep", 5) or 5)
         with st.spinner(t("dm_backup_running")):
-            result = create_backup(
-                _PROJECT_ROOT / "data", keep=keep, webdav_sync=webdav_sync
-            )
+            result = create_backup(_PROJECT_ROOT / "data", webdav_sync=webdav_sync)
 
         if not result.get("created"):
             st.warning(t("dm_backup_skip_reason").format(result.get("reason", "")))
@@ -562,6 +547,8 @@ def _do_backup(env_values: dict):
             st.success(t("dm_backup_done_uploaded"))
         elif result.get("upload_error"):
             st.warning(t("dm_backup_done_upload_failed").format(result["upload_error"]))
+        elif webdav_sync is not None and result.get("skipped_reason"):
+            st.success(t("dm_backup_done_unchanged"))
         else:
             st.success(t("dm_backup_done_local"))
         st.rerun()

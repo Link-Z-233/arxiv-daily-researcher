@@ -1,11 +1,13 @@
-"""gzip 数据库备份：一致性快照、本地轮转、WebDAV 上传与远端轮转。"""
+"""gzip 数据库备份：一致性快照、本地按周轮转、WebDAV 增量镜像。"""
 
 from __future__ import annotations
 
 import gzip
+import json
 import sqlite3
 import sys
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -13,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from utils.backup import (  # noqa: E402
     BACKUP_SUFFIX,
+    LOCAL_BACKUP_RETENTION_DAYS,
     create_backup,
     list_local_backups,
     run_scheduled_backup,
@@ -23,6 +26,14 @@ from utils.daily_research_store import DailyResearchStore  # noqa: E402
 def _seed_database(data_dir: Path) -> None:
     store = DailyResearchStore(data_dir / "daily_research" / "daily_research.db")
     store.set_app_state("seed", "v1")
+
+
+def _rename_backup(directory: Path, name: str, days_ago: int) -> str:
+    """Rename a local backup so its filename looks ``days_ago`` days old."""
+    stamp = (datetime.now() - timedelta(days=days_ago)).strftime("%Y%m%d_%H%M%S")
+    aged = f"daily_research_{stamp}{BACKUP_SUFFIX}"
+    (directory / name).rename(directory / aged)
+    return aged
 
 
 class _FakeWebDAVClient:
@@ -90,14 +101,27 @@ class BackupCreationTests(unittest.TestCase):
         self.assertIn("daily_papers", tables)
         self.assertEqual(value, ("v1",))
 
-    def test_local_rotation_keeps_newest(self):
-        for _ in range(4):
-            create_backup(self.data_dir, keep=2)
+    def test_local_rotation_drops_backups_older_than_one_week(self):
+        fresh = create_backup(self.data_dir)
+        aged = _rename_backup(
+            self.data_dir / "backups", fresh["name"], LOCAL_BACKUP_RETENTION_DAYS + 1
+        )
+        create_backup(self.data_dir)
 
-        survivors = list_local_backups(self.data_dir)
-        self.assertEqual(len(survivors), 2)
-        names = [entry["name"] for entry in survivors]
-        self.assertEqual(names, sorted(names, reverse=True))
+        survivors = {entry["name"] for entry in list_local_backups(self.data_dir)}
+        self.assertNotIn(aged, survivors)
+        self.assertEqual(len(survivors), 1)
+
+    def test_local_rotation_keeps_backups_within_one_week(self):
+        fresh = create_backup(self.data_dir)
+        aged = _rename_backup(
+            self.data_dir / "backups", fresh["name"], LOCAL_BACKUP_RETENTION_DAYS - 1
+        )
+        result = create_backup(self.data_dir)
+
+        survivors = {entry["name"] for entry in list_local_backups(self.data_dir)}
+        self.assertIn(aged, survivors)
+        self.assertEqual(result["local_rotated"], [])
 
     def test_missing_database_reports_reason(self):
         empty = self.data_dir / "empty"
@@ -106,26 +130,41 @@ class BackupCreationTests(unittest.TestCase):
         self.assertFalse(result["created"])
         self.assertEqual(result["reason"], "database_missing")
 
-    def test_upload_and_remote_rotation(self):
+    def test_webdav_upload_is_incremental_and_never_deletes_remote(self):
         fake = _FakeWebDAVSync(
             existing={
                 "daily_research_20200101_000000.db.gz",
-                "daily_research_20200102_000000.db.gz",
             }
         )
-        result = create_backup(self.data_dir, keep=2, webdav_sync=fake)
-
-        self.assertTrue(result["created"])
-        self.assertTrue(result["uploaded"])
+        first = create_backup(self.data_dir, webdav_sync=fake)
+        self.assertTrue(first["created"])
+        self.assertTrue(first["uploaded"])
         self.assertEqual(len(fake.client.uploads), 1)
-        # 新备份 + 两个旧备份 = 3 个，保留 2 个，应删除最旧的 1 个
-        self.assertEqual(len(fake.client.deletes), 1)
-        self.assertIn("20200101", fake.client.deletes[0])
-        self.assertNotIn(
-            "daily_research_20200101_000000.db.gz", fake.client.remote_files
+        state = json.loads(
+            (self.data_dir / "backups" / "webdav_upload_state.json").read_text(
+                encoding="utf-8"
+            )
         )
+        self.assertEqual(state["remote_name"], first["name"])
 
-    def test_upload_failure_keeps_local_backup(self):
+        # 数据库未变化：跳过上传，远端一个文件都不删
+        second = create_backup(self.data_dir, webdav_sync=fake)
+        self.assertTrue(second["created"])
+        self.assertFalse(second["uploaded"])
+        self.assertEqual(second["skipped_reason"], "content_unchanged")
+        self.assertEqual(len(fake.client.uploads), 1)
+
+        # 数据库变化：重新上传，远端历史副本保留
+        DailyResearchStore(
+            self.data_dir / "daily_research" / "daily_research.db"
+        ).set_app_state("seed", "v2")
+        third = create_backup(self.data_dir, webdav_sync=fake)
+        self.assertTrue(third["uploaded"])
+        self.assertEqual(len(fake.client.uploads), 2)
+        self.assertIn("daily_research_20200101_000000.db.gz", fake.client.remote_files)
+        self.assertEqual(fake.client.deletes, [])
+
+    def test_upload_failure_keeps_local_backup_and_state(self):
         fake = _FakeWebDAVSync()
         fake.client.upload_file = lambda *a, **k: (_ for _ in ()).throw(
             RuntimeError("network down")
@@ -136,6 +175,9 @@ class BackupCreationTests(unittest.TestCase):
         self.assertFalse(result["uploaded"])
         self.assertIn("upload_error", result)
         self.assertTrue(Path(result["path"]).exists())
+        self.assertFalse(
+            (self.data_dir / "backups" / "webdav_upload_state.json").exists()
+        )
 
     def test_no_temp_snapshot_left_behind(self):
         create_backup(self.data_dir)
@@ -174,8 +216,6 @@ class ScheduledBackupTests(unittest.TestCase):
             {
                 "BACKUP_ENABLED": False,
                 "DATA_DIR": self.data_dir,
-                "BACKUP_KEEP": 5,
-                "BACKUP_UPLOAD_TO_WEBDAV": True,
                 "WEBDAV_ENABLED": False,
             }
         )
@@ -189,8 +229,6 @@ class ScheduledBackupTests(unittest.TestCase):
             {
                 "BACKUP_ENABLED": True,
                 "DATA_DIR": self.data_dir,
-                "BACKUP_KEEP": 3,
-                "BACKUP_UPLOAD_TO_WEBDAV": False,
                 "WEBDAV_ENABLED": False,
             }
         )
@@ -251,7 +289,7 @@ class BackupImportExportTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir)
             _seed_database(data_dir)
-            created = create_backup(data_dir, keep=5)
+            created = create_backup(data_dir)
             self.assertTrue(created["created"])
 
             with TemporaryDirectory() as other_dir:

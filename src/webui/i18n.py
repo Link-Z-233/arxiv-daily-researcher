@@ -1128,14 +1128,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_webdav_sync_error": {"zh": "❌ 同步失败", "en": "❌ Sync failed"},
     "dm_backup_title": {"zh": "数据库备份", "en": "Database Backup"},
     "dm_backup_hint": {
-        "zh": "每日运行结束后自动对 SQLite 数据库做 gzip 压缩备份，本地与 WebDAV 各保留指定份数；也可手动立即备份。",
-        "en": "Automatically create a gzip-compressed SQLite backup after each daily run, keeping a bounded number of copies locally and on WebDAV; manual backup is also available.",
+        "zh": "每日运行结束后自动对 SQLite 数据库做 gzip 压缩备份：本地为全量备份、按文件时间戳保留最近一周；WebDAV 为增量备份，仅当数据库内容变化时上传，远端永不删除；也可手动立即备份。",
+        "en": "After each daily run a gzip-compressed SQLite backup is created automatically: locally full backups are kept for one week (by file timestamp); WebDAV mirrors incrementally — uploads happen only when the database content changed and remote copies are never deleted. Manual backup is also available.",
     },
     "dm_backup_enable": {"zh": "启用自动备份", "en": "Enable automatic backup"},
-    "dm_backup_keep_help": {
-        "zh": "本地与 WebDAV 各保留的备份份数，超出后自动轮转删除最旧的备份",
-        "en": "Number of backups kept locally and on WebDAV; the oldest are rotated out",
-    },
     "dm_backup_now_btn": {"zh": "🗄️ 立即备份", "en": "🗄️ Back Up Now"},
     "dm_backup_export_btn": {"zh": "📤 生成导出（zip）", "en": "📤 Build export (zip)"},
     "dm_backup_download_btn": {"zh": "⬇️ 下载备份压缩包", "en": "⬇️ Download backup archive"},
@@ -1150,6 +1146,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_backup_running": {"zh": "正在创建压缩备份...", "en": "Creating compressed backup..."},
     "dm_backup_done_local": {"zh": "✅ 备份完成（仅本地）", "en": "✅ Backup created (local only)"},
     "dm_backup_done_uploaded": {"zh": "✅ 备份完成并已上传 WebDAV", "en": "✅ Backup created and uploaded to WebDAV"},
+    "dm_backup_done_unchanged": {
+        "zh": "✅ 本地备份完成；WebDAV 内容未变化，已跳过上传（远端副本保留）",
+        "en": "✅ Local backup created; WebDAV content unchanged, upload skipped (remote copy kept)",
+    },
     "dm_backup_done_upload_failed": {
         "zh": "⚠️ 本地备份已完成，但 WebDAV 上传失败：{}",
         "en": "⚠️ Local backup created, but the WebDAV upload failed: {}",

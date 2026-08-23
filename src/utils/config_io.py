@@ -695,7 +695,6 @@ def build_config_dict(
     webdav_sync_keywords: bool = True,
     webdav_sync_reports: bool = False,
     backup_enabled: bool = True,
-    backup_keep: int = 5,
 ) -> Dict[str, Any]:
     """Build a nested config.json dict from flat parameters."""
 
@@ -707,13 +706,6 @@ def build_config_dict(
         raise ValueError(
             "daily_research.max_papers_per_run 必须是非负整数（0 表示不限）"
         )
-
-    if (
-        isinstance(backup_keep, bool)
-        or not isinstance(backup_keep, int)
-        or backup_keep < 1
-    ):
-        raise ValueError("backup.keep 必须是正整数")
 
     if not isinstance(daily_run_time, str) or not re.fullmatch(
         r"\d{1,2}:\d{2}", str(daily_run_time).strip()
@@ -957,7 +949,6 @@ def build_config_dict(
         },
         "backup": {
             "enabled": backup_enabled,
-            "keep": backup_keep,
         },
         "trend_research": {
             "default_date_range_days": trend_default_date_range_days,
@@ -1257,7 +1248,6 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     # Database backup
     bk = config.get("backup", {})
     flat["backup_enabled"] = bk.get("enabled", True)
-    flat["backup_keep"] = bk.get("keep", 5)
 
     # Trend research
     tr = config.get("trend_research", {})

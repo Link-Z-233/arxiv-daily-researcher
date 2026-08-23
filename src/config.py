@@ -296,8 +296,7 @@ class Settings(BaseSettings):
     WEBDAV_SYNC_REPORTS: bool = False  # 是否同步报告（体积较大）
 
     # ==================== 数据库备份配置 ====================
-    BACKUP_ENABLED: bool = True  # 每日运行结束后自动做一次 gzip 数据库备份
-    BACKUP_KEEP: int = 5  # 本地与 WebDAV 各保留的备份份数
+    BACKUP_ENABLED: bool = True  # 每日运行结束后自动做一次 gzip 数据库备份（本地保留一周，WebDAV 增量）
 
     # ==================== 运行锁配置 ====================
     RUN_LOCK_MAX_AGE_HOURS: int = 12  # 锁超龄告警阈值（小时），不会按 PID 自动终止任务
@@ -894,14 +893,8 @@ class Settings(BaseSettings):
             if "backup" in config:
                 bk_cfg = config["backup"]
                 self.BACKUP_ENABLED = bk_cfg.get("enabled", self.BACKUP_ENABLED)
-                backup_keep = bk_cfg.get("keep", self.BACKUP_KEEP)
-                if (
-                    isinstance(backup_keep, bool)
-                    or not isinstance(backup_keep, int)
-                    or backup_keep < 1
-                ):
-                    raise ValueError("backup.keep 必须是正整数")
-                self.BACKUP_KEEP = backup_keep
+                # Legacy ``keep`` counts are ignored: local backups rotate by
+                # a one-week age window and WebDAV keeps every upload.
 
             # 加载研究趋势模式配置
             if "trend_research" in config:

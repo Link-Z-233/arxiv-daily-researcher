@@ -2,27 +2,35 @@
 
 The daily-research database is the sole durable authority for the pending
 queue, reader preferences and usage statistics. A backup takes a consistent
-snapshot through SQLite's backup API (never a raw copy of a live WAL file),
-compresses it before any network transfer, keeps a bounded number of local
-copies and mirrors the same rotation to WebDAV when credentials are given.
+snapshot through SQLite's backup API (never a raw copy of a live WAL file)
+and compresses it before any network transfer. Local copies rotate strictly
+by age — a full backup is kept for one week. The WebDAV mirror is
+incremental: an archive is uploaded only when the database content actually
+changed since the last upload, and remote copies are never deleted, so the
+remote directory is a permanent archive of every content state.
 """
 
 from __future__ import annotations
 
 import gzip
+import hashlib
+import json
 import os
+import re
 import sqlite3
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 BACKUP_PREFIX = "daily_research_"
 BACKUP_SUFFIX = ".db.gz"
-DEFAULT_BACKUP_KEEP = 5
-MAX_BACKUP_KEEP = 60
+LOCAL_BACKUP_RETENTION_DAYS = 7
 _GZIP_CHUNK_BYTES = 1024 * 1024
+_HASH_CHUNK_BYTES = 1024 * 1024
+_BACKUP_NAME_RE = re.compile(r"^daily_research_(\d{8}_\d{6})(?:_\d+)?\.db\.gz$")
+_UPLOAD_STATE_FILENAME = "webdav_upload_state.json"
 
 _backup_lock = threading.Lock()
 
@@ -85,20 +93,67 @@ def _compress_file(source: Path, target: Path) -> None:
             packed.write(chunk)
 
 
-def _rotate_local(directory: Path, keep: int) -> List[str]:
-    """Remove the oldest backups beyond ``keep``; return the removed names."""
-    if keep <= 0:
-        return []
-    survivors = list_local_backups(directory.parent)
-    doomed = survivors[keep:]
+def _backup_timestamp(name: str) -> Optional[datetime]:
+    """Return the creation timestamp encoded in a backup file name."""
+    match = _BACKUP_NAME_RE.match(name)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+
+
+def _rotate_local(directory: Path, retention_days: int) -> List[str]:
+    """Remove backups older than ``retention_days``; return the removed names.
+
+    Rotation is strictly age-based (filename timestamp = creation time) and
+    never touches files whose name cannot be dated — an undated archive is
+    preserved forever rather than guessed at.
+    """
+    cutoff = datetime.now() - timedelta(days=retention_days)
     removed = []
-    for entry in doomed:
+    for item in directory.iterdir():
+        if not item.is_file() or not item.name.endswith(BACKUP_SUFFIX):
+            continue
+        stamp = _backup_timestamp(item.name)
+        if stamp is None or stamp >= cutoff:
+            continue
         try:
-            os.remove(entry["path"])
-            removed.append(entry["name"])
+            os.remove(item)
+            removed.append(item.name)
         except OSError:
             continue
     return removed
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as raw:
+        while True:
+            chunk = raw.read(_HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _upload_state_path(directory: Path) -> Path:
+    return directory / _UPLOAD_STATE_FILENAME
+
+
+def _load_upload_state(directory: Path) -> Dict[str, str]:
+    try:
+        data = json.loads(_upload_state_path(directory).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_upload_state(directory: Path, state: Dict[str, str]) -> None:
+    _upload_state_path(directory).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _remote_backup_names(webdav_sync: Any, remote_dir: str) -> List[str]:
@@ -119,41 +174,66 @@ def _remote_backup_names(webdav_sync: Any, remote_dir: str) -> List[str]:
     return sorted(names, reverse=True)
 
 
-def _upload_and_rotate_remote(
-    webdav_sync: Any, local_path: Path, keep: int, logger: Any = None
+def _upload_incremental_remote(
+    webdav_sync: Any,
+    local_path: Path,
+    snapshot_hash: str,
+    state_directory: Path,
+    logger: Any = None,
 ) -> Dict[str, Any]:
-    """Upload one backup and prune the remote rotation; best-effort."""
-    result: Dict[str, Any] = {"uploaded": False, "remote_path": None, "pruned": []}
+    """Mirror one backup to WebDAV incrementally; best-effort.
+
+    The upload is skipped when the remote already holds this exact file name
+    or when the database content hash is unchanged since the last successful
+    upload. Remote files are never deleted — the WebDAV directory is a
+    permanent archive, not a rotation.
+    """
+    result: Dict[str, Any] = {
+        "uploaded": False,
+        "remote_path": None,
+        "skipped_reason": None,
+    }
     remote_dir = webdav_sync._remote("data/backups")
     if not webdav_sync._ensure_remote_dir(remote_dir + "/"):
         raise RuntimeError("无法创建 WebDAV 备份目录")
     remote_file = f"{remote_dir}/{local_path.name}"
+
+    if local_path.name in _remote_backup_names(webdav_sync, remote_dir):
+        # A previous run uploaded this archive but crashed before recording
+        # the state; treat it as mirrored instead of re-uploading.
+        result["skipped_reason"] = "already_on_remote"
+        result["remote_path"] = remote_file
+        return result
+
+    state = _load_upload_state(state_directory)
+    if state.get("hash") == snapshot_hash:
+        result["skipped_reason"] = "content_unchanged"
+        result["remote_path"] = state.get("remote_name") or remote_file
+        return result
+
     webdav_sync.client.upload_file(remote_file, str(local_path))
+    _save_upload_state(
+        state_directory,
+        {"hash": snapshot_hash, "remote_name": local_path.name},
+    )
     result["uploaded"] = True
     result["remote_path"] = remote_file
-    for name in _remote_backup_names(webdav_sync, remote_dir)[keep:]:
-        try:
-            webdav_sync.client.delete(f"{remote_dir}/{name}")
-            result["pruned"].append(name)
-        except Exception as exc:
-            if logger:
-                logger.warning("[Backup] 远端备份轮转删除失败 %s: %s", name, exc)
     return result
 
 
 def create_backup(
     data_dir: Path,
     *,
-    keep: int = DEFAULT_BACKUP_KEEP,
+    retention_days: int = LOCAL_BACKUP_RETENTION_DAYS,
     webdav_sync: Any = None,
     logger: Any = None,
 ) -> Dict[str, Any]:
-    """Create one compressed backup; rotate local (and remote) copies.
+    """Create one compressed backup; rotate local copies by age.
 
     ``webdav_sync`` may be any object exposing the small WebDAVSync surface
-    (``client.upload_file``/``client.list``/``client.delete``, ``_remote``,
-    ``_ensure_remote_dir``); passing ``None`` keeps the backup local-only.
-    An upload failure never discards the local snapshot.
+    (``client.upload_file``/``client.list``, ``_remote``, ``_ensure_remote_dir``);
+    passing ``None`` keeps the backup local-only. An upload failure never
+    discards the local snapshot.
     """
     if _backup_lock.locked():
         return {"created": False, "reason": "backup_already_running"}
@@ -162,7 +242,6 @@ def create_backup(
     if not database.exists():
         return {"created": False, "reason": "database_missing"}
 
-    bounded_keep = max(1, min(int(keep), MAX_BACKUP_KEEP))
     directory = backups_directory(data_dir)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -184,6 +263,7 @@ def create_backup(
                     break
         try:
             _create_consistent_snapshot(database, snapshot_path)
+            snapshot_hash = _file_sha256(snapshot_path)
             _compress_file(snapshot_path, archive_path)
         finally:
             snapshot_path.unlink(missing_ok=True)
@@ -193,7 +273,7 @@ def create_backup(
             "path": str(archive_path),
             "name": archive_path.name,
             "size_bytes": archive_path.stat().st_size,
-            "local_rotated": _rotate_local(directory, bounded_keep),
+            "local_rotated": _rotate_local(directory, retention_days),
             "uploaded": False,
             "remote_path": None,
         }
@@ -201,8 +281,12 @@ def create_backup(
         if webdav_sync is not None:
             try:
                 result.update(
-                    _upload_and_rotate_remote(
-                        webdav_sync, archive_path, bounded_keep, logger=logger
+                    _upload_incremental_remote(
+                        webdav_sync,
+                        archive_path,
+                        snapshot_hash,
+                        directory,
+                        logger=logger,
                     )
                 )
             except Exception as exc:
@@ -215,8 +299,8 @@ def create_backup(
 def run_scheduled_backup(logger: Any = None) -> Optional[Dict[str, Any]]:
     """Worker hook after a daily run; honours the ``backup`` config section.
 
-    备份始终先压缩再上传；只要 WebDAV 已启用并配置了凭据就默认镜像上传，
-    不再提供单独的上传开关。
+    备份始终先压缩再上传；只要 WebDAV 已启用并配置了凭据就镜像上传
+    （增量：内容未变化时跳过），本地按一周保留期轮转。
     """
     from config import settings
 
@@ -231,7 +315,6 @@ def run_scheduled_backup(logger: Any = None) -> Optional[Dict[str, Any]]:
 
     return create_backup(
         Path(settings.DATA_DIR),
-        keep=getattr(settings, "BACKUP_KEEP", DEFAULT_BACKUP_KEEP),
         webdav_sync=webdav_sync,
         logger=logger,
     )

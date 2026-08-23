@@ -1747,11 +1747,19 @@ class DailyResearchPipeline:
 
                 backup_result = run_scheduled_backup(logger=logger)
                 if backup_result and backup_result.get("created"):
+                    if backup_result.get("uploaded"):
+                        upload_note = "，已上传 WebDAV"
+                    elif backup_result.get("skipped_reason") == "already_on_remote":
+                        upload_note = "，WebDAV 已有同名副本，跳过上传"
+                    elif backup_result.get("skipped_reason"):
+                        upload_note = "，WebDAV 增量跳过（内容未变化）"
+                    else:
+                        upload_note = ""
                     logger.info(
                         "数据库备份完成: %s（%d 字节%s）",
                         backup_result.get("name"),
                         backup_result.get("size_bytes", 0),
-                        "，已上传 WebDAV" if backup_result.get("uploaded") else "",
+                        upload_note,
                     )
             except Exception:
                 logger.warning("运行后数据库备份失败", exc_info=True)
