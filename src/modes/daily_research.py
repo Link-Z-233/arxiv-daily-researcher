@@ -20,7 +20,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -1364,56 +1364,10 @@ class DailyResearchPipeline:
                         )
                 except Exception as exc:
                     logger.error("报告后 WebDAV 同步调度异常，已保留待补发状态: %s", exc)
-            # ==================== 阶段7: 关键词趋势处理 ====================
-            if settings.KEYWORD_TRACKER_ENABLED and settings.KEYWORD_NORMALIZATION_ENABLED:
-                logger.info(">>> 阶段7: 运行每日关键词标准化...")
-                try:
-                    from keyword_tracker import KeywordTracker
 
-                    tracker = KeywordTracker()
-                    stats = tracker.run_daily_normalization()
-                    logger.info(
-                        f"  标准化完成: 处理 {stats['processed']} 个, 新增规范词 {stats['new_canonical']}, 合并 {stats['merged']}"
-                    )
-
-                    if settings.KEYWORD_REPORT_ENABLED:
-                        today = date.today()
-                        should_generate_report = False
-
-                        if settings.KEYWORD_REPORT_FREQUENCY == "always":
-                            should_generate_report = True
-                        elif settings.KEYWORD_REPORT_FREQUENCY == "daily":
-                            should_generate_report = True
-                        elif settings.KEYWORD_REPORT_FREQUENCY == "weekly":
-                            should_generate_report = today.weekday() == 0
-                        elif settings.KEYWORD_REPORT_FREQUENCY == "monthly":
-                            should_generate_report = today.day == 1
-
-                        if should_generate_report:
-                            logger.info("  生成关键词趋势报告...")
-                            top_keywords = tracker.get_top_keywords()
-                            trends = tracker.get_trends()
-                            bar_chart = tracker.generate_bar_chart()
-                            trend_chart = tracker.generate_trend_chart()
-
-                            from report.keyword_trend import KeywordTrendReporter
-                            kw_reporter = KeywordTrendReporter()
-                            trend_paths = kw_reporter.render(
-                                top_keywords=top_keywords,
-                                trends=trends,
-                                bar_chart=bar_chart,
-                                trend_chart=trend_chart,
-                                today=today,
-                                days=tracker.default_days,
-                            )
-                            logger.info(f"  趋势报告已保存: {trend_paths.get('markdown', '')}")
-                        else:
-                            logger.info(
-                                f"  跳过趋势报告生成 (频率设置: {settings.KEYWORD_REPORT_FREQUENCY})"
-                            )
-
-                except Exception as e:
-                    logger.warning(f"关键词标准化失败: {e}")
+            # ==================== 关键词趋势处理（已拆出主流程） ====================
+            # 关键词标准化/趋势报告改由 cron 在每天 0 点静默执行
+            # （modes/keyword_maintenance.py），避免 LLM 批量调用拖住日报收尾。
 
             # ==================== 完成 ====================
             logger.info("=" * 80)

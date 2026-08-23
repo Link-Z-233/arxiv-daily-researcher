@@ -60,6 +60,7 @@ find /app/logs -name "startup_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>
 find /app/logs -name "daily_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "trend_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "webdav_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
+find /app/logs -name "keyword_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 
 # ==================== Interactive Setup Wizard ====================
 # Run setup wizard on first deployment (no .env file) or when SETUP_WIZARD=true
@@ -110,12 +111,16 @@ CRON_LOG="/app/logs/cron_\$(date +\%Y\%m\%d_\%H\%M\%S).log"
 CRON_CMD="cd /app && /usr/local/bin/python main.py >> $CRON_LOG 2>&1"
 WEBDAV_CRON_LOG="/app/logs/webdav_\$(date +\%Y\%m\%d).log"
 WEBDAV_CRON_CMD="cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m utils.webdav_scheduler >> $WEBDAV_CRON_LOG 2>&1"
+# 关键词标准化/趋势报告：每天 0 点静默执行，与日报主流程解耦。
+KEYWORD_CRON_LOG="/app/logs/keyword_\$(date +\%Y\%m\%d).log"
+KEYWORD_CRON_CMD="cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m modes.keyword_maintenance >> $KEYWORD_CRON_LOG 2>&1"
 {
     echo "$CRON_SCHEDULE $CRON_CMD"
     # This lightweight tick only performs a transfer when config.json selects
     # WebDAV's scheduled mode and its own cron expression matches.  It keeps
     # the established cron/watcher/tail container lifecycle unchanged.
     echo "* * * * * $WEBDAV_CRON_CMD"
+    echo "0 0 * * * $KEYWORD_CRON_CMD"
 } > /etc/cron.d/arxiv-daily
 chmod 0644 /etc/cron.d/arxiv-daily
 crontab /etc/cron.d/arxiv-daily
