@@ -55,11 +55,29 @@ class ReportFile(NamedTuple):
 
 
 def _fmt_daily(stem: str) -> str:
-    """ARXIV_Report_2026-03-10_12-27-47  →  2026-03-10  12:27:47"""
-    m = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})$", stem)
+    """ARXIV_Report_2026-03-10_12-27-47[_392421]  →  2026-03-10  12:27:47"""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(?:_\d+)?$", stem)
     if m:
         return f"{m.group(1)}  {m.group(2).replace('-', ':')}"
     return stem
+
+
+def _daily_report_sort_key(report: ReportFile):
+    """按文件名时间戳排序（补跑/补充报告落在其标注日期，而非文件系统时间）。
+
+    无法解析时间戳的文件退回 mtime，保证任意遗留文件仍可排序。
+    """
+    m = re.search(
+        r"(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})(?:_(\d+))?", report.path.stem
+    )
+    if not m:
+        try:
+            return (0, int(report.path.stat().st_mtime), "")
+        except OSError:
+            return (0, 0, "")
+    micro = (m.group(5) or "").ljust(6, "0")
+    digits = re.sub(r"\D", "", m.group(1) + m.group(2) + m.group(3) + m.group(4))
+    return (1, int(digits + micro), "")
 
 
 def _extract_date_key(stem: str) -> str:
@@ -122,7 +140,9 @@ def _discover_reports(reports_dir: Path = _REPORTS_DIR) -> dict[str, list[Report
                     _extract_date_key(f.stem),
                 )
             )
-        result["daily"].sort(key=lambda r: r.path.stat().st_mtime, reverse=True)
+        # 按报告自身时间戳（文件名）降序：过去日期补跑的报告落在其标注
+        # 日期附近，而不是按生成时刻浮到最顶部。
+        result["daily"].sort(key=_daily_report_sort_key, reverse=True)
 
     # trend_research/html/{keyword-slug}/*.html
     trend_html = reports_dir / "trend_research" / "html"
@@ -224,7 +244,10 @@ def _filter_visible_reports(
 
 
 def _latest_visible_report(visible_reports: dict[str, list[ReportFile]]) -> Optional[ReportFile]:
-    """从当前可见报告中找出修改时间最新的一份。"""
+    """从当前可见报告中找出时间戳最新的一份（文件名优先，回退 mtime）。"""
+    daily = visible_reports.get("daily", [])
+    if daily:
+        return daily[0]
     candidates = [r for reports in visible_reports.values() for r in reports]
     if not candidates:
         return None
@@ -302,8 +325,10 @@ def _find_adjacent_report(
         return None  # 已是最早/最新日期
 
     target_date = unique_dates[new_date_idx]
-    # 返回目标日期内最新的一份报告（按文件修改时间）
+    # 返回目标日期内最新的一份报告（按文件名时间戳，回退 mtime）
     candidates = [r for r in same_source if r.date_key == target_date]
+    if current.report_type == "daily":
+        return max(candidates, key=_daily_report_sort_key)
     return max(candidates, key=lambda r: r.path.stat().st_mtime)
 
 

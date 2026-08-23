@@ -11,6 +11,8 @@ from webui.tabs.reports import (  # noqa: E402
     _build_sandboxed_preview_html,
     _discover_reports,
     _filter_visible_reports,
+    _fmt_daily,
+    _latest_visible_report,
     _strip_legacy_title_badges,
 )
 
@@ -118,6 +120,45 @@ class WebUiReportPreviewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DailyReportTimestampOrderTests(unittest.TestCase):
+    def test_daily_reports_sort_by_filename_timestamp_not_mtime(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports_root = Path(temp_dir)
+            arxiv_dir = reports_root / "daily_research" / "html" / "arxiv"
+            arxiv_dir.mkdir(parents=True)
+            newest = arxiv_dir / "ARXIV_Report_2026-08-22_01-57-34_392421.html"
+            newest.write_text("n", encoding="utf-8")
+            legacy = arxiv_dir / "ARXIV_Report_2026-03-03_16-10-08.html"
+            legacy.write_text("l", encoding="utf-8")
+            backfill = arxiv_dir / "ARXIV_Report_2026-03-15_14-23-05_000001.html"
+            backfill.write_text("b", encoding="utf-8")
+            # 误导性 mtime：补跑文件刚刚生成，但日期属于过去。
+            os.utime(backfill, (1900000000, 1900000000))
+
+            discovered = _discover_reports(reports_root)
+            order = [item.path.name for item in discovered["daily"]]
+            self.assertEqual(order, [
+                "ARXIV_Report_2026-08-22_01-57-34_392421.html",
+                "ARXIV_Report_2026-03-15_14-23-05_000001.html",
+                "ARXIV_Report_2026-03-03_16-10-08.html",
+            ])
+            visible = _filter_visible_reports(discovered, False)
+            self.assertEqual(_latest_visible_report(visible).path, newest)
+
+    def test_fmt_daily_accepts_microsecond_filenames(self):
+        self.assertEqual(
+            _fmt_daily("ARXIV_Report_2026-08-22_01-57-34_392421"),
+            "2026-08-22  01:57:34",
+        )
+        self.assertEqual(
+            _fmt_daily("ARXIV_Report_2026-03-03_16-10-08"),
+            "2026-03-03  16:10:08",
+        )
+        self.assertEqual(_fmt_daily("weird_name"), "weird_name")
 
 
 class DailyReportInlineMarkTests(unittest.TestCase):
