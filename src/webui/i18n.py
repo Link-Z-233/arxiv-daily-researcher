@@ -1155,6 +1155,36 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "dm_backup_skip_reason": {"zh": "未创建备份：{}", "en": "Backup not created: {}"},
     "dm_backup_failed": {"zh": "❌ 备份失败", "en": "❌ Backup failed"},
+    # 旧版本（v3.2）历史导入
+    "dm_legacy_title": {"zh": "旧版本历史导入（v3.2）", "en": "Legacy History Import (v3.2)"},
+    "dm_legacy_hint": {
+        "zh": "一键读取 v3.2 的 JSON 历史与全部 HTML 日报，把完整数据写入 SQLite：重复分析以最新报告为准，数据缺失或遗漏的论文记入补充运行积压，之后可生成补充报告。任务会在每日研究/趋势任务空闲时自动运行。",
+        "en": "Read the v3.2 JSON history and all HTML reports into SQLite in one click: duplicated analyses resolve to the newest report, papers with missing data or missed by old scans are queued for a supplement run. The job starts automatically when the daily/trend tasks are idle.",
+    },
+    "dm_legacy_import_btn": {"zh": "📜 读取旧历史", "en": "📜 Read Legacy History"},
+    "dm_legacy_queued": {
+        "zh": "已加入触发队列：worker 空闲时自动开始读取旧历史。",
+        "en": "Queued: the worker will read the legacy history when idle.",
+    },
+    "dm_legacy_running_hint": {
+        "zh": "触发队列中已有待处理请求，请等待当前任务完成。",
+        "en": "There is already a queued request; wait for it to finish.",
+    },
+    "dm_legacy_failed": {"zh": "❌ 触发失败", "en": "❌ Failed to queue"},
+    "dm_legacy_none": {
+        "zh": "尚未导入过旧历史。",
+        "en": "Legacy history has not been imported yet.",
+    },
+    "dm_legacy_summary_title": {"zh": "最近一次导入结果", "en": "Last import result"},
+    "dm_legacy_summary_line": {
+        "zh": "{finished} · 报告 {reports} 份 · 卡片 {cards} 张 · 交付账本 {delivered} 条 · 缺卡片 {missing_cards} · 缺翻译 {missing_translation} · 缺分析 {missing_analysis} · 积压 {backlog} 条",
+        "en": "{finished} · {reports} reports · {cards} cards · {delivered} deliveries · missing cards {missing_cards} · missing translations {missing_translation} · missing analyses {missing_analysis} · backlog {backlog}",
+    },
+    "dm_legacy_backlog_title": {"zh": "补充运行积压", "en": "Supplement backlog"},
+    "dm_legacy_backlog_line": {
+        "zh": "待处理 {pending} 条（缺数据 {missing} · 遗漏 {missed}），可在空闲时生成补充报告",
+        "en": "{pending} pending ({missing} incomplete · {missed} missed); a supplement report can be generated when idle",
+    },
     "ps_title": {"zh": "论文检索", "en": "Paper Search"},
     "ps_hint": {"zh": "在已处理论文的标题、作者、摘要、TLDR 与提取关键词中检索。", "en": "Search titles, authors, abstracts, TLDRs and extracted keywords of processed papers."},
     "ps_query_label": {"zh": "检索词", "en": "Query"},

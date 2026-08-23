@@ -1,15 +1,20 @@
-"""数据管理 Tab — 配置导出 + WebDAV 同步"""
+"""数据管理 Tab — 配置导出 + WebDAV 同步 + 数据库备份 + 旧历史导入"""
 
 import io
 import zipfile
 import logging
-from datetime import time as dt_time
+import subprocess
+import sys
+from datetime import datetime, time as dt_time
 import streamlit as st
 from pathlib import Path
 
 from webui.i18n import t
 from webui.secret_fields import render_secret_input, resolve_secret_value
+from webui.tabs.run_manager import _daily_db_path_from_config
 from utils.backup import export_backup_zip, restore_backup_archive
+from utils.legacy_history import LEGACY_IMPORT_STATE_KEY
+from utils.webui_trigger import enqueue_trigger, trigger_directory
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +294,134 @@ def render(env_values: dict, config_values: dict):
         st.table(rows)
     else:
         st.caption(t("dm_backup_none"))
+
+    _render_legacy_import_section(config_values)
+
+
+def _legacy_import_store(config_values: dict):
+    """打开（可选自定义路径的）日报数据库；异常时静默返回 None。"""
+    try:
+        from utils.daily_research_store import DailyResearchStore
+
+        return DailyResearchStore(_daily_db_path_from_config(config_values or {}))
+    except Exception:
+        logger.debug("旧历史导入状态读取失败", exc_info=True)
+        return None
+
+
+def _render_legacy_import_section(config_values: dict) -> None:
+    """旧版本（v3.2）历史导入：按钮 + 最近结果 + 补充积压概览。"""
+    import json as json_module
+
+    st.divider()
+
+    # ==================== 旧版本历史导入 ====================
+    st.markdown(
+        f'<p class="section-title">📜 {t("dm_legacy_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<p class="hint-text">{t("dm_legacy_hint")}</p>',
+        unsafe_allow_html=True,
+    )
+
+    queue_dir = trigger_directory(_PROJECT_ROOT / "data")
+    trigger_pending = bool(list(queue_dir.glob("*.json"))) if queue_dir.exists() else False
+
+    if st.button(
+        t("dm_legacy_import_btn"),
+        use_container_width=True,
+        disabled=trigger_pending,
+        type="primary",
+    ):
+        _enqueue_legacy_import()
+
+    if trigger_pending:
+        st.info(t("dm_legacy_running_hint"))
+
+    store = _legacy_import_store(config_values)
+    if store is None:
+        return
+
+    try:
+        summary_raw = store.get_app_state(LEGACY_IMPORT_STATE_KEY)
+    except Exception:
+        summary_raw = None
+    if summary_raw:
+        try:
+            summary = json_module.loads(summary_raw)
+        except ValueError:
+            summary = None
+        if isinstance(summary, dict):
+            st.caption(f"**{t('dm_legacy_summary_title')}**")
+            finished = str(summary.get("finished_at") or "")[:19].replace("T", " ")
+            st.caption(
+                t("dm_legacy_summary_line").format(
+                    finished=finished or "—",
+                    reports=summary.get("reports_scanned", 0),
+                    cards=summary.get("cards_found", 0),
+                    delivered=summary.get("delivered_ledger_rows", 0),
+                    missing_cards=summary.get("missing_cards", 0),
+                    missing_translation=summary.get("missing_translation", 0),
+                    missing_analysis=summary.get("missing_analysis", 0),
+                    backlog=summary.get("backlog_queued", 0),
+                )
+            )
+    else:
+        st.caption(t("dm_legacy_none"))
+
+    try:
+        backlog = store.supplement_backlog_summary()
+    except Exception:
+        backlog = None
+    if backlog and backlog.get("pending"):
+        breakdown = backlog.get("breakdown", {})
+        missing = sum(
+            counts.get("pending", 0) + counts.get("failed", 0)
+            for reason, counts in breakdown.items()
+            if reason != "missed_scan"
+        )
+        missed = sum(
+            counts.get("pending", 0) + counts.get("failed", 0)
+            for reason, counts in breakdown.items()
+            if reason == "missed_scan"
+        )
+        st.caption(f"**{t('dm_legacy_backlog_title')}**")
+        st.caption(
+            t("dm_legacy_backlog_line").format(
+                pending=backlog.get("pending", 0), missing=missing, missed=missed
+            )
+        )
+
+
+def _enqueue_legacy_import() -> None:
+    """Docker 模式走触发队列；本地模式直接后台启动导入进程。"""
+    main_py = _PROJECT_ROOT / "main.py"
+    if not main_py.exists():
+        try:
+            enqueue_trigger(_PROJECT_ROOT / "data", "legacy_import")
+        except Exception as e:
+            st.error(f"{t('dm_legacy_failed')}: {e}")
+            return
+        st.toast(t("dm_legacy_queued"), icon="📜")
+        st.rerun()
+
+    logs_dir = _PROJECT_ROOT / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = logs_dir / f"legacy_import_{datetime.now():%Y%m%d_%H%M%S}.log"
+    try:
+        with open(log_file, "w") as lf:
+            subprocess.Popen(
+                [sys.executable, str(main_py), "--mode", "legacy_import"],
+                cwd=str(_PROJECT_ROOT),
+                stdout=lf,
+                stderr=lf,
+                start_new_session=True,
+            )
+        st.toast(t("dm_legacy_queued"), icon="📜")
+        st.rerun()
+    except Exception as e:
+        st.error(f"{t('dm_legacy_failed')}: {e}")
 
 
 def collect(env_values: dict, _config_values: dict) -> tuple:

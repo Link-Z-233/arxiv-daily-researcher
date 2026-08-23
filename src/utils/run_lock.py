@@ -26,6 +26,10 @@ from typing import List, Optional
 # 非零返回码只进日志，无副作用。
 LOCK_SKIPPED_EXIT_CODE = 75
 
+# 面板触发的后台作业模式。它们启动前等待主流程空闲，daily 模式也会等待
+# 这些作业释放锁，避免与 cron 每日运行在同一个 SQLite 库上互相踩踏。
+AUX_JOB_MODES = ("legacy_import",)
+
 
 def _lock_dir() -> Path:
     try:
@@ -126,6 +130,56 @@ def is_lock_held(lock_path: Path) -> bool:
             return False
     finally:
         lock_file.close()
+
+
+def busy_lock_files(patterns) -> list[Path]:
+    """Return currently held lock files matching names/globs (no suffix needed)."""
+    lock_dir = _lock_dir()
+    busy: list[Path] = []
+    for pattern in patterns or ():
+        for candidate in sorted(lock_dir.glob(f"{pattern}.lock")):
+            if is_lock_held(candidate):
+                busy.append(candidate)
+    return busy
+
+
+def wait_for_idle(
+    patterns,
+    *,
+    poll_seconds: float = 30.0,
+    timeout_seconds: Optional[float] = None,
+    logger=None,
+    wait_note: str = "",
+) -> bool:
+    """Block until none of the given lock patterns is held.
+
+    Used by background jobs (legacy import, supplement runs) that must not
+    overlap a live daily run, and by the daily run itself to wait for those
+    jobs.  Returns True when idle; False on timeout (the caller decides
+    whether proceeding is safe).
+    """
+    import time as _time
+
+    deadline = None
+    if timeout_seconds is not None and timeout_seconds >= 0:
+        deadline = _time.monotonic() + timeout_seconds
+    notified = False
+    while True:
+        busy = busy_lock_files(patterns)
+        if not busy:
+            return True
+        if not notified and logger is not None and wait_note:
+            logger.info(
+                "%s：等待 %s 释放（每 %s 秒复查）", wait_note, ", ".join(p.name for p in busy), int(poll_seconds)
+            )
+            notified = True
+        if deadline is not None and _time.monotonic() >= deadline:
+            if logger is not None:
+                logger.warning(
+                    "等待锁超时（%s 秒），仍被持有: %s", int(timeout_seconds), ", ".join(p.name for p in busy)
+                )
+            return False
+        _time.sleep(max(1.0, float(poll_seconds)))
 
 
 @contextmanager

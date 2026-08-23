@@ -27,7 +27,9 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 TRIGGER_SCHEMA_VERSION = 1
 TRIGGER_DIRECTORY_NAME = "webui_triggers"
 TRIGGER_STATUS_DIRECTORY_NAME = "status"
-SUPPORTED_MODES = frozenset({"daily_research", "trend_research"})
+SUPPORTED_MODES = frozenset({"daily_research", "trend_research", "legacy_import"})
+# 面板触发的后台作业：不接受任何参数。
+_NO_ARGS_MODES = frozenset({"daily_research", "legacy_import"})
 _CATEGORY_RE = re.compile(r"^[A-Za-z0-9.-]{1,64}$")
 _MAX_REQUEST_BYTES = 32 * 1024
 _MAX_KEYWORDS = 32
@@ -144,9 +146,9 @@ def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "args": {},
     }
 
-    if mode == "daily_research":
+    if mode in _NO_ARGS_MODES:
         if args:
-            raise TriggerValidationError("daily_research does not accept trigger arguments")
+            raise TriggerValidationError(f"{mode} does not accept trigger arguments")
         return normalized
 
     keywords = _validate_text_list(

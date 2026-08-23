@@ -1,0 +1,392 @@
+"""v3.2 旧历史导入：HTML 卡片解析、最新覆盖、交付账本与补充积压。"""
+
+import json
+import sys
+import tempfile
+import unittest
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from utils.daily_research_store import DailyResearchStore  # noqa: E402
+from utils.legacy_history import (  # noqa: E402
+    import_legacy_history,
+    load_legacy_history_files,
+    parse_legacy_report_cards,
+)
+
+
+def _card_fail(idx: int, paper_id: str, title: str) -> str:
+    return f"""<div class="card fail">
+<div class="card-title"><a href="http://arxiv.org/abs/{paper_id}" target="_blank">{idx}. {title}</a>
+<span class="badge fail">FAIL</span></div>
+<div class="field"><span class="field-label">Score:</span> <span class="score">2.4</span> / 16.4</div>
+<div class="field"><span class="field-label">Authors:</span> Yonghae Lee, Taewan Kim</div>
+<div class="field"><span class="field-label">Published:</span> 2026-03-01</div>
+<div class="tldr"><strong>TL;DR:</strong> 该论文提出了一个测试摘要总结。</div>
+<details open><summary>摘要翻译</summary>
+<div class="analysis-content"><p>这是一段中文翻译摘要。</p></div></details>
+<details><summary>Abstract</summary>
+<div class="analysis-content"><p>This is the original abstract.</p></div></details>
+<details><summary>评分详情</summary>
+<div class="analysis-content"><table style="width:100%;border-collapse:collapse;font-size:0.85em;">
+<tr style="border-bottom:2px solid var(--color-border);"><th style="text-align:left;padding:4px 8px;">关键词</th><th style="text-align:center;padding:4px 8px;">权重</th><th style="text-align:center;padding:4px 8px;">相关度</th><th style="text-align:center;padding:4px 8px;">得分</th></tr>
+<tr style="border-bottom:1px solid var(--color-border);"><td style="padding:4px 8px;">Entanglement</td><td style="text-align:center;padding:4px 8px;">1.0</td><td style="text-align:center;padding:4px 8px;">2.4/10</td><td style="text-align:center;padding:4px 8px;">2.4</td></tr>
+</table>
+<p style="margin-top:8px;"><strong>评分理由:</strong> 关键词匹配度较低。</p></div></details>
+<details><summary>关键词</summary>
+<div class="analysis-content"><p>entanglement, state preparation</p></div></details>
+</div>"""
+
+
+_CARD_PASS_WITH_ANALYSIS = """<div class="card pass">
+<div class="card-title"><a href="http://arxiv.org/abs/2603.11111v1" target="_blank" rel="noopener noreferrer">1. A Quantum Advantage Paper</a>
+<span class="badge pass">PASS</span></div>
+<div class="field"><span class="field-label">Score:</span> <span class="score">20.0</span> / 11.0</div>
+<div class="field"><span class="field-label">Authors:</span> Bob Author</div>
+<div class="field"><span class="field-label">Published:</span> 2026-03-02</div>
+<div class="field"><span class="field-label">Version:</span> v1</div>
+<div class="tldr"><strong>TL;DR:</strong> 中文一句话总结。</div>
+<details open><summary>摘要翻译</summary>
+<div class="analysis-content"><p>中文摘要翻译内容。</p></div></details>
+<details><summary>Abstract</summary>
+<div class="analysis-content"><p>Original abstract text.</p></div></details>
+<details><summary>深度分析</summary>
+<div class="analysis-content">
+<p><strong>Chinese Title:</strong> 一篇量子优势论文</p>
+<p><strong>Summary:</strong> 概括论文的主要内容。</p>
+<p><strong>Innovations:</strong></p><ul>
+<li>创新点一</li>
+<li>创新点二</li>
+</ul>
+<p><strong>Key Results:</strong> 关键结果描述</p>
+</div></details>
+</div>"""
+
+_CARD_PASS_MISSING_ANALYSIS = """<div class="card pass">
+<div class="card-title"><a href="http://arxiv.org/abs/2603.22222v1" target="_blank">1. Pass Without Analysis</a>
+<span class="badge pass">PASS</span></div>
+<div class="field"><span class="field-label">Score:</span> <span class="score">18.0</span> / 11.0</div>
+<div class="field"><span class="field-label">Authors:</span> Carol Author</div>
+<div class="field"><span class="field-label">Published:</span> 2026-03-04</div>
+<details open><summary>摘要翻译</summary>
+<div class="analysis-content"><p>翻译好的摘要。</p></div></details>
+<details><summary>Abstract</summary>
+<div class="analysis-content"><p>Abstract text.</p></div></details>
+</div>"""
+
+_CARD_DOI = """<div class="card pass">
+<div class="card-title"><a href="https://doi.org/10.1103/ab12-cd34" target="_blank">1. Journal Paper Title</a>
+<span class="badge pass">PASS</span></div>
+<div class="field"><span class="field-label">Score:</span> <span class="score">15.0</span> / 11.0</div>
+<div class="field"><span class="field-label">Authors:</span> Dana Author</div>
+<div class="field"><span class="field-label">Published:</span> 2026-03-05</div>
+<details open><summary>摘要翻译</summary>
+<div class="analysis-content"><p>期刊论文的中文摘要。</p></div></details>
+<details><summary>Abstract</summary>
+<div class="analysis-content"><p>Journal abstract.</p></div></details>
+</div>"""
+
+
+def _report_html(body: str, generated: str, passing: float) -> str:
+    return (
+        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><style>"
+        ".card{border:1px solid}</style></head><body>"
+        "<h1>ArXiv Research Report</h1>"
+        f'<p class="meta">Generated: {generated} | Passing score: {passing}</p>'
+        '<div class="stats-bar"><div class="stat"><div class="num">1</div>'
+        '<div class="label">Total</div></div></div>'
+        "<h2>Papers</h2>"
+        f"{body}</body></html>"
+    )
+
+
+def _write_report(root: Path, source: str, stamp: str, body: str) -> Path:
+    directory = root / "html" / source
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{source.upper()}_Report_{stamp}.html"
+    path.write_text(_report_html(body, stamp.replace("_", " ").replace("-", ":")[:19], 11.0), encoding="utf-8")
+    return path
+
+
+class LegacyCardParsingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_parses_fail_card_fields_and_identity(self):
+        _write_report(
+            self.root,
+            "arxiv",
+            "2026-03-03_16-10-08",
+            _card_fail(1, "2603.00845v1", "Three-Qubit State Preparation"),
+        )
+        cards = parse_legacy_report_cards(self.root / "html")
+        self.assertEqual(len(cards), 1)
+        card = cards[0]
+        self.assertEqual(card["source"], "arxiv")
+        self.assertEqual(card["paper_id"], "2603.00845v1")
+        self.assertEqual(card["canonical_id"], "2603.00845")
+        self.assertEqual(card["version"], 1)
+        self.assertEqual(card["title"], "Three-Qubit State Preparation")
+        self.assertEqual(card["authors"], ["Yonghae Lee", "Taewan Kim"])
+        self.assertEqual(card["abstract"], "This is the original abstract.")
+        self.assertEqual(card["abstract_cn"], "这是一段中文翻译摘要。")
+        self.assertFalse(card["score_payload"]["is_qualified"])
+        self.assertAlmostEqual(card["score_payload"]["total_score"], 2.4)
+        self.assertAlmostEqual(card["score_payload"]["passing_score"], 16.4)
+        self.assertEqual(card["score_payload"]["keyword_scores"], {"Entanglement": 2.4})
+        self.assertEqual(card["score_payload"]["extracted_keywords"], ["entanglement", "state preparation"])
+        self.assertEqual(card["report_at"], datetime(2026, 3, 3, 16, 10, 8))
+
+    def test_parses_deep_analysis_sections_into_field_ids(self):
+        _write_report(self.root, "arxiv", "2026-04-17_08-15-37", _CARD_PASS_WITH_ANALYSIS)
+        cards = parse_legacy_report_cards(self.root / "html")
+        analysis = cards[0]["analysis"]
+        self.assertEqual(analysis["chinese_title"], "一篇量子优势论文")
+        self.assertEqual(analysis["summary"], "概括论文的主要内容。")
+        self.assertEqual(analysis["innovations"], ["创新点一", "创新点二"])
+        self.assertEqual(analysis["key_results"], "关键结果描述")
+
+    def test_doi_card_identity_uses_normalized_doi(self):
+        _write_report(self.root, "prl", "2026-04-11_08-13-24", _CARD_DOI)
+        cards = parse_legacy_report_cards(self.root / "html")
+        card = cards[0]
+        self.assertEqual(card["source"], "prl")
+        self.assertEqual(card["canonical_id"], "10.1103/ab12-cd34")
+        self.assertEqual(card["version"], 0)
+        self.assertEqual(card["paper_id"], "https://doi.org/10.1103/ab12-cd34")
+
+    def test_score_json_is_valid_weighted_score_response(self):
+        _write_report(self.root, "arxiv", "2026-03-03_16-10-08", _card_fail(1, "2603.00845v1", "Title"))
+        cards = parse_legacy_report_cards(self.root / "html")
+        from agents.analysis_agent import WeightedScoreResponse
+
+        payload = {**cards[0]["score_payload"]}
+        payload.setdefault("strategy_id", "legacy_weighted_keyword_v1")
+        model = WeightedScoreResponse.model_validate(payload)
+        self.assertAlmostEqual(model.total_score, 2.4)
+        self.assertEqual(model.keyword_scores, {"Entanglement": 2.4})
+
+
+class LegacyHistoryLoadingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_loads_arxiv_and_openalex_keys(self):
+        (self.root / "arxiv_history.json").write_text(
+            json.dumps(
+                {
+                    "2602.03848v1": "2026-02-04T23:48:23.286228",
+                    "2602.03843@v2": "2026-02-06T01:00:00.000000",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "openalex_history.json").write_text(
+            json.dumps({"https://doi.org/10.1103/sl32-jn82": "2026-02-05T01:12:51.385030"}),
+            encoding="utf-8",
+        )
+        histories = load_legacy_history_files(self.root)
+        self.assertEqual(histories["arxiv"][("2602.03848", 1)], "2026-02-04T23:48:23.286228")
+        self.assertEqual(histories["arxiv"][("2602.03843", 2)], "2026-02-06T01:00:00.000000")
+        self.assertIn(("10.1103/sl32-jn82", 0), histories["openalex"])
+
+    def test_skips_archived_v1_history_file(self):
+        (self.root / "history_old_v1.0.json").write_text(json.dumps({"x": "1"}), encoding="utf-8")
+        histories = load_legacy_history_files(self.root)
+        self.assertEqual(histories, {})
+
+
+class LegacyImportIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.history_dir = self.root / "history"
+        self.history_dir.mkdir()
+        self.reports_dir = self.root / "reports"
+        self.store = DailyResearchStore(self.root / "daily_research.db")
+        self.run_id = self.store.start_run(0, run_kind="legacy_import")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _import(self) -> dict:
+        return import_legacy_history(
+            self.store,
+            history_dir=self.history_dir,
+            reports_html_dir=self.reports_dir / "html",
+            delivery_run_id=self.run_id,
+        )
+
+    def test_complete_cards_get_paper_rows_and_delivery_ledger(self):
+        (self.history_dir / "arxiv_history.json").write_text(
+            json.dumps({"2603.00845v1": "2026-03-03T23:48:23.286228"}), encoding="utf-8"
+        )
+        _write_report(
+            self.reports_dir,
+            "arxiv",
+            "2026-03-03_16-10-08",
+            _card_fail(1, "2603.00845v1", "Three-Qubit State Preparation"),
+        )
+        summary = self._import()
+        self.assertEqual(summary["cards_found"], 1)
+        self.assertEqual(summary["delivered_ledger_rows"], 1)
+        record = self.store.get_paper_record("arxiv", "2603.00845v1")
+        self.assertIsNotNone(record)
+        self.assertEqual(record["score_status"], "succeeded")
+        self.assertEqual(record["translation_status"], "succeeded")
+        self.assertEqual(record["analysis_status"], "pending")  # FAIL 不需要分析
+        self.assertEqual(record["completed_at"], "2026-03-03T23:48:23.286228")
+        self.assertTrue(self.store.is_paper_delivered("arxiv", "2603.00845v1"))
+        self.assertEqual(self.store.supplement_backlog_summary()["pending"], 0)
+
+    def test_newest_report_overwrites_older_duplicate(self):
+        (self.history_dir / "arxiv_history.json").write_text(
+            json.dumps({"2603.00845v1": "2026-03-04T23:48:23.286228"}), encoding="utf-8"
+        )
+        _write_report(
+            self.reports_dir, "arxiv", "2026-03-03_16-10-08",
+            _card_fail(1, "2603.00845v1", "Old Title"),
+        )
+        _write_report(
+            self.reports_dir, "arxiv", "2026-03-04_22-33-07",
+            _card_fail(1, "2603.00845v1", "New Title"),
+        )
+        self._import()
+        record = self.store.get_paper_record("arxiv", "2603.00845v1")
+        self.assertIn("New Title", record["paper_json"])
+
+    def test_pass_without_analysis_goes_to_backlog_without_delivery(self):
+        _write_report(self.reports_dir, "arxiv", "2026-05-01_08-00-00", _CARD_PASS_MISSING_ANALYSIS)
+        summary = self._import()
+        self.assertEqual(summary["missing_analysis"], 1)
+        self.assertEqual(summary["delivered_ledger_rows"], 0)
+        # 不写交付账本（补充报告交付时补写），但 completed_at 保留 v3.2
+        # 推送时间：论文检索可见，也不会混入每日运行的待处理队列。
+        with self.store._connect() as conn:
+            ledger_rows = conn.execute(
+                "SELECT COUNT(*) FROM paper_deliveries WHERE source = 'arxiv' "
+                "AND canonical_id = '2603.22222'"
+            ).fetchone()[0]
+        self.assertEqual(ledger_rows, 0)
+        record = self.store.get_paper_record("arxiv", "2603.22222v1")
+        self.assertIsNotNone(record["completed_at"])
+        backlog_summary = self.store.supplement_backlog_summary()
+        self.assertEqual(backlog_summary["pending"], 1)
+        self.assertEqual(
+            backlog_summary["breakdown"]["missing_analysis"]["pending"], 1
+        )
+        rows = self.store.claim_supplement_backlog(10)
+        self.assertEqual(rows[0]["canonical_id"], "2603.22222")
+
+    def test_history_entry_without_card_becomes_missing_data(self):
+        (self.history_dir / "arxiv_history.json").write_text(
+            json.dumps({"2602.03848v1": "2026-02-04T23:48:23.286228"}), encoding="utf-8"
+        )
+        summary = self._import()
+        self.assertEqual(summary["missing_cards"], 1)
+        rows = self.store.claim_supplement_backlog(10)
+        self.assertEqual(rows[0]["paper_id"], "2602.03848v1")
+        self.assertEqual(rows[0]["reason"], "missing_data")
+
+    def test_v4_rows_are_never_downgraded_by_legacy_data(self):
+        run_id = self.store.start_run(0)
+        from sources.base_source import PaperMetadata
+
+        paper = PaperMetadata(
+            paper_id="2603.00845v1",
+            title="V4 Title",
+            authors=["A"],
+            abstract="abs",
+            published_date=datetime(2026, 8, 1),
+            url="https://arxiv.org/abs/2603.00845v1",
+            source="arxiv",
+        )
+        self.store.upsert_paper_seen(run_id, "arxiv", paper, stage_fingerprints={
+            "score": "f1", "translation": "f2", "analysis": "f3",
+        })
+        (self.history_dir / "arxiv_history.json").write_text(
+            json.dumps({"2603.00845v1": "2026-03-03T23:48:23.286228"}), encoding="utf-8"
+        )
+        _write_report(
+            self.reports_dir, "arxiv", "2026-03-03_16-10-08",
+            _card_fail(1, "2603.00845v1", "Old Title"),
+        )
+        summary = self._import()
+        self.assertEqual(summary["skipped_v4_rows"], 1)
+        record = self.store.get_paper_record("arxiv", "2603.00845v1")
+        self.assertIn("V4 Title", record["paper_json"])
+        # 账本仍按身份补写，防止同一版本再次推送。
+        self.assertTrue(self.store.is_paper_delivered("arxiv", "2603.00845v1"))
+
+    def test_run_kind_column_and_import_run_flow(self):
+        (self.history_dir / "arxiv_history.json").write_text("{}", encoding="utf-8")
+        self._import()
+        self.store.complete_run(self.run_id, {})
+        import sqlite3
+
+        conn = sqlite3.connect(self.store.db_path)
+        kind = conn.execute(
+            "SELECT run_kind FROM daily_runs WHERE run_id = ?", (self.run_id,)
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(kind, "legacy_import")
+
+
+class SupplementBacklogStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = DailyResearchStore(Path(self.tmp.name) / "db.sqlite")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_backlog_upsert_is_idempotent_and_keeps_delivered(self):
+        entry = {
+            "source": "arxiv",
+            "canonical_id": "2603.1",
+            "version": 1,
+            "paper_id": "2603.1v1",
+            "reason": "missing_data",
+            "detail": "d1",
+        }
+        self.assertEqual(self.store.record_supplement_backlog([entry]), 1)
+        self.assertEqual(self.store.record_supplement_backlog([dict(entry, detail="d2")]), 0)
+        rows = self.store.claim_supplement_backlog(5)
+        self.assertEqual(len(rows), 1)
+
+        self.store.resolve_supplement_backlog(
+            "run_x", [("arxiv", "2603.1", 1)], status="delivered"
+        )
+        # 交付后的行不再被重新排队。
+        self.assertEqual(self.store.claim_supplement_backlog(5), [])
+        self.assertEqual(self.store.record_supplement_backlog([dict(entry)]), 0)
+
+    def test_claim_orders_data_repair_before_missed_scan(self):
+        self.store.record_supplement_backlog([
+            {"source": "arxiv", "canonical_id": "2603.9", "version": 1,
+             "paper_id": "2603.9v1", "reason": "missed_scan"},
+            {"source": "arxiv", "canonical_id": "2603.2", "version": 1,
+             "paper_id": "2603.2v1", "reason": "missing_analysis"},
+        ])
+        rows = self.store.claim_supplement_backlog(1)
+        self.assertEqual(rows[0]["canonical_id"], "2603.2")
+
+    def test_app_state_round_trip(self):
+        self.assertIsNone(self.store.get_app_state("k"))
+        self.store.set_app_state("k", "v1")
+        self.store.set_app_state("k", "v2")
+        self.assertEqual(self.store.get_app_state("k"), "v2")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -38,8 +38,8 @@ def parse_args(argv: Optional[Sequence[str]] = None):
     parser.add_argument(
         "--mode",
         default="daily_research",
-        choices=["daily_research", "trend_research"],
-        help="运行模式：daily_research（每日研究，默认）或 trend_research（研究趋势分析）",
+        choices=["daily_research", "trend_research", "legacy_import"],
+        help="运行模式：daily_research（每日研究，默认）、trend_research（研究趋势分析）或 legacy_import（旧版本历史导入）",
     )
     parser.add_argument(
         "--keywords",
@@ -172,11 +172,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ).run()
         return _result_exit_code(result)
 
+    if args.mode == "legacy_import":
+        # 旧版本（v3.2）历史导入：面板触发，等待主流程空闲后运行。
+        log_file = setup_run_log("legacy_import")
+        logger.info(f"旧历史导入日志文件: {log_file}")
+
+        from modes.legacy_import import main as legacy_import_main
+
+        return legacy_import_main()
+
     # 每日研究模式（默认）
     log_file = setup_run_log("daily_research")
     logger.info(f"每日研究日志文件: {log_file}")
 
     from modes.daily_research import DailyResearchPipeline
+    from utils.run_lock import AUX_JOB_MODES, wait_for_idle
+
+    # 面板后台作业（旧历史导入等）与每日研究共用一个 SQLite 库；daily
+    # 先等它们收尾（有上限），再取自己的运行锁，避免与 cron 互相踩踏。
+    wait_for_idle(
+        AUX_JOB_MODES,
+        poll_seconds=30,
+        timeout_seconds=4 * 3600,
+        logger=logger,
+        wait_note="每日研究等待面板后台作业完成",
+    )
 
     with run_lock("daily_research"):
         result = DailyResearchPipeline().run()

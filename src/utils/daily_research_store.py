@@ -88,11 +88,13 @@ class DailyResearchStore:
                     status TEXT NOT NULL,
                     total_papers INTEGER DEFAULT 0,
                     error TEXT,
-                    report_paths_json TEXT
+                    report_paths_json TEXT,
+                    run_kind TEXT NOT NULL DEFAULT 'daily'
                 )
                 """
             )
             self._migrate_run_scan_state(conn)
+            self._migrate_run_kind(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS daily_papers (
@@ -320,6 +322,40 @@ class DailyResearchStore:
                 """
             )
 
+            # Papers that need a supplement run: legacy entries whose data is
+            # incomplete (missing card / translation / analysis) and papers a
+            # historical range scan found to be entirely missing.  Rows are
+            # resolved by marking them delivered; failed fetch attempts stay
+            # re-selectable so a later supplement run can retry them.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS supplement_backlog (
+                    backlog_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    canonical_id TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 0,
+                    paper_id TEXT,
+                    reason TEXT NOT NULL
+                        CHECK (reason IN (
+                            'missing_data', 'missing_analysis',
+                            'missing_translation', 'missed_scan'
+                        )),
+                    detail TEXT,
+                    paper_json TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'delivered', 'failed', 'skipped')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    resolved_run_id TEXT,
+                    UNIQUE(source, canonical_id, version)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_supplement_backlog_status "
+                "ON supplement_backlog(status, reason, created_at)"
+            )
+
     @staticmethod
     def _migrate_run_scan_state(conn):
         """Add scan audit columns to databases created before recovery watermarks."""
@@ -334,6 +370,17 @@ class DailyResearchStore:
         for name, definition in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE daily_runs ADD COLUMN {name} {definition}")
+
+    @staticmethod
+    def _migrate_run_kind(conn):
+        """Tag pre-4.1 run rows as ordinary daily runs."""
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(daily_runs)").fetchall()
+        }
+        if "run_kind" not in columns:
+            conn.execute(
+                "ALTER TABLE daily_runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'daily'"
+            )
 
     @staticmethod
     def _migrate_paper_identity(conn):
@@ -491,16 +538,17 @@ class DailyResearchStore:
             "ON paper_deliveries(source, canonical_id, version)"
         )
 
-    def start_run(self, total_papers: int) -> str:
+    def start_run(self, total_papers: int, run_kind: str = "daily") -> str:
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         now = datetime.now().isoformat()
+        normalized_kind = str(run_kind or "daily").strip() or "daily"
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO daily_runs(run_id, started_at, status, total_papers)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO daily_runs(run_id, started_at, status, total_papers, run_kind)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (run_id, now, "running", total_papers),
+                (run_id, now, "running", total_papers, normalized_kind),
             )
         return run_id
 
@@ -1001,6 +1049,309 @@ class DailyResearchStore:
                         now,
                     ),
                 )
+
+    # ─── 旧版本（v3.2）历史导入与补充运行积压 ─────────────────────────────
+
+    def import_legacy_paper(self, payload: Dict[str, Any], *, delivered: bool) -> str:
+        """Upsert one paper reconstructed from a legacy HTML report card.
+
+        ``payload`` keys: source/paper_id/canonical_id/version/paper_json(dict)/
+        score_json(str)/abstract_cn/analysis_json(str)/score_status/
+        translation_status/analysis_status/completed_at/report_path/delivered_at.
+
+        Newest-wins: an existing row is overwritten only when the incoming
+        card timestamp is newer.  Rows produced by v4 runs carry stage
+        fingerprints and are never downgraded by legacy data; the delivery
+        ledger is still backfilled because it is identity-only.  Returns one
+        of ``imported`` / ``skipped_existing_newer`` / ``skipped_v4_rows``.
+        """
+        now = datetime.now().isoformat()
+        source = str(payload["source"]).strip().lower()
+        paper_id = str(payload["paper_id"])
+        canonical_id = str(payload.get("canonical_id") or paper_id)
+        version = int(payload.get("version") or 0)
+        completed_at = payload.get("completed_at") or now
+        paper_json = payload.get("paper_json")
+        if not isinstance(paper_json, str):
+            paper_json = json.dumps(paper_json or {}, ensure_ascii=False)
+
+        with self._lock, self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT completed_at, score_input_fingerprint,
+                       translation_input_fingerprint, analysis_input_fingerprint
+                FROM daily_papers WHERE source = ? AND paper_id = ?
+                """,
+                (source, paper_id),
+            ).fetchone()
+            outcome = "imported"
+            v4_managed = existing is not None and any(
+                existing[column] for column in (
+                    "score_input_fingerprint",
+                    "translation_input_fingerprint",
+                    "analysis_input_fingerprint",
+                )
+            )
+            if existing is not None and v4_managed:
+                outcome = "skipped_v4_rows"
+            elif (
+                existing is not None
+                and existing["completed_at"]
+                and str(existing["completed_at"]) >= str(completed_at)
+            ):
+                outcome = "skipped_existing_newer"
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO daily_papers (
+                        source, paper_id, canonical_id, version,
+                        first_seen_at, last_seen_at, run_id, paper_json,
+                        score_json, abstract_cn, analysis_json,
+                        scored_at, translated_at, analyzed_at,
+                        score_status, translation_status, analysis_status,
+                        retry_count, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    ON CONFLICT(source, paper_id) DO UPDATE SET
+                        canonical_id = excluded.canonical_id,
+                        version = excluded.version,
+                        last_seen_at = excluded.last_seen_at,
+                        paper_json = excluded.paper_json,
+                        score_json = excluded.score_json,
+                        abstract_cn = excluded.abstract_cn,
+                        analysis_json = excluded.analysis_json,
+                        scored_at = excluded.scored_at,
+                        translated_at = excluded.translated_at,
+                        analyzed_at = excluded.analyzed_at,
+                        score_status = excluded.score_status,
+                        translation_status = excluded.translation_status,
+                        analysis_status = excluded.analysis_status,
+                        last_error = NULL,
+                        completed_at = COALESCE(excluded.completed_at, daily_papers.completed_at)
+                    """,
+                    (
+                        source,
+                        paper_id,
+                        canonical_id,
+                        version,
+                        completed_at,
+                        completed_at,
+                        paper_json,
+                        payload.get("score_json"),
+                        payload.get("abstract_cn"),
+                        payload.get("analysis_json"),
+                        completed_at if payload.get("score_json") else None,
+                        completed_at if payload.get("abstract_cn") else None,
+                        completed_at if payload.get("analysis_json") else None,
+                        payload.get("score_status") or "pending",
+                        payload.get("translation_status") or "pending",
+                        payload.get("analysis_status") or "pending",
+                        completed_at,
+                    ),
+                )
+
+            if delivered:
+                conn.execute(
+                    """
+                    INSERT INTO paper_deliveries(
+                        run_id, source, paper_id, canonical_id, version,
+                        report_path, delivered_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source, canonical_id, version) DO NOTHING
+                    """,
+                    (
+                        str(payload.get("delivery_run_id") or "legacy_import"),
+                        source,
+                        paper_id,
+                        canonical_id,
+                        version,
+                        payload.get("report_path"),
+                        payload.get("delivered_at") or completed_at,
+                    ),
+                )
+        return outcome
+
+    def record_supplement_backlog(self, entries: list[Dict[str, Any]]) -> int:
+        """Queue papers that need a supplement run; returns newly queued count.
+
+        Idempotent per ``(source, canonical_id, version)``; already delivered
+        rows keep their terminal status, and an existing reason is never
+        downgraded to a vaguer one by a re-import.
+        """
+        now = datetime.now().isoformat()
+        inserted = 0
+        with self._lock, self._connect() as conn:
+            for entry in entries:
+                source = str(entry["source"]).strip().lower()
+                canonical_id = str(entry["canonical_id"]).strip()
+                if not source or not canonical_id:
+                    continue
+                existing = conn.execute(
+                    "SELECT status FROM supplement_backlog "
+                    "WHERE source = ? AND canonical_id = ? AND version = ?",
+                    (source, canonical_id, int(entry.get("version") or 0)),
+                ).fetchone()
+                if existing is None:
+                    conn.execute(
+                        """
+                        INSERT INTO supplement_backlog (
+                            source, canonical_id, version, paper_id, reason,
+                            detail, paper_json, status, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                        """,
+                        (
+                            source,
+                            canonical_id,
+                            int(entry.get("version") or 0),
+                            entry.get("paper_id"),
+                            entry["reason"],
+                            entry.get("detail"),
+                            (
+                                json.dumps(entry["paper_json"], ensure_ascii=False)
+                                if entry.get("paper_json") is not None
+                                else None
+                            ),
+                            now,
+                            now,
+                        ),
+                    )
+                    inserted += 1
+                elif existing["status"] != "delivered":
+                    conn.execute(
+                        """
+                        UPDATE supplement_backlog
+                        SET paper_id = COALESCE(?, paper_id),
+                            detail = ?, updated_at = ?,
+                            paper_json = COALESCE(?, paper_json)
+                        WHERE source = ? AND canonical_id = ? AND version = ?
+                        """,
+                        (
+                            entry.get("paper_id"),
+                            entry.get("detail"),
+                            now,
+                            (
+                                json.dumps(entry["paper_json"], ensure_ascii=False)
+                                if entry.get("paper_json") is not None
+                                else None
+                            ),
+                            source,
+                            canonical_id,
+                            int(entry.get("version") or 0),
+                        ),
+                    )
+        return inserted
+
+    def supplement_backlog_summary(self) -> Dict[str, Any]:
+        """Return per-status/per-reason counts plus the oldest pending row."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT reason, status, COUNT(*) AS n FROM supplement_backlog
+                GROUP BY reason, status
+                """
+            ).fetchall()
+            pending_total = conn.execute(
+                "SELECT COUNT(*) FROM supplement_backlog "
+                "WHERE status IN ('pending', 'failed')"
+            ).fetchone()[0]
+            oldest = conn.execute(
+                "SELECT MIN(created_at) FROM supplement_backlog "
+                "WHERE status IN ('pending', 'failed')"
+            ).fetchone()[0]
+        breakdown: Dict[str, Dict[str, int]] = {}
+        for row in rows:
+            breakdown.setdefault(row["reason"], {})[row["status"]] = row["n"]
+        return {
+            "breakdown": breakdown,
+            "pending": pending_total,
+            "oldest_pending_at": oldest,
+        }
+
+    def claim_supplement_backlog(self, limit: int) -> list[Dict[str, Any]]:
+        """Select the next backlog papers for one supplement run.
+
+        Data-repair entries (from the legacy import) are drained before
+        missed-scan discoveries, oldest first.  Failed fetches retry after
+        the pending rows.  Returned rows carry the persisted paper metadata
+        when the import already reconstructed it.
+        """
+        bounded = max(0, int(limit))
+        if bounded == 0:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source, canonical_id, version, paper_id, reason,
+                       detail, paper_json
+                FROM supplement_backlog
+                WHERE status IN ('pending', 'failed')
+                ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
+                         CASE reason WHEN 'missed_scan' THEN 1 ELSE 0 END,
+                         created_at ASC,
+                         backlog_id ASC
+                LIMIT ?
+                """,
+                (bounded,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            if item.get("paper_json"):
+                try:
+                    item["paper_json"] = json.loads(item["paper_json"])
+                except (TypeError, ValueError):
+                    item["paper_json"] = None
+            result.append(item)
+        return result
+
+    def resolve_supplement_backlog(
+        self,
+        run_id: str,
+        identities: list[Tuple[str, str, int]],
+        *,
+        status: str,
+        detail: Optional[str] = None,
+    ) -> int:
+        """Mark selected backlog rows delivered/failed/skipped after a run."""
+        if status not in ("delivered", "failed", "skipped"):
+            raise ValueError(f"invalid supplement backlog status: {status}")
+        now = datetime.now().isoformat()
+        resolved = 0
+        with self._lock, self._connect() as conn:
+            for source, canonical_id, version in identities:
+                cursor = conn.execute(
+                    """
+                    UPDATE supplement_backlog
+                    SET status = ?, detail = COALESCE(?, detail),
+                        resolved_run_id = ?, updated_at = ?
+                    WHERE source = ? AND canonical_id = ? AND version = ?
+                      AND status != 'delivered'
+                    """,
+                    (status, detail, run_id, now, source, canonical_id, int(version or 0)),
+                )
+                resolved += max(0, cursor.rowcount or 0)
+        return resolved
+
+    # ─── 小型键值状态（跨运行决策） ─────────────────────────────────────
+
+    def get_app_state(self, key: str) -> Optional[str]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM app_state WHERE key = ?", (str(key),)
+            ).fetchone()
+        return row["value"] if row else None
+
+    def set_app_state(self, key: str, value: str) -> None:
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO app_state(key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (str(key), str(value), now),
+            )
 
     def get_daily_token_totals(self, days: Optional[int] = None) -> list[Dict[str, Any]]:
         """Aggregate persisted token usage by calendar day (oldest first).

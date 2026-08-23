@@ -45,6 +45,16 @@ class WebUITriggerTests(unittest.TestCase):
             self.assertEqual(payload["args"], {})
             self.assertEqual(oct(request_path.stat().st_mode & 0o777), "0o600")
 
+
+    def test_legacy_import_request_has_no_arguments(self):
+        payload = build_trigger_payload("legacy_import")
+        self.assertEqual(payload["mode"], "legacy_import")
+        self.assertEqual(payload["args"], {})
+        command = build_main_command(payload, Path("/worker"))
+        self.assertEqual(command[:4], [sys.executable, "/worker/main.py", "--mode", "legacy_import"])
+        with self.assertRaises(TriggerValidationError):
+            build_trigger_payload("legacy_import", anything=1)
+
     def test_trend_request_uses_argument_list_and_preserves_quoted_phrase(self):
         payload = build_trigger_payload(
             "trend_research",
