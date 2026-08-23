@@ -414,5 +414,79 @@ class ArxivTimeoutGuardTests(unittest.TestCase):
                     guard.touch()
 
 
+def _http_error(status: int, message: str, retry_after=None):
+    """构造带响应头的 urllib HTTPError，模拟 arXiv 网络错误。"""
+    from email.message import Message
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    headers = Message()
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return HTTPError(
+        "https://export.arxiv.org/api/query",
+        status,
+        message,
+        headers,
+        BytesIO(b""),
+    )
+
+
+class ArxivRetryBackoffTests(unittest.TestCase):
+    """领域/关键词两条抓取路径共享的退避分类。"""
+
+    def test_timeout_backs_off_linearly(self):
+        from sources.arxiv_source import _ArxivTimeoutError, _arxiv_retry_wait
+
+        exc = _ArxivTimeoutError("ArXiv 请求超时（>180s 无进展）")
+        self.assertEqual(_arxiv_retry_wait(exc, 1), 30)
+        self.assertEqual(_arxiv_retry_wait(exc, 2), 60)
+        self.assertEqual(_arxiv_retry_wait(exc, 3), 90)
+        self.assertEqual(_arxiv_retry_wait(exc, 9), 90)
+
+    def test_rate_limit_backs_off_exponentially(self):
+        from sources.arxiv_source import _arxiv_retry_wait, _is_rate_limit_error
+
+        exc = _http_error(429, "Too Many Requests")
+        self.assertTrue(_is_rate_limit_error(exc))
+        self.assertEqual(_arxiv_retry_wait(exc, 1), 60)
+        self.assertEqual(_arxiv_retry_wait(exc, 2), 120)
+        self.assertEqual(_arxiv_retry_wait(exc, 3), 240)
+        self.assertEqual(_arxiv_retry_wait(exc, 9), 480)
+
+    def test_rate_limit_detection_accepts_plain_messages(self):
+        from sources.arxiv_source import _is_rate_limit_error
+
+        self.assertTrue(_is_rate_limit_error(RuntimeError("HTTP Error 429: Too Many Requests")))
+        self.assertFalse(_is_rate_limit_error(RuntimeError("HTTP Error 503: Service Unavailable")))
+
+    def test_generic_server_errors_back_off_linearly(self):
+        from sources.arxiv_source import _arxiv_retry_wait
+
+        exc = _http_error(503, "Service Unavailable")
+        self.assertEqual(_arxiv_retry_wait(exc, 1), 30)
+        self.assertEqual(_arxiv_retry_wait(exc, 3), 90)
+
+    def test_retry_after_header_extends_the_wait(self):
+        from sources.arxiv_source import _arxiv_retry_wait, _retry_after_seconds
+
+        exc = _http_error(503, "Service Unavailable", retry_after=120)
+        self.assertEqual(_retry_after_seconds(exc), 120)
+        # 响应头要求 120s，比线性退避的 30s 更长 → 遵从响应头
+        self.assertEqual(_arxiv_retry_wait(exc, 1), 120)
+
+    def test_retry_after_is_capped(self):
+        from sources.arxiv_source import _arxiv_retry_wait
+
+        exc = _http_error(429, "Too Many Requests", retry_after=3600)
+        self.assertEqual(_arxiv_retry_wait(exc, 1), 600)
+
+    def test_missing_retry_after_returns_none(self):
+        from sources.arxiv_source import _retry_after_seconds
+
+        self.assertIsNone(_retry_after_seconds(_http_error(500, "boom")))
+        self.assertIsNone(_retry_after_seconds(RuntimeError("no headers")))
+
+
 if __name__ == "__main__":
     unittest.main()

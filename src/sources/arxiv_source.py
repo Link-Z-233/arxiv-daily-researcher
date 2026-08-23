@@ -74,6 +74,10 @@ class _ArxivTimeoutError(TimeoutError):
     """ArXiv 抓取超时异常。"""
 
 
+# 领域重试全部失败后、扫描下一领域前的冷却时间（秒）
+_POST_FAILURE_COOLDOWN_SECONDS = 60
+
+
 class ArxivFetchError(RuntimeError):
     """ArXiv 抓取失败异常。
 
@@ -129,6 +133,52 @@ class _timeout_guard:
             if self._old_handler is not None:
                 signal.signal(signal.SIGALRM, self._old_handler)
         return False
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """识别 arXiv 限流（429 / Too Many Requests）。"""
+    if getattr(exc, "code", None) == 429:
+        return True
+    error_msg = str(exc)
+    return "429" in error_msg or "Too Many Requests" in error_msg
+
+
+def _retry_after_seconds(exc: BaseException) -> Optional[int]:
+    """从 HTTPError 风格异常里提取 Retry-After 提示（秒）。"""
+    headers = getattr(exc, "headers", None)
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return None
+    for key in ("Retry-After", "retry-after"):
+        try:
+            raw = getter(key)
+        except Exception:
+            raw = None
+        if raw:
+            try:
+                return max(1, int(str(raw).strip()))
+            except ValueError:
+                continue
+    return None
+
+
+def _arxiv_retry_wait(exc: BaseException, retry_count: int) -> int:
+    """按错误类别计算下一次重试前的等待秒数（含 Retry-After 遵从）。
+
+    - 超时/一般错误（含 503 服务端错误）：线性 30s×n，封顶 90s
+    - 速率限制：指数 60s×2^(n-1)，封顶 480s
+    - 响应头带 Retry-After 且更长时，优先遵从（封顶 600s）
+    """
+    if isinstance(exc, _ArxivTimeoutError):
+        wait = min(30 * retry_count, 90)
+    elif _is_rate_limit_error(exc):
+        wait = min(60 * (2 ** (retry_count - 1)), 480)
+    else:
+        wait = min(30 * retry_count, 90)
+    retry_after = _retry_after_seconds(exc)
+    if retry_after is not None:
+        wait = max(wait, min(retry_after, 600))
+    return wait
 
 
 class ArxivSource(BasePaperSource):
@@ -399,7 +449,6 @@ class ArxivSource(BasePaperSource):
             # 添加重试机制
             max_retries = 3
             retry_count = 0
-            base_wait_time = 60
             domain_failed = False
             last_error_msg = ""
 
@@ -480,45 +529,26 @@ class ArxivSource(BasePaperSource):
                     last_error_msg = error_msg
                     if active_query_kind is not None:
                         domain_receipt["queries"][active_query_kind]["error"] = error_msg[:1000]
-                    if isinstance(e, _ArxivTimeoutError):
-                        retry_count += 1
-                        if retry_count <= max_retries:
-                            wait_time = min(30 * retry_count, 90)
-                            logger.warning(
-                                f"    领域 {domain} 抓取超时（{fetch_timeout_seconds}s），"
-                                f"{wait_time} 秒后重试 ({retry_count}/{max_retries})"
-                            )
-                            time.sleep(wait_time)
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        wait_time = _arxiv_retry_wait(e, retry_count)
+                        if isinstance(e, _ArxivTimeoutError):
+                            reason = f"抓取超时（{fetch_timeout_seconds}s 无进展）"
+                        elif _is_rate_limit_error(e):
+                            reason = "遇到速率限制"
                         else:
-                            logger.error(f"    领域 {domain} 抓取失败: 多次超时")
-                            domain_failed = True
-                            break
-                    elif "429" in error_msg or "Too Many Requests" in error_msg:
-                        retry_count += 1
-                        if retry_count <= max_retries:
-                            wait_time = base_wait_time * (2 ** (retry_count - 1))
-                            logger.warning(f"    遇到速率限制，等待 {wait_time} 秒后重试...")
-                            time.sleep(wait_time)
-                        else:
-                            logger.error(f"    领域 {domain} 抓取失败: 超过最大重试次数")
-                            domain_failed = True
-                            break
+                            reason = f"抓取出错: {error_msg}"
+                        logger.warning(
+                            f"    领域 {domain} {reason}，"
+                            f"{wait_time} 秒后重试 ({retry_count}/{max_retries})"
+                        )
+                        time.sleep(wait_time)
                     else:
-                        # 其他错误（包括 503 等服务端错误）：有限重试后仍失败则标记为严重错误
-                        retry_count += 1
-                        if retry_count <= max_retries:
-                            wait_time = min(30 * retry_count, 90)
-                            logger.warning(
-                                f"    领域 {domain} 抓取出错: {error_msg}，"
-                                f"{wait_time} 秒后重试 ({retry_count}/{max_retries})"
-                            )
-                            time.sleep(wait_time)
-                        else:
-                            logger.error(
-                                f"    领域 {domain} 抓取失败（已重试 {max_retries} 次）: {error_msg}"
-                            )
-                            domain_failed = True
-                            break
+                        logger.error(
+                            f"    领域 {domain} 抓取失败（已重试 {max_retries} 次）: {error_msg}"
+                        )
+                        domain_failed = True
+                        break
 
             if domain_failed:
                 domain_receipt.update(
@@ -528,6 +558,14 @@ class ArxivSource(BasePaperSource):
                     }
                 )
                 failed_domains.append((domain, last_error_msg))
+                # arXiv 限流按 IP 计；一个领域打满重试仍失败时，先冷却
+                # 再扫描下一领域，避免连环触发限流把剩余领域也拖垮。
+                if domain != domains[-1]:
+                    logger.warning(
+                        f"    领域 {domain} 失败后冷却 {_POST_FAILURE_COOLDOWN_SECONDS}s "
+                        f"再继续下一领域"
+                    )
+                    time.sleep(_POST_FAILURE_COOLDOWN_SECONDS)
 
         # The per-domain `new_candidates` counters intentionally show how
         # many entries were unique at the point that category was scanned.
@@ -641,7 +679,6 @@ class ArxivSource(BasePaperSource):
 
         max_retries = 3
         retry_count = 0
-        base_wait_time = 60
         last_error: Exception | None = None
 
         while retry_count <= max_retries:
@@ -674,29 +711,25 @@ class ArxivSource(BasePaperSource):
             except Exception as e:
                 error_msg = str(e)
                 last_error = e
-                if isinstance(e, _ArxivTimeoutError):
-                    retry_count += 1
-                    if retry_count <= max_retries:
-                        wait_time = min(30 * retry_count, 90)
-                        logger.warning(
-                            f"  关键词搜索超时（{fetch_timeout_seconds}s），"
-                            f"{wait_time} 秒后重试 ({retry_count}/{max_retries})"
-                        )
-                        time.sleep(wait_time)
+                # 与领域扫描同一套退避策略：超时/限流/服务端错误都重试，
+                # 退避时长遵从 Retry-After（存在且更长时）。
+                retry_count += 1
+                if retry_count <= max_retries:
+                    wait_time = _arxiv_retry_wait(e, retry_count)
+                    if isinstance(e, _ArxivTimeoutError):
+                        reason = f"关键词搜索超时（{fetch_timeout_seconds}s 无进展）"
+                    elif _is_rate_limit_error(e):
+                        reason = "关键词搜索遇到速率限制"
                     else:
-                        logger.error("  关键词搜索失败: 多次超时")
-                        break
-                elif "429" in error_msg or "Too Many Requests" in error_msg:
-                    retry_count += 1
-                    if retry_count <= max_retries:
-                        wait_time = base_wait_time * (2 ** (retry_count - 1))
-                        logger.warning(f"  遇到速率限制，等待 {wait_time} 秒后重试...")
-                        time.sleep(wait_time)
-                    else:
-                        logger.error("  关键词搜索失败: 超过最大重试次数")
-                        break
+                        reason = f"关键词搜索出错: {error_msg}"
+                    logger.warning(
+                        f"  {reason}，{wait_time} 秒后重试 ({retry_count}/{max_retries})"
+                    )
+                    time.sleep(wait_time)
                 else:
-                    logger.error(f"  关键词搜索失败: {e}")
+                    logger.error(
+                        f"  关键词搜索失败（已重试 {max_retries} 次）: {error_msg}"
+                    )
                     break
 
         if last_error is not None:
