@@ -127,7 +127,7 @@ class Reporter:
 
     @staticmethod
     def _paper_status_label(paper: Dict[str, Any]) -> str:
-        """Build a visible version/retry label for a paper entry."""
+        """Build a visible revision label for a paper entry."""
         paper_meta = paper.get("paper_metadata")
         revision = paper.get("revision") or {}
         version = getattr(paper_meta, "version", None)
@@ -143,9 +143,8 @@ class Reporter:
                     label += f" 于 {pushed_text} 推送"
                 label += "）"
             return label
-        if paper.get("is_retry"):
-            return "↻ 重试"
-        # 普通版本不在标题旁标注 vN，版本信息只在详情字段（Version: vN）展示。
+        # 重试/普通论文都不在标题旁标注；是否重试属于运维信息，
+        # 版本信息只在详情字段（Version: vN）展示。
         return ""
 
     def generate_reports_by_source(

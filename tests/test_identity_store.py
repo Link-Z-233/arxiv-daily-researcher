@@ -462,11 +462,12 @@ class IdentityStoreTests(unittest.TestCase):
                 "previous_pushed_at": "2026-01-01T08:00:00",
             },
         }))
+        # 重试属于运维信息，不再在标题旁标注
         self.assertEqual(
             Reporter._paper_status_label({"paper_metadata": paper, "is_retry": True}),
-            "↻ 重试",
+            "",
         )
-        # 普通版本不再在标题旁标注 vN
+        # 普通版本不在标题旁标注 vN
         self.assertEqual(Reporter._paper_status_label({"paper_metadata": paper}), "")
 
     def test_stage_state_keeps_score_when_translation_or_analysis_fails(self):

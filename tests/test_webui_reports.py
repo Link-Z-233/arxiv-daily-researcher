@@ -11,7 +11,7 @@ from webui.tabs.reports import (  # noqa: E402
     _build_sandboxed_preview_html,
     _discover_reports,
     _filter_visible_reports,
-    _strip_bare_version_labels,
+    _strip_legacy_title_badges,
 )
 
 
@@ -100,15 +100,19 @@ class WebUiReportPreviewTests(unittest.TestCase):
             '<span class="revision-label">v1</span></div>'
             '<div class="card-title"><a href="#">2. Paper Two</a>'
             '<span class="revision-label">🔁 修订版 v2（上一版本 v1）</span></div>'
+            '<div class="card-title"><a href="#">3. Paper Three</a>'
+            '<span class="revision-label">↻ 重试</span></div>'
         )
 
-        stripped = _strip_bare_version_labels(report_html)
+        stripped = _strip_legacy_title_badges(report_html)
 
         self.assertNotIn(">v1<", stripped)
+        self.assertNotIn("↻ 重试", stripped)
         self.assertIn("🔁 修订版 v2", stripped)
         # 沙箱预览同样过滤
         wrapper = _build_sandboxed_preview_html(report_html)
         self.assertNotIn("&gt;v1&lt;", wrapper)
+        self.assertNotIn("重试", wrapper)
         self.assertIn("修订版 v2", wrapper)
 
 
