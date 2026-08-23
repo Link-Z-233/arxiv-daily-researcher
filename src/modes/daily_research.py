@@ -680,6 +680,7 @@ class DailyResearchPipeline:
             # guarantees on an upgraded installation.
             store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
             run_id = store.start_run(0)
+            store.record_run_phase(run_id, "prepare")
             logger.info(f"每日研究 SQLite 状态库已启用: {settings.DAILY_RESEARCH_DB_PATH}")
 
             # WebDAV is non-critical post-report maintenance. Retry old
@@ -782,6 +783,7 @@ class DailyResearchPipeline:
 
             # ==================== 阶段3: 抓取所有最新论文 ====================
             logger.info(">>> 阶段3: 从多个数据源抓取论文...")
+            store.record_run_phase(run_id, "scan")
 
             search_agent = SearchAgent(
                 history_dir=settings.HISTORY_DIR,
@@ -993,6 +995,7 @@ class DailyResearchPipeline:
 
             # ==================== 阶段4: 对所有论文评分 ====================
             logger.info(">>> 阶段4: 对所有论文进行加权评分...")
+            store.record_run_phase(run_id, "score")
 
             analysis_agent = AnalysisAgent()
             scored_papers_by_source: Dict[str, List[Dict[str, Any]]] = {}
@@ -1110,6 +1113,7 @@ class DailyResearchPipeline:
                     logger.info(f"  翻译缓存节省了 {cache_savings} 次API调用")
 
             # ==================== 阶段5: 深度分析及格论文 ====================
+            store.record_run_phase(run_id, "analyze")
             analyses_by_source: Dict[str, List[Dict[str, Any]]] = {}
             analysis_errors = []
 
@@ -1309,6 +1313,7 @@ class DailyResearchPipeline:
 
             # ==================== 阶段6: 生成分数据源报告 ====================
             logger.info(">>> 阶段6: 生成分数据源研究报告...")
+            store.record_run_phase(run_id, "report")
 
             reporter = Reporter()
             report_paths = reporter.generate_reports_by_source(
@@ -1409,6 +1414,7 @@ class DailyResearchPipeline:
             print("=" * 80 + "\n")
 
             # ==================== 阶段8: 持久化并发送通知 ====================
+            store.record_run_phase(run_id, "deliver")
             if settings.ENABLE_NOTIFICATIONS:
                 logger.info(">>> 阶段8: 写入通知 outbox 并发送...")
                 notifier = notifier or NotifierAgent()

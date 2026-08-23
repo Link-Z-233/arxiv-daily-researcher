@@ -324,6 +324,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_status_running": {"zh": "运行中", "en": "Running"},
     "rm_status_stopped": {"zh": "已停止（文件未清除）", "en": "Stopped (file not cleaned)"},
     "rm_no_pid": {"zh": "无 PID", "en": "No PID"},
+    # run_manager 长任务进度反馈（阶段心跳 + 持久化队列计数）
+    "rm_progress_phase_prepare": {"zh": "准备配置与关键词", "en": "Preparing config & keywords"},
+    "rm_progress_phase_scan": {"zh": "抓取数据源", "en": "Scanning sources"},
+    "rm_progress_phase_score": {"zh": "评分与翻译", "en": "Scoring & translating"},
+    "rm_progress_phase_analyze": {"zh": "深度分析", "en": "Deep analysis"},
+    "rm_progress_phase_report": {"zh": "生成报告", "en": "Writing reports"},
+    "rm_progress_phase_deliver": {"zh": "交付与通知", "en": "Delivering & notifying"},
+    "rm_progress_caption": {
+        "zh": "{phase} · 登记 {registered} · 已评分 {scored} · 深度分析 {analyzed} · 交付 {completed} · 失败 {failed} · 已运行 {elapsed}",
+        "en": "{phase} · registered {registered} · scored {scored} · analyzed {analyzed} · delivered {completed} · failed {failed} · elapsed {elapsed}",
+    },
     "rm_process_running_label": {
         "zh": "面板触发的进程正在运行",
         "en": "Panel-triggered process is running",

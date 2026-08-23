@@ -18,6 +18,11 @@ if TYPE_CHECKING:
 PREFERENCE_SIGNALS = {"like": 1.0, "dislike": -1.0, "none": 0.0}
 V1_PASS_SIGNAL_STRENGTH = 0.25
 
+# app_state key holding the active daily run's phase heartbeat
+# (JSON: {run_id, phase, updated_at}); cleared when the run reaches a
+# terminal state and consumed by the WebUI progress panel.
+_RUN_PHASE_STATE_KEY = "daily_run_phase"
+
 
 class DailyResearchStore:
     """Small SQLite store for daily research runs and paper state."""
@@ -831,6 +836,114 @@ class DailyResearchStore:
                 (key, value, now),
             )
 
+    def record_run_phase(self, run_id: str, phase: str) -> None:
+        """写入当前活跃 run 的阶段心跳，供 WebUI 的长任务进度反馈读取。
+
+        心跳在 run 完成/失败时清理（见 ``_clear_run_phase``）；一个陈旧的
+        心跳（如进程被 SIGKILL）只会让进度视图回退到状态推断，不会误报。
+        """
+        payload = json.dumps(
+            {
+                "run_id": run_id,
+                "phase": phase,
+                "updated_at": datetime.now().isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        self.set_app_state(_RUN_PHASE_STATE_KEY, payload)
+
+    def _run_phase_payload(self) -> Optional[Dict[str, Any]]:
+        raw = self.get_app_state(_RUN_PHASE_STATE_KEY)
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _clear_run_phase(conn: sqlite3.Connection, run_id: str) -> None:
+        """run 终态时删除阶段心跳；只清理属于该 run 的心跳，避免误删新 run。"""
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (_RUN_PHASE_STATE_KEY,)
+        ).fetchone()
+        if row is None:
+            return
+        try:
+            payload = json.loads(row["value"])
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and payload.get("run_id") != run_id:
+            return
+        conn.execute("DELETE FROM app_state WHERE key = ?", (_RUN_PHASE_STATE_KEY,))
+
+    def active_run_progress(self) -> Optional[Dict[str, Any]]:
+        """汇总当前活跃 run 的阶段与论文处理进度（无活跃 run 时返回 None）。
+
+        阶段优先取 ``record_run_phase`` 写入的心跳；心跳缺失或属于别的
+        run 时（例如升级期间的旧进程），按论文阶段状态推断兜底。
+        """
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            run = conn.execute(
+                """
+                SELECT run_id, started_at, scan_days
+                FROM daily_runs
+                WHERE completed_at IS NULL
+                ORDER BY started_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if run is None:
+                return None
+            counts = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS registered,
+                    SUM(CASE WHEN score_status = 'succeeded' THEN 1 ELSE 0 END) AS scored,
+                    SUM(CASE WHEN analysis_status = 'succeeded' THEN 1 ELSE 0 END) AS analyzed,
+                    SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed,
+                    SUM(CASE WHEN score_status = 'failed'
+                              OR translation_status = 'failed'
+                              OR analysis_status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN score_status IN ('pending', 'running') THEN 1 ELSE 0 END) AS awaiting_score,
+                    SUM(CASE WHEN analysis_status IN ('pending', 'running')
+                              AND score_status = 'succeeded' THEN 1 ELSE 0 END) AS awaiting_analysis
+                FROM daily_papers
+                WHERE run_id = ?
+                """,
+                (run["run_id"],),
+            ).fetchone()
+
+        registered = int(counts["registered"] or 0)
+        heartbeat = self._run_phase_payload()
+        phase = None
+        if heartbeat and heartbeat.get("run_id") == run["run_id"]:
+            phase = heartbeat.get("phase")
+        if not isinstance(phase, str) or not phase:
+            # 兜底推断：与主流程的阶段顺序一致。
+            if registered == 0 or int(counts["awaiting_score"] or 0) > 0:
+                phase = "score" if registered > 0 else "scan"
+            elif int(counts["awaiting_analysis"] or 0) > 0:
+                phase = "analyze"
+            else:
+                phase = "report"
+
+        return {
+            "run_id": run["run_id"],
+            "started_at": run["started_at"],
+            "scan_days": run["scan_days"],
+            "phase": phase,
+            "registered": registered,
+            "scored": int(counts["scored"] or 0),
+            "analyzed": int(counts["analyzed"] or 0),
+            "completed": int(counts["completed"] or 0),
+            "failed": int(counts["failed"] or 0),
+            "awaiting_score": int(counts["awaiting_score"] or 0),
+            "awaiting_analysis": int(counts["awaiting_analysis"] or 0),
+        }
+
     def record_token_usage(
         self,
         run_id: str,
@@ -1628,6 +1741,7 @@ class DailyResearchStore:
                 ),
             )
             self._advance_scan_watermarks(conn, run_id, now)
+            self._clear_run_phase(conn, run_id)
 
     def finalize_report_delivery(
         self,
@@ -1811,6 +1925,7 @@ class DailyResearchStore:
                 (now, json.dumps(normalized_paths, ensure_ascii=False), run_id),
             )
             self._advance_scan_watermarks(conn, run_id, now)
+            self._clear_run_phase(conn, run_id)
 
     def fail_run(self, run_id: str, error: str):
         now = datetime.now().isoformat()
@@ -1837,6 +1952,7 @@ class DailyResearchStore:
                 """,
                 (now, "failed", error[:4000], run_id),
             )
+            self._clear_run_phase(conn, run_id)
 
     # ------------------------------------------------------------------
     # Notification outbox

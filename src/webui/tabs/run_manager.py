@@ -37,6 +37,18 @@ _IS_DOCKER_WEBUI = not _MAIN_PY.exists()
 # session_state 键（日志查看器）
 _LOG_ACTIVE = "rm_log_active_path"    # 当前展示的日志路径（str）
 _LOG_CLOSED = "rm_log_viewer_closed"  # 是否关闭内容区
+# 进度面板用的配置快照：fragment 无法接收参数，经 session_state 传递
+_PROGRESS_CONFIG_KEY = "rm_status_config_values"
+
+# 阶段心跳 → i18n key
+_PHASE_LABEL_KEYS = {
+    "prepare": "rm_progress_phase_prepare",
+    "scan": "rm_progress_phase_scan",
+    "score": "rm_progress_phase_score",
+    "analyze": "rm_progress_phase_analyze",
+    "report": "rm_progress_phase_report",
+    "deliver": "rm_progress_phase_deliver",
+}
 
 
 # ─── 工具函数 ────────────────────────────────────────────────────────────────
@@ -206,8 +218,72 @@ def _request_worker_stop(active_locks: list[tuple[Path, Optional[int]]]) -> None
         st.info(t("rm_stop_no_pid"))
 
 
+def _format_elapsed(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+
+
+def _active_run_progress() -> Optional[dict]:
+    """读取活跃 run 的阶段/论文进度；库缺失或异常时静默返回 None。"""
+    config_values = st.session_state.get(_PROGRESS_CONFIG_KEY) or {}
+    db_path = _daily_db_path_from_config(config_values)
+    if not db_path.exists():
+        return None
+    try:
+        from utils.daily_research_store import DailyResearchStore
+
+        return DailyResearchStore(db_path).active_run_progress()
+    except Exception:
+        return None
+
+
+def _render_run_progress(progress: dict) -> None:
+    """在运行状态下方渲染阶段 + 已处理计数（数据来自持久化队列）。"""
+    phase_key = _PHASE_LABEL_KEYS.get(progress.get("phase"), "rm_progress_phase_report")
+    phase = t(phase_key)
+    registered = int(progress.get("registered") or 0)
+    scored = int(progress.get("scored") or 0)
+    analyzed = int(progress.get("analyzed") or 0)
+    completed = int(progress.get("completed") or 0)
+    failed = int(progress.get("failed") or 0)
+
+    started_at = progress.get("started_at")
+    elapsed_text = ""
+    if isinstance(started_at, str) and started_at:
+        try:
+            started = datetime.datetime.fromisoformat(started_at)
+            elapsed_text = _format_elapsed(
+                (datetime.datetime.now() - started).total_seconds()
+            )
+        except ValueError:
+            elapsed_text = ""
+
+    st.caption(
+        t("rm_progress_caption").format(
+            phase=phase,
+            registered=registered,
+            scored=scored,
+            analyzed=analyzed,
+            completed=completed,
+            failed=failed,
+            elapsed=elapsed_text or "-",
+        )
+    )
+    # 评分阶段分母精确（登记数），深度分析用 已分析/(已分析+待分析) 近似。
+    phase_value = progress.get("phase")
+    if phase_value == "score" and registered > 0:
+        st.progress(min(1.0, scored / registered))
+    elif phase_value == "analyze":
+        pending = int(progress.get("awaiting_analysis") or 0)
+        denominator = analyzed + pending
+        if denominator > 0:
+            st.progress(min(1.0, analyzed / denominator))
+
+
 def _render_live_status_body() -> None:
-    """实时状态渲染体：运行锁 + 触发状态 + 活跃日志尾部。
+    """实时状态渲染体：运行锁 + 进度 + 触发状态 + 活跃日志尾部。
 
     作为普通函数被完整渲染调用一次，或被 fragment 以 5 秒周期调用。
     """
@@ -218,6 +294,9 @@ def _render_live_status_body() -> None:
         f, pid = active_locks[0]
         pid_info = f" · PID {pid}" if pid is not None else ""
         st.markdown(f"**🟢 {t('rm_status_running')}** · `{f.name}`{pid_info}")
+        progress = _active_run_progress()
+        if progress is not None:
+            _render_run_progress(progress)
         # 停止控件放在自动刷新的 fragment 里：整页脚本不会自动重跑，
         # 只有这里能随运行状态自动出现/消失。
         with st.popover("⏹ " + t("rm_stop_btn")):
@@ -368,6 +447,9 @@ def _daily_db_path_from_config(config_values: dict) -> Path:
 
 def _render_status_panel(config_values: dict) -> None:
     """运行状态 + 待处理队列合并为一个卡片，避免零散的提示块。"""
+    # 进度面板运行在自动刷新的 fragment 里，无法直接接收这里的参数；
+    # 把配置快照放进 session_state 供 fragment 每次重绘时读取。
+    st.session_state[_PROGRESS_CONFIG_KEY] = dict(config_values or {})
     with st.container(border=True):
         if st.session_state.get("rm_auto_refresh_on", True):
             _live_status_fragment()
