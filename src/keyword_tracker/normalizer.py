@@ -9,7 +9,6 @@ import re
 import logging
 from typing import List, Dict, Optional
 from pydantic import BaseModel
-from openai import OpenAI
 
 from config import settings
 from utils.llm_request_pool import call_chat_completion
@@ -49,14 +48,12 @@ class KeywordNormalizer:
     def __init__(self):
         """初始化，使用 settings 中的 cheap_llm 配置"""
         from config import settings
+        from utils.llm_resilience import build_llm_client
 
-        # 关键词标准化是辅助步骤，绝不能拖住整个日报收尾。SDK 默认
-        # 600s 超时 × 重试会让一次 API 挂起阻塞阶段 7 半小时以上。
-        self.client = OpenAI(
-            api_key=settings.CHEAP_LLM.api_key,
-            base_url=settings.CHEAP_LLM.base_url,
-            timeout=60.0,
-            max_retries=1,
+        # 与全部 LLM 客户端共享超时/重试边界（config.json 的 llm 段）。
+        self.client = build_llm_client(
+            settings.CHEAP_LLM.api_key,
+            settings.CHEAP_LLM.base_url,
         )
         self.model = settings.CHEAP_LLM.model_name
 

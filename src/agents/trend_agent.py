@@ -13,21 +13,14 @@ import time
 from datetime import date
 from typing import List, Dict, Any, Optional
 
-from openai import OpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
-
 from config import settings
 from utils.llm_request_pool import call_chat_completion
+from utils.llm_resilience import build_llm_client, llm_retry
 
 logger = logging.getLogger(__name__)
 
 
-@retry(
-    stop=stop_after_attempt(settings.RETRY_MAX_ATTEMPTS),
-    wait=wait_exponential(min=settings.RETRY_MIN_WAIT, max=settings.RETRY_MAX_WAIT),
-    before_sleep=before_sleep_log(logger, logging.WARNING),
-    reraise=True,
-)
+@llm_retry()
 def _llm_call_with_retry(client, model_name: str, temperature: float, prompt: str) -> str:
     """带自动重试的 LLM 调用（模块级，避免每次调用重建 retry 装饰器）。"""
     estimated_prompt_tokens = len(prompt) // 4  # 用于重试失败时的近似计数
@@ -61,13 +54,13 @@ class TrendAgent:
     """
 
     def __init__(self):
-        self.cheap_client = OpenAI(
-            api_key=settings.CHEAP_LLM.api_key,
-            base_url=settings.CHEAP_LLM.base_url,
+        self.cheap_client = build_llm_client(
+            settings.CHEAP_LLM.api_key,
+            settings.CHEAP_LLM.base_url,
         )
-        self.smart_client = OpenAI(
-            api_key=settings.SMART_LLM.api_key,
-            base_url=settings.SMART_LLM.base_url,
+        self.smart_client = build_llm_client(
+            settings.SMART_LLM.api_key,
+            settings.SMART_LLM.base_url,
         )
         self.skills = self._load_skills()
 

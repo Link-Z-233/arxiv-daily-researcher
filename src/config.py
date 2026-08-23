@@ -224,6 +224,15 @@ class Settings(BaseSettings):
     LLM_REQUESTS_PER_MINUTE: int = 30  # 全局每分钟 LLM 请求上限
     LLM_REQUEST_POOL_LOG_SLOW_WAIT_SECONDS: float = 5.0  # 等待超过该秒数时记录日志
 
+    # ==================== LLM 超时与重试配置 ====================
+    # 低并发/低 TPS 的中转供应商很容易超时或限流，所有 OpenAI 客户端
+    # 共享这里的边界：单请求超时、SDK 层快速重试、应用层指数退避重试。
+    LLM_TIMEOUT_SECONDS: float = 300.0  # 单次 LLM HTTP 请求超时（秒）
+    LLM_SDK_MAX_RETRIES: int = 1  # OpenAI SDK 内部重试次数（连接抖动/Retry-After）
+    LLM_RETRY_MAX_ATTEMPTS: int = 5  # 应用层最大尝试次数
+    LLM_RETRY_MIN_WAIT: int = 5  # 应用层退避起始等待（秒）
+    LLM_RETRY_MAX_WAIT: int = 120  # 应用层退避等待上限（秒）
+
     # ==================== 报告配置 ====================
     ENABLE_HTML_REPORT: bool = True  # 是否同时生成HTML格式报告
     ENABLE_MARKDOWN_REPORT: bool = True  # 是否生成Markdown格式报告
@@ -743,6 +752,25 @@ class Settings(BaseSettings):
                 )
                 self.LLM_REQUEST_POOL_LOG_SLOW_WAIT_SECONDS = pool_cfg.get(
                     "log_slow_wait_seconds", self.LLM_REQUEST_POOL_LOG_SLOW_WAIT_SECONDS
+                )
+
+            # 加载 LLM 超时与重试配置
+            if "llm" in config:
+                llm_cfg = config["llm"]
+                self.LLM_TIMEOUT_SECONDS = float(
+                    llm_cfg.get("timeout_seconds", self.LLM_TIMEOUT_SECONDS)
+                )
+                self.LLM_SDK_MAX_RETRIES = int(
+                    llm_cfg.get("sdk_max_retries", self.LLM_SDK_MAX_RETRIES)
+                )
+                self.LLM_RETRY_MAX_ATTEMPTS = int(
+                    llm_cfg.get("retry_max_attempts", self.LLM_RETRY_MAX_ATTEMPTS)
+                )
+                self.LLM_RETRY_MIN_WAIT = int(
+                    llm_cfg.get("retry_min_wait", self.LLM_RETRY_MIN_WAIT)
+                )
+                self.LLM_RETRY_MAX_WAIT = int(
+                    llm_cfg.get("retry_max_wait", self.LLM_RETRY_MAX_WAIT)
                 )
 
             # 加载报告设置

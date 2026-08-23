@@ -110,9 +110,9 @@ class LLMResponseCompatibilityTests(unittest.TestCase):
     def test_empty_provider_responses_raise_and_remain_retryable(self):
         agent = AnalysisAgent.__new__(AnalysisAgent)
         agent.cheap_client = SimpleNamespace(responses=SimpleNamespace(create=lambda **_: None))
-        with patch.object(settings, "RETRY_MAX_ATTEMPTS", 2), patch.object(
-            settings, "RETRY_MIN_WAIT", 0
-        ), patch.object(settings, "RETRY_MAX_WAIT", 0), patch.object(
+        with patch.object(settings, "LLM_RETRY_MAX_ATTEMPTS", 2), patch.object(
+            settings, "LLM_RETRY_MIN_WAIT", 1
+        ), patch.object(settings, "LLM_RETRY_MAX_WAIT", 1), patch.object(
             settings, "TOKEN_TRACKING_ENABLED", False
         ), patch(
             "agents.analysis_agent.call_chat_completion",

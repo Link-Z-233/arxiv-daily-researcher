@@ -4,9 +4,9 @@ import json
 import hashlib
 from pathlib import Path
 from typing import Dict, Set, List
-from openai import OpenAI
 from config import settings
 from utils.llm_request_pool import call_chat_completion
+from utils.llm_resilience import build_llm_client
 from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
@@ -28,8 +28,8 @@ class KeywordAgent:
 
     def __init__(self):
         # 初始化低成本LLM客户端
-        self.client = OpenAI(
-            api_key=settings.CHEAP_LLM.api_key, base_url=settings.CHEAP_LLM.base_url
+        self.client = build_llm_client(
+            settings.CHEAP_LLM.api_key, settings.CHEAP_LLM.base_url
         )
 
         # 缓存文件路径

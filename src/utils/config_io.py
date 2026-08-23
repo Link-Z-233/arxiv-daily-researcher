@@ -649,6 +649,11 @@ def build_config_dict(
     llm_request_pool_enabled: bool = True,
     llm_requests_per_minute: int = 30,
     llm_request_pool_log_slow_wait_seconds: float = 5.0,
+    llm_timeout_seconds: float = 300.0,
+    llm_sdk_max_retries: int = 1,
+    llm_retry_max_attempts: int = 5,
+    llm_retry_min_wait: int = 5,
+    llm_retry_max_wait: int = 120,
     daily_research_persistence_enabled: bool = True,
     daily_research_db_path: str = "data/daily_research/daily_research.db",
     daily_max_papers_per_run: int = 200,
@@ -899,6 +904,13 @@ def build_config_dict(
             "enabled": llm_request_pool_enabled,
             "requests_per_minute": llm_requests_per_minute,
             "log_slow_wait_seconds": llm_request_pool_log_slow_wait_seconds,
+        },
+        "llm": {
+            "timeout_seconds": llm_timeout_seconds,
+            "sdk_max_retries": llm_sdk_max_retries,
+            "retry_max_attempts": llm_retry_max_attempts,
+            "retry_min_wait": llm_retry_min_wait,
+            "retry_max_wait": llm_retry_max_wait,
         },
         "daily_research": {
             "enable_deep_analysis": daily_enable_deep_analysis,
@@ -1182,6 +1194,14 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["llm_request_pool_enabled"] = lp.get("enabled", True)
     flat["llm_requests_per_minute"] = lp.get("requests_per_minute", 30)
     flat["llm_request_pool_log_slow_wait_seconds"] = lp.get("log_slow_wait_seconds", 5.0)
+
+    # LLM timeout / retry hardening
+    llm = config.get("llm", {})
+    flat["llm_timeout_seconds"] = llm.get("timeout_seconds", 300.0)
+    flat["llm_sdk_max_retries"] = llm.get("sdk_max_retries", 1)
+    flat["llm_retry_max_attempts"] = llm.get("retry_max_attempts", 5)
+    flat["llm_retry_min_wait"] = llm.get("retry_min_wait", 5)
+    flat["llm_retry_max_wait"] = llm.get("retry_max_wait", 120)
 
     # Daily research
     dr = config.get("daily_research", {})

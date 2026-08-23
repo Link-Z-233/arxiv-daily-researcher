@@ -9,13 +9,13 @@ import requests
 import fitz  # pymupdf
 from typing import Optional, Dict, Any, List, Mapping, Union
 from pathlib import Path
-from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from config import settings
 from parsers.mineru_parser import MineruParser
 from utils.llm_request_pool import call_chat_completion, call_responses
+from utils.llm_resilience import build_llm_client, llm_retry
 from utils.safe_download import download_external_bytes
 from utils.deep_analysis_contract import (
     ANALYSIS_META_KEY,
@@ -226,11 +226,11 @@ class AnalysisAgent:
 
     def __init__(self):
         # 初始化两个不同性能LLM客户端
-        self.cheap_client = OpenAI(
-            api_key=settings.CHEAP_LLM.api_key, base_url=settings.CHEAP_LLM.base_url
+        self.cheap_client = build_llm_client(
+            settings.CHEAP_LLM.api_key, settings.CHEAP_LLM.base_url
         )
-        self.smart_client = OpenAI(
-            api_key=settings.SMART_LLM.api_key, base_url=settings.SMART_LLM.base_url
+        self.smart_client = build_llm_client(
+            settings.SMART_LLM.api_key, settings.SMART_LLM.base_url
         )
 
         # 初始化 MinerU PDF 解析器
@@ -419,12 +419,7 @@ class AnalysisAgent:
         """调用低成本LLM（JSON模式），带自动重试。"""
         estimated_prompt_tokens = len(prompt) // 4
 
-        @retry(
-            stop=stop_after_attempt(settings.RETRY_MAX_ATTEMPTS),
-            wait=wait_exponential(min=settings.RETRY_MIN_WAIT, max=settings.RETRY_MAX_WAIT),
-            before_sleep=before_sleep_log(logger, logging.WARNING),
-            reraise=True,
-        )
+        @llm_retry()
         def _do_call():
             try:
                 content, usage = self._call_llm_with_fallback(
@@ -451,12 +446,7 @@ class AnalysisAgent:
         """调用低成本LLM（纯文本模式），带自动重试。"""
         estimated_prompt_tokens = len(prompt) // 4
 
-        @retry(
-            stop=stop_after_attempt(settings.RETRY_MAX_ATTEMPTS),
-            wait=wait_exponential(min=settings.RETRY_MIN_WAIT, max=settings.RETRY_MAX_WAIT),
-            before_sleep=before_sleep_log(logger, logging.WARNING),
-            reraise=True,
-        )
+        @llm_retry()
         def _do_call():
             try:
                 content, usage = self._call_llm_with_fallback(
@@ -482,12 +472,7 @@ class AnalysisAgent:
         """调用高性能LLM（JSON模式），带自动重试。"""
         estimated_prompt_tokens = len(prompt) // 4
 
-        @retry(
-            stop=stop_after_attempt(settings.RETRY_MAX_ATTEMPTS),
-            wait=wait_exponential(min=settings.RETRY_MIN_WAIT, max=settings.RETRY_MAX_WAIT),
-            before_sleep=before_sleep_log(logger, logging.WARNING),
-            reraise=True,
-        )
+        @llm_retry()
         def _do_call():
             try:
                 content, usage = self._call_llm_with_fallback(
