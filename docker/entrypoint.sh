@@ -162,6 +162,8 @@ trigger_watcher() {
             mv "$RESTART_MARKER" \
                "$RESTART_MARKER.done-$(date +%Y%m%dT%H%M%S)" 2>/dev/null || true
             echo "[trigger-watcher] WebUI restart request: restarting container..."
+            # PID 1 在独立 PID namespace 内默认丢弃一切信号（含 KILL）；
+            # 只有注册了 handler 的信号才会送达，见文件末尾的 trap。
             kill -TERM 1
         fi
         REQUEST_FILE=$(find "$TRIGGER_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | head -n 1)
@@ -197,6 +199,14 @@ echo "Container is running. Waiting for scheduled executions..."
 echo "Schedule: $CRON_SCHEDULE"
 echo ""
 
-# Tail the system log to keep container alive and show output
+# Keep the container alive by tailing the system log.
+# The tail runs as a child (not exec'd): as PID 1, bash in its own PID
+# namespace drops every signal it has no handler for — including SIGKILL —
+# so the restart path works by installing a TERM handler that terminates
+# the tail and lets this script (PID 1) exit normally. The same handler
+# also gives `docker stop` a clean, fast shutdown.
 touch /app/logs/system.log
-tail -f /app/logs/system.log
+tail -f /app/logs/system.log &
+TAIL_PID=$!
+trap 'kill -TERM "$TAIL_PID" 2>/dev/null' TERM INT
+wait "$TAIL_PID" || true
