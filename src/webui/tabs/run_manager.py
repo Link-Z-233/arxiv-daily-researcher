@@ -584,7 +584,7 @@ def render(_env_values: dict, config_values: dict) -> None:
             help=t("daily_max_papers_help"),
         )
     with col_ds5:
-        default_run_time = datetime.time(8, 0)
+        default_run_time = datetime.time(12, 0)
         raw_run_time = flat.get("daily_run_time")
         if isinstance(raw_run_time, str):
             try:
@@ -624,7 +624,7 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
             f"{selected_run_time.hour:02d}:{selected_run_time.minute:02d}"
         )
     else:
-        run_time_value = str(current("daily_run_time", "08:00") or "08:00")
+        run_time_value = str(current("daily_run_time", "12:00") or "12:00")
 
     return {
         "enable_html_report": current("enable_html_report", True),

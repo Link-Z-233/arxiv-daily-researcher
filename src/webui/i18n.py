@@ -306,8 +306,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "daily_run_time_label": {"zh": "每日运行时间", "en": "Daily run time"},
     "daily_run_time_help": {
-        "zh": "每天定时执行每日研究的时间（容器时区）。保存后重启主研究容器生效；显式设置的 CRON_SCHEDULE 环境变量优先于此值。",
-        "en": "Time of day (container timezone) the daily research runs. Takes effect after restarting the worker container; an explicit CRON_SCHEDULE env var overrides it.",
+        "zh": "每天定时执行每日研究的时间（容器时区）。保存后点击侧边栏「重启主研究容器」即可生效。",
+        "en": "Time of day (container timezone) the daily research runs. Use the “Restart Worker” sidebar button after saving.",
     },
     "markdown_report_label": {"zh": "Markdown 报告", "en": "Markdown Report"},
     "no_logs_found": {"zh": "暂未找到日志文件。", "en": "No log files found."},

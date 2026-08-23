@@ -19,7 +19,6 @@ services:
 
     environment:
       - TZ=Asia/Shanghai
-      - CRON_SCHEDULE=0 8 * * *
       - RUN_ON_STARTUP=false
       - MODE=cron
       - SETUP_WIZARD=auto

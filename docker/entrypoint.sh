@@ -7,12 +7,12 @@ echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "================================================"
 
 # Configuration with defaults.
-# The daily run time is configurable from the WebUI (configs/config.json,
-# "daily_research.run_time" as HH:MM).  An explicitly set CRON_SCHEDULE env
-# var still wins so operators can pin a schedule regardless of config.
-CONFIG_RUN_TIME=""
+# The daily run time is configured from the WebUI (configs/config.json,
+# "daily_research.run_time" as HH:MM) and installed at container start;
+# there is deliberately no environment-variable override anymore.
+CRON_SCHEDULE=""
 if [ -f /app/configs/config.json ]; then
-    CONFIG_RUN_TIME=$(python - <<'PYEOF'
+    CRON_SCHEDULE=$(python - <<'PYEOF'
 import json, re
 
 try:
@@ -28,10 +28,12 @@ except Exception:
 PYEOF
 )
 fi
-if [ -z "${CRON_SCHEDULE:-}" ] && [ -n "$CONFIG_RUN_TIME" ]; then
-    CRON_SCHEDULE="$CONFIG_RUN_TIME * * *"
+if [ -n "$CRON_SCHEDULE" ]; then
+    CRON_SCHEDULE="$CRON_SCHEDULE * * *"
+else
+    # 配置缺失或不可读时的兜底：中午 12 点。
+    CRON_SCHEDULE="0 12 * * *"
 fi
-CRON_SCHEDULE="${CRON_SCHEDULE:-0 8 * * *}"
 RUN_ON_STARTUP="${RUN_ON_STARTUP:-false}"
 MODE="${MODE:-cron}"
 

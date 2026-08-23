@@ -241,7 +241,7 @@ class Settings(BaseSettings):
     DAILY_MAX_PAPERS_PER_RUN: int = 200
     # 每日研究运行时间（HH:MM，本地时区）。entrypoint 在容器启动时据此安装
     # cron；显式设置的 CRON_SCHEDULE 环境变量优先于该值。
-    DAILY_RUN_TIME: str = "08:00"
+    DAILY_RUN_TIME: str = "12:00"
 
     # ==================== PDF 解析配置 ====================
     PDF_PARSER_MODE: str = "pymupdf"  # PDF 解析模式: "pymupdf" (本地解析) 或 "mineru" (云端API)

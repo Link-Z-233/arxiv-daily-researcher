@@ -652,7 +652,7 @@ def build_config_dict(
     daily_research_persistence_enabled: bool = True,
     daily_research_db_path: str = "data/daily_research/daily_research.db",
     daily_max_papers_per_run: int = 200,
-    daily_run_time: str = "08:00",
+    daily_run_time: str = "12:00",
     daily_enable_deep_analysis: bool = True,
     pdf_parser_mode: str = "pymupdf",
     mineru_model_version: str = "pipeline",
@@ -1191,7 +1191,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     # optional and new config files omit the obsolete switch.
     flat["daily_research_persistence_enabled"] = True
     flat["daily_max_papers_per_run"] = dr.get("max_papers_per_run", 200)
-    flat["daily_run_time"] = dr.get("run_time", "08:00")
+    flat["daily_run_time"] = dr.get("run_time", "12:00")
     flat["daily_research_db_path"] = dr.get(
         "db_path", "data/daily_research/daily_research.db"
     )
