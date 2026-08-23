@@ -147,6 +147,21 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+    # 重启主研究容器：写入共享卷标记，worker 的 trigger_watcher 收到后
+    # 结束容器（restart: unless-stopped 会自动拉起，并按最新 config 重装 cron）。
+    if st.button(t("restart_worker_btn"), use_container_width=True, key="restart_worker_btn"):
+        import datetime as _dt
+
+        marker = _project_root / "data" / "run" / "webui_triggers" / "restart_worker.request"
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(
+                f"requested_at={_dt.datetime.now().isoformat()}\n", encoding="utf-8"
+            )
+            st.toast(t("restart_worker_sent"), icon="🔄")
+        except OSError as exc:
+            st.error(t("restart_worker_failed").format(err=exc))
+
     st.divider()
 
     # File status

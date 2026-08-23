@@ -22,6 +22,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "从磁盘重新加载",
         "en": "Reload from Disk",
     },
+    "restart_worker_btn": {
+        "zh": "🔄 重启主研究容器",
+        "en": "🔄 Restart Worker",
+    },
+    "restart_worker_sent": {
+        "zh": "重启请求已发送；主容器将在几秒内重启并按最新配置重装定时任务。运行中的任务会被自动重新排队。",
+        "en": "Restart requested; the worker restarts within seconds and reinstalls the schedule from config. Any running job is re-queued automatically.",
+    },
+    "restart_worker_failed": {
+        "zh": "写入重启请求失败：{err}",
+        "en": "Failed to write the restart request: {err}",
+    },
     "save_success": {
         "zh": "配置已保存！",
         "en": "Configuration saved!",

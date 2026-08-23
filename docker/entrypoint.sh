@@ -151,7 +151,17 @@ done
 
 trigger_watcher() {
     echo "[trigger-watcher] Started. Polling $TRIGGER_DIR every 5s..."
+    # The WebUI restart button drops this marker into the shared volume; a
+    # worker restart re-runs this entrypoint, reinstalling cron from config.
+    # The marker is archived (never deleted) so restarts stay auditable.
+    RESTART_MARKER="$TRIGGER_DIR/restart_worker.request"
     while true; do
+        if [ -e "$RESTART_MARKER" ]; then
+            mv "$RESTART_MARKER" \
+               "$RESTART_MARKER.done-$(date +%Y%m%dT%H%M%S)" 2>/dev/null || true
+            echo "[trigger-watcher] WebUI restart request: restarting container..."
+            kill -TERM 1
+        fi
         REQUEST_FILE=$(find "$TRIGGER_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | head -n 1)
         if [ -n "$REQUEST_FILE" ]; then
             CLAIMED_FILE="${REQUEST_FILE%.json}.running"
