@@ -955,6 +955,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "已发送运行请求！主容器将在 5-10s 内启动",
         "en": "Run request sent! Container will start within 5-10s",
     },
+    # ── 过去时间段每日报告 ──
+    "rm_backfill_date_label": {"zh": "过去日报日期", "en": "Past report date"},
+    "rm_backfill_help": {
+        "zh": "为过去的某一天补跑当天的每日研究：只处理当天提交且尚未推送过的论文，报告时间戳使用该日期 + 当前时刻，会消耗 LLM 额度。",
+        "en": "Re-run the daily research for a past date: only that day's undelivered papers are processed, the report is stamped with that date plus the current time, and LLM quota is consumed.",
+    },
+    "rm_backfill_btn": {"zh": "生成过去日报", "en": "Build Past Daily Report"},
+    "rm_backfill_sent": {
+        "zh": "已发送过去日报请求，任务将在空闲时运行。",
+        "en": "Past-report request sent; it will run when idle.",
+    },
     "rm_last_run_at": {"zh": "上次运行完成", "en": "Last run completed"},
     "rm_clean_lock_btn": {"zh": "清理", "en": "Clean"},
     "rm_clean_lock_help": {

@@ -28,10 +28,18 @@ TRIGGER_SCHEMA_VERSION = 1
 TRIGGER_DIRECTORY_NAME = "webui_triggers"
 TRIGGER_STATUS_DIRECTORY_NAME = "status"
 SUPPORTED_MODES = frozenset(
-    {"daily_research", "trend_research", "legacy_import", "supplement_run"}
+    {
+        "daily_research",
+        "trend_research",
+        "legacy_import",
+        "supplement_run",
+        "backfill_run",
+    }
 )
 # 面板触发的后台作业：不接受任何参数。
 _NO_ARGS_MODES = frozenset({"daily_research", "legacy_import", "supplement_run"})
+# 最早可补跑的日期（arXiv 上线年份）。
+_BACKFILL_EARLIEST = date(1991, 1, 1)
 _CATEGORY_RE = re.compile(r"^[A-Za-z0-9.-]{1,64}$")
 _MAX_REQUEST_BYTES = 32 * 1024
 _MAX_KEYWORDS = 32
@@ -153,6 +161,23 @@ def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
             raise TriggerValidationError(f"{mode} does not accept trigger arguments")
         return normalized
 
+    if mode == "backfill_run":
+        target_date = args.get("target_date")
+        if not isinstance(target_date, str):
+            raise TriggerValidationError("backfill_run requires a target_date string")
+        try:
+            parsed_target = date.fromisoformat(target_date.strip())
+        except ValueError as exc:
+            raise TriggerValidationError(
+                "target_date must be an ISO date (YYYY-MM-DD)"
+            ) from exc
+        if parsed_target >= date.today():
+            raise TriggerValidationError("target_date must be in the past")
+        if parsed_target < _BACKFILL_EARLIEST:
+            raise TriggerValidationError("target_date is unreasonably old")
+        normalized["args"] = {"target_date": parsed_target.isoformat()}
+        return normalized
+
     keywords = _validate_text_list(
         args.get("keywords"),
         field="keywords",
@@ -245,6 +270,8 @@ def build_main_command(payload: Mapping[str, Any], project_root: Path) -> list[s
     """Build a list-only command; untrusted request text is never shell-expanded."""
     request = validate_trigger_payload(payload)
     command = [sys.executable, str(Path(project_root) / "main.py"), "--mode", request["mode"]]
+    if request["mode"] == "backfill_run":
+        command.extend(["--target-date", request["args"]["target_date"]])
     if request["mode"] == "trend_research":
         args = request["args"]
         command.extend(["--keywords", *args["keywords"]])

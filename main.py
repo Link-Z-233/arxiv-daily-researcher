@@ -38,8 +38,20 @@ def parse_args(argv: Optional[Sequence[str]] = None):
     parser.add_argument(
         "--mode",
         default="daily_research",
-        choices=["daily_research", "trend_research", "legacy_import", "supplement_run"],
-        help="运行模式：daily_research（每日研究，默认）、trend_research（研究趋势分析）、legacy_import（旧版本历史导入）或 supplement_run（补充报告）",
+        choices=[
+            "daily_research",
+            "trend_research",
+            "legacy_import",
+            "supplement_run",
+            "backfill_run",
+        ],
+        help="运行模式：daily_research（每日研究，默认）、trend_research（研究趋势分析）、legacy_import（旧版本历史导入）、supplement_run（补充报告）或 backfill_run（过去时间段每日报告）",
+    )
+    parser.add_argument(
+        "--target-date",
+        type=str,
+        default=None,
+        help="[backfill_run] 要补跑的过去日期，格式 YYYY-MM-DD（必须早于今天）",
     )
     parser.add_argument(
         "--keywords",
@@ -198,6 +210,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         with run_lock("supplement_run"):
             result = DailyResearchPipeline().run(run_kind="supplement")
+        return _result_exit_code(result)
+
+    if args.mode == "backfill_run":
+        # 过去时间段每日报告：为过去的某一天重跑当天的每日研究。
+        log_file = setup_run_log("backfill_run")
+        logger.info(f"过去日报补跑日志文件: {log_file}")
+
+        if not args.target_date:
+            logger.error("backfill_run 模式必须指定 --target-date 参数")
+            return 1
+        try:
+            target_date = date.fromisoformat(args.target_date)
+        except ValueError:
+            logger.error("--target-date 格式无效（应为 YYYY-MM-DD）: %r", args.target_date)
+            return 1
+        if target_date >= date.today():
+            logger.error("--target-date 必须早于今天: %s", target_date)
+            return 1
+
+        from modes.daily_research import DailyResearchPipeline
+        from utils.run_lock import AUX_JOB_MODES, wait_for_idle
+
+        wait_for_idle(
+            ("daily_research", "trend_research_*", *AUX_JOB_MODES),
+            poll_seconds=30,
+            timeout_seconds=12 * 3600,
+            logger=logger,
+            wait_note="过去日报补跑等待其他任务空闲",
+        )
+        with run_lock("backfill_run"):
+            result = DailyResearchPipeline().run(
+                run_kind="backfill", target_date=target_date
+            )
         return _result_exit_code(result)
 
     # 每日研究模式（默认）

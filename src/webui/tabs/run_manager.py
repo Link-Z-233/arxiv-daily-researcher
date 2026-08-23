@@ -404,6 +404,53 @@ def _render_run_control() -> None:
             except Exception:
                 st.error(t("rm_launch_failed"))
 
+    # 过去时间段每日报告：为过去的某一天补跑当天的每日研究。
+    col_date, col_back = st.columns([3, 2])
+    with col_date:
+        backfill_date = st.date_input(
+            t("rm_backfill_date_label"),
+            value=None,
+            min_value=datetime.date(1991, 1, 1),
+            max_value=datetime.date.today() - datetime.timedelta(days=1),
+            key="rm_backfill_date",
+            help=t("rm_backfill_help"),
+        )
+    with col_back:
+        backfill_clicked = st.button(
+            "🗓 " + t("rm_backfill_btn"),
+            key="rm_backfill_run",
+            use_container_width=True,
+            disabled=not can_run or backfill_date is None,
+        )
+    if backfill_clicked and backfill_date is not None:
+        if _IS_DOCKER_WEBUI:
+            ok, _ = _enqueue_worker_trigger(
+                "backfill_run", target_date=backfill_date.isoformat()
+            )
+            if ok:
+                st.toast(t("rm_backfill_sent"), icon="🗓")
+                st.rerun()
+            else:
+                st.error(t("rm_trigger_failed"))
+        else:
+            _LOCK_DIR.mkdir(parents=True, exist_ok=True)
+            log_file = _LOGS_DIR / f"backfill_{datetime.datetime.now():%Y%m%d_%H%M%S}.log"
+            try:
+                with open(log_file, "w") as lf:
+                    subprocess.Popen(
+                        [
+                            sys.executable, str(_MAIN_PY), "--mode", "backfill_run",
+                            "--target-date", backfill_date.isoformat(),
+                        ],
+                        cwd=str(_PROJECT_ROOT),
+                        stdout=lf, stderr=lf, start_new_session=True,
+                    )
+                st.toast(t("rm_backfill_sent"), icon="🗓")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception:
+                st.error(t("rm_launch_failed"))
+
 def _show_last_run_hint() -> None:
     log_groups  = _scan_all_logs()
     manual_logs = log_groups.get("manual", [])

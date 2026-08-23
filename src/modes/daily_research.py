@@ -20,7 +20,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -684,6 +684,54 @@ def _load_supplement_candidates(
     return papers_by_source, selected, len(failed)
 
 
+def _fetch_backfill_papers(
+    store: DailyResearchStore,
+    run_id: str,
+    target_date: date,
+) -> Dict[str, List[PaperMetadata]]:
+    """过去日期补跑：抓取 target_date 当天提交的 arXiv 论文。
+
+    仅扫描 arXiv 主源（其他来源按当前配置不参与历史补跑）；记录一条
+    succeeded 收据供数据源健康观测，但不调用 prepare_scan——补跑不要求
+    收据完整性，也不会推进任何来源的扫描水位线。
+    """
+    from sources.arxiv_source import ArxivSource
+
+    arxiv_source = ArxivSource(
+        history_dir=settings.HISTORY_DIR,
+        proxy_dict=settings.get_proxy_dict("arxiv"),
+        load_legacy_history=False,
+    )
+    domains = list(getattr(settings, "TARGET_DOMAINS", []) or [])
+    if set(settings.ENABLED_SOURCES) - {"arxiv"}:
+        logger.info(
+            "过去日报补跑仅扫描 arXiv 源，其他启用来源跳过: %s",
+            sorted(set(settings.ENABLED_SOURCES) - {"arxiv"}),
+        )
+    papers = arxiv_source.fetch_domain_papers_between(target_date, target_date, domains)
+    papers_by_source: Dict[str, List[PaperMetadata]] = {"arxiv": papers} if papers else {}
+    try:
+        store.record_scan_receipt(
+            run_id,
+            "arxiv",
+            {
+                "source": "arxiv",
+                "status": "succeeded",
+                "scanned_at": datetime.now().isoformat(),
+                "backfill_date": target_date.isoformat(),
+                "domains": domains,
+                "total_new_candidates": len(papers),
+                "domain_receipts": [],
+            },
+        )
+    except Exception as exc:
+        logger.warning("过去日报收据记录失败（不影响补跑）: %s", exc)
+    logger.info(
+        "过去日报补跑 %s：当天提交论文 %s 篇", target_date.isoformat(), len(papers)
+    )
+    return papers_by_source
+
+
 def _delivered_papers_for_finalization(
     scored_papers_by_source: Dict[str, List[Dict[str, Any]]],
     analyses_by_source: Dict[str, List[Dict[str, Any]]],
@@ -760,15 +808,19 @@ class DailyResearchPipeline:
     从多个数据源抓取论文，评分筛选，深度分析，生成报告，发送通知。
     """
 
-    def run(self, run_kind: str = "daily"):
+    def run(self, run_kind: str = "daily", target_date: Optional[date] = None):
         """
         执行每日研究完整流程。
 
         ``run_kind``:
         - "daily"（默认）：正常扫描-评分-报告流程；
         - "supplement"：跳过扫描，从补充积压（旧历史缺数据/遗漏论文）
-          装载候选，走同一评分/分析/报告/原子交付流程，产出补充报告。
+          装载候选，走同一评分/分析/报告/原子交付流程，产出补充报告；
+        - "backfill"：为过去的某一天（``target_date``）重跑当天的每日
+          研究，报告时间戳用过去日期 + 当前时刻。
         """
+        if run_kind == "backfill" and target_date is None:
+            raise ValueError("backfill 运行必须提供 target_date")
         store = None
         run_id = None
         notifier = None
@@ -926,6 +978,42 @@ class DailyResearchPipeline:
                     total_papers_count,
                     deferred_paper_count,
                     len(papers_by_source),
+                )
+            elif run_kind == "backfill":
+                # 过去日期补跑：当天提交的 arXiv 论文走与每日运行相同的
+                # 过滤/登记路径；已交付版本由账本排除，不会重复推送。
+                # 只处理当天扫描到的论文，不消费日常待处理队列。
+                papers_by_source = _fetch_backfill_papers(store, run_id, target_date)
+                papers_by_source = _exclude_sqlite_delivered_papers(store, papers_by_source)
+                papers_by_source = _exclude_cross_source_arxiv_mirrors(
+                    store, papers_by_source
+                )
+                registered_candidate_count = store.register_paper_candidates(
+                    run_id, papers_by_source
+                )
+                limit = int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0) or 0)
+                selected_by_source: Dict[str, List[PaperMetadata]] = {}
+                selected_count = 0
+                for source, papers in papers_by_source.items():
+                    remaining = (
+                        limit - selected_count if limit > 0 else len(papers)
+                    )
+                    take = papers[: max(0, remaining)]
+                    if take:
+                        selected_by_source[source] = take
+                        selected_count += len(take)
+                    if limit > 0 and selected_count >= limit:
+                        break
+                papers_by_source = selected_by_source
+                total_papers_count = selected_count
+                pending_paper_count = registered_candidate_count
+                deferred_paper_count = pending_paper_count - total_papers_count
+                logger.info(
+                    "过去日报（%s）：当天候选 %s 篇，本次处理 %s 篇，留待后续 %s 篇",
+                    target_date.isoformat(),
+                    registered_candidate_count,
+                    total_papers_count,
+                    deferred_paper_count,
                 )
             else:
                 search_agent = SearchAgent(
@@ -1464,12 +1552,17 @@ class DailyResearchPipeline:
             store.record_run_phase(run_id, "report")
 
             reporter = Reporter()
+            # 过去日报的时间戳 = 目标日期 + 当前时刻（用户指定的补跑语义）。
+            backfill_stamp = None
+            if run_kind == "backfill":
+                backfill_stamp = datetime.combine(target_date, datetime.now().time())
             report_paths = reporter.generate_reports_by_source(
                 scored_papers_by_source=scored_papers_by_source,
                 keywords_dict=all_keywords,
                 analyses_by_source=analyses_by_source,
                 token_usage=token_counter.get_summary() if settings.TOKEN_TRACKING_ENABLED else None,
                 report_kind="supplement" if run_kind == "supplement" else "daily",
+                report_timestamp=backfill_stamp,
             )
             _validate_report_paths(report_paths, scored_papers_by_source)
 
