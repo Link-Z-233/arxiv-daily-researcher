@@ -120,6 +120,19 @@ class RunProgressAggregationTests(unittest.TestCase):
             progress = store.active_run_progress()
             self.assertEqual(progress["phase"], "report")
 
+    def test_phase_write_is_ignored_after_run_reaches_terminal_state(self):
+        # 回归：交付提交后的收尾步骤不允许再写入心跳，否则终态 run
+        # 会留下永不清除的陈旧阶段。
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(1)
+            store.record_run_phase(run_id, "report")
+            store.complete_run(run_id, {})
+
+            store.record_run_phase(run_id, "deliver")
+            self.assertIsNone(store.get_app_state("daily_run_phase"))
+            self.assertIsNone(store.active_run_progress())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,14 +40,13 @@ _LOG_CLOSED = "rm_log_viewer_closed"  # 是否关闭内容区
 # 进度面板用的配置快照：fragment 无法接收参数，经 session_state 传递
 _PROGRESS_CONFIG_KEY = "rm_status_config_values"
 
-# 阶段心跳 → i18n key
+# 阶段心跳 → i18n key（交付提交后 run 即终态，无独立 deliver 阶段）
 _PHASE_LABEL_KEYS = {
     "prepare": "rm_progress_phase_prepare",
     "scan": "rm_progress_phase_scan",
     "score": "rm_progress_phase_score",
     "analyze": "rm_progress_phase_analyze",
     "report": "rm_progress_phase_report",
-    "deliver": "rm_progress_phase_deliver",
 }
 
 

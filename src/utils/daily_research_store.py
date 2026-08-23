@@ -839,6 +839,8 @@ class DailyResearchStore:
     def record_run_phase(self, run_id: str, phase: str) -> None:
         """写入当前活跃 run 的阶段心跳，供 WebUI 的长任务进度反馈读取。
 
+        只在 run 仍处于 running 状态时写入：交付提交后的收尾步骤
+        （通知派发等）不再产生新心跳，避免终态 run 留下陈旧阶段。
         心跳在 run 完成/失败时清理（见 ``_clear_run_phase``）；一个陈旧的
         心跳（如进程被 SIGKILL）只会让进度视图回退到状态推断，不会误报。
         """
@@ -850,7 +852,23 @@ class DailyResearchStore:
             },
             ensure_ascii=False,
         )
-        self.set_app_state(_RUN_PHASE_STATE_KEY, payload)
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM daily_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None or row["status"] != "running":
+                return
+            conn.execute(
+                """
+                INSERT INTO app_state (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (_RUN_PHASE_STATE_KEY, payload, now),
+            )
 
     def _run_phase_payload(self) -> Optional[Dict[str, Any]]:
         raw = self.get_app_state(_RUN_PHASE_STATE_KEY)

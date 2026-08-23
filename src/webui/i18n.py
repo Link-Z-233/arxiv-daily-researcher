@@ -330,7 +330,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_progress_phase_score": {"zh": "评分与翻译", "en": "Scoring & translating"},
     "rm_progress_phase_analyze": {"zh": "深度分析", "en": "Deep analysis"},
     "rm_progress_phase_report": {"zh": "生成报告", "en": "Writing reports"},
-    "rm_progress_phase_deliver": {"zh": "交付与通知", "en": "Delivering & notifying"},
     "rm_progress_caption": {
         "zh": "{phase} · 登记 {registered} · 已评分 {scored} · 深度分析 {analyzed} · 交付 {completed} · 失败 {failed} · 已运行 {elapsed}",
         "en": "{phase} · registered {registered} · scored {scored} · analyzed {analyzed} · delivered {completed} · failed {failed} · elapsed {elapsed}",

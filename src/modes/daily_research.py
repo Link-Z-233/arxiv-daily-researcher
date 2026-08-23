@@ -1414,7 +1414,8 @@ class DailyResearchPipeline:
             print("=" * 80 + "\n")
 
             # ==================== 阶段8: 持久化并发送通知 ====================
-            store.record_run_phase(run_id, "deliver")
+            # 注意：run 在阶段6 交付提交时已完成（终态），这里不再写阶段
+            # 心跳——record_run_phase 也会拒绝为非 running 的 run 写入。
             if settings.ENABLE_NOTIFICATIONS:
                 logger.info(">>> 阶段8: 写入通知 outbox 并发送...")
                 notifier = notifier or NotifierAgent()
