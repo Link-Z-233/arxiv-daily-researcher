@@ -2,28 +2,29 @@
 
 # 🔬 ArXiv Daily Researcher
 
-**LLM-Powered Intelligent Academic Paper Monitoring, Filtering, Deep Analysis & Trend Research System**
+**LLM-powered academic paper monitoring, filtering, deep analysis & trend research**
 
 [![Version](https://img.shields.io/badge/version-4.0-brightgreen.svg)](CHANGELOG.md)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Supported-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
-[![Streamlit](https://img.shields.io/badge/Config_Panel-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](#️-streamlit-config-panel)
-[![中文](https://img.shields.io/badge/README-中文-red.svg)](README.md)
+[![Streamlit](https://img.shields.io/badge/Config_Panel-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](#%EF%B8%8F-streamlit-config-panel)
+[![中文](https://img.shields.io/badge/README-中文-blue.svg)](README.md)
 
-*Daily high-quality paper summaries; one command to survey a year of research trends; one panel for config, execution, preview, and debugging.*
+*High-quality paper digests every day; a year of research trends in one command; one panel for config, runs, previews and troubleshooting.*
 
 </div>
 
 ---
 
-ArXiv Daily Researcher automatically fetches papers from **ArXiv and 20+ academic journals**, filters relevant work using a configurable keyword-weight scoring system, downloads PDFs for deep analysis, tracks keyword evolution trends, generates Markdown/HTML reports, and pushes results to multiple notification channels.
+ArXiv Daily Researcher automatically fetches papers from **ArXiv** and **declaratively extensible journal sources** (PRL, PRA/PRB, Nature, Science, Hugging Face Papers, …), filters relevant work with a configurable keyword-weight scoring system, downloads PDFs for deep analysis, tracks keyword evolution, generates Markdown / HTML reports and pushes results to multiple notification channels. All paper identity, stage state and delivery history persist in **SQLite**: each exact version is delivered once, new versions are re-processed automatically, and interrupted runs resume from the queue.
 
-The current version supports:
-- **Daily Research Mode** — ongoing monitoring of new papers matching your keywords
-- **Trend Research Mode** — long-term trend insights for specified topics
-- **Streamlit WebUI Panel** — browser-based config, one-click execution, log viewing, and report preview
+Current version supports:
+- **Daily research mode** — routine monitoring and high-relevance tracking (default 12:00 each day, configurable)
+- **Trend research mode** — mid/long-term insight for a chosen topic
+- **Streamlit panel** — 12 tabs covering config, runs, progress, favorites, search, previews and troubleshooting
+- **Silent midnight keyword maintenance** — LLM batch normalization and trend reports run independently at 00:00
 
 ---
 
@@ -31,40 +32,44 @@ The current version supports:
 
 <table>
 <tr>
-<td colspan="2" align="center"><sub>— Data Acquisition & Intelligent Filtering —</sub></td>
+<td colspan="2" align="center"><sub>— Fetching & Filtering —</sub></td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
 ### 📡 Multi-Source Fetching
 
-Supports **ArXiv and 20+ top journals** (PRL, Nature, Science, etc.). When a journal paper has an ArXiv version, the system automatically switches to ArXiv for more complete abstracts and downloadable PDFs. Optional integration with **Semantic Scholar** for citation counts and AI TLDRs.
+Core sources are **ArXiv** (official API, full pagination, submitted+updated dual queries) and PRL; other sources (PRA/PRB, Nature, Science, Hugging Face Papers, …) are **declarative JSON definitions disabled by default** — enable them from a dropdown in the panel. Journal papers with an ArXiv version automatically switch to ArXiv for richer abstracts and PDFs. Optional **Semantic Scholar** enrichment (citations, AI TLDR). A failed source scan fails the run explicitly; watermarks only advance after complete runs.
 
 </td>
 <td width="50%" valign="top">
 
-### 🎯 Dual LLM Scoring & Filtering
+### 🎯 Three Scoring Strategies
 
-`CHEAP_LLM` scores each paper against your keywords on a 0–10 scale. Papers are promoted to deep analysis based on **weighted keyword sums** and a **dynamic pass threshold**. Supports primary keywords, auto-extracted keywords from reference PDFs, and expert author bonuses.
+`CHEAP_LLM` scores each paper per keyword (0–10):
+
+- **v1 weighted scoring** — keyword weight sum + expert-author bonus + dynamic pass line
+- **Core relevance V2** — improved relevance-oriented scoring
+- **Learned mode (`learned_preference_v1`)** — v1 plus a correction library learned continuously from likes/dislikes (strong signals) and passing history (weak signals); per-term clamping, global decay, learned influence always below directly configured keywords
 
 </td>
 </tr>
 <tr>
-<td colspan="2" align="center"><sub>— Deep Analysis & Knowledge Accumulation —</sub></td>
+<td colspan="2" align="center"><sub>— Deep Analysis & Knowledge —</sub></td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
 ### 🔍 Deep PDF Analysis
 
-Papers that pass the scoring filter are automatically downloaded, and `SMART_LLM` extracts **methodology, novelty, tech stack, key findings, limitations, research connections, and future directions** — seven dimensions in total. Supports both **MinerU cloud parsing** and **PyMuPDF local parsing**, with automatic fallback when MinerU is unavailable.
+Papers passing the filter get their PDF downloaded and analyzed by `SMART_LLM` across **methods, innovations, tech stack, key findings, limitations, relations and future directions**. **PyMuPDF local parsing is the default**, with optional **MinerU** cloud parsing and automatic fallback. Reports mark whether the TLDR came from full-text parsing.
 
 </td>
 <td width="50%" valign="top">
 
 ### 📈 Keyword Trend Tracking
 
-Keywords extracted during scoring are written to SQLite, then semantically merged and normalized via AI. The system generates Mermaid charts and standalone HTML keyword trend reports with **color-coded bar charts, trend heatmaps, and unified color legends**.
+Keywords extracted during scoring are stored in SQLite; **an independent cron job silently runs LLM batch normalization every day at 00:00** (synonym merging, abbreviation expansion, spelling unification) without touching the main pipeline; generates HTML trend reports (colored bar charts, heatmaps) at a configurable frequency.
 
 </td>
 </tr>
@@ -76,68 +81,52 @@ Keywords extracted during scoring are written to SQLite, then semantically merge
 
 ### 🔬 Trend Research Mode
 
-The standalone `trend_research` mode supports keyword-based, date-range-filtered, ArXiv-category-scoped batch paper retrieval. Each paper gets a TLDR, and `SMART_LLM` performs a **single-pass comprehensive analysis** covering hot topics, temporal evolution, key researchers, research gaps, and methodology trends.
+The standalone `trend_research` mode takes keywords, a date range and **full ArXiv category dropdown filtering** (153 primary categories, alphabetical), batch-retrieves papers, generates per-paper TLDRs and one comprehensive `SMART_LLM` analysis. Custom analysis prompt templates are supported.
 
 </td>
 <td width="50%" valign="top">
 
-### 📊 Token Consumption Tracking
+### 📊 Token Tracking
 
-A built-in thread-safe token counter tracks input/output token consumption per model for every run, displayed at the **end of reports** and in **notification messages**, giving you precise visibility into running costs.
-
-</td>
-</tr>
-<tr>
-<td colspan="2" align="center"><sub>— Report Output & Notification Delivery —</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 📄 Dual-Format Reports (Markdown + HTML)
-
-Supports three report types: **Daily Research**, **Trend Research**, and **Keyword Trends**. Markdown is ideal for archiving and version control (independently toggleable); HTML is optimized for browser reading and sharing, with external CSS styling and integrated **KaTeX** formula rendering.
-
-</td>
-<td width="50%" valign="top">
-
-### 🔔 Six-Channel Notifications
-
-Supports **Email, WeCom, DingTalk, Telegram, Slack, and generic Webhook**. Each channel has an independent enable switch. Email supports HTML templates. Real-time alerts for runtime anomalies (MinerU expiration, LLM errors, network issues).
+A thread-safe counter tracks per-model input/output usage, persisted to SQLite for every run (success/failure/interrupt). The Analytics tab shows today/30-day totals, a one-month heatmap, static adaptive line charts and per-model breakdowns — retained forever.
 
 </td>
 </tr>
 <tr>
-<td colspan="2" align="center"><sub>— Config Management & Deployment —</sub></td>
+<td colspan="2" align="center"><sub>— Reports & Feedback —</sub></td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
-### 🧙 Interactive Setup Wizard
+### 📄 Dual-Format Reports & Favorites
 
-First-time deployment includes a 7-step CLI wizard covering LLM, search, data sources, keywords, scoring, notifications, and advanced settings. **Auto-triggered** on first Docker deployment, automatically generating `.env` and `configs/config.json`.
+Three report families (daily / trend / keyword-trend), each with independently switchable Markdown (archival) and HTML (browser reading, KaTeX). Mark papers 👍/👎 directly inside report cards (no flash, instant persistence); the Favorites & Search page lists liked papers chronologically (titles link to arXiv) with keyword and top-author statistics.
 
 </td>
 <td width="50%" valign="top">
 
-### 🖥️ Streamlit Config Panel <sup><kbd>v4.0</kbd></sup>
+### 🔎 Full-History Paper Search
 
-An **11-tab** browser-based management interface: Daily Push (run manager + report toggles), Report Viewer (quick marks + paper search), Analytics (token usage + source health + run diagnostics), Trend Analysis, Keywords, Search, Scoring, Notifications, Data Management (config export + WebDAV sync + DB backup), API Config, and Advanced Settings (incl. Network Proxy).
+Metadata search over SQLite: title/author/abstract/TLDR/extracted-keyword matching plus source, processing-date range, minimum score and favorites-only filters with pagination. Data is archived permanently — nothing gets lost as history grows.
 
 </td>
 </tr>
 <tr>
+<td colspan="2" align="center"><sub>— Config & Operations —</sub></td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 
-### 🚀 Three Deployment Modes
+### 🧙 Wizard + Panel
 
-Supports **Docker containers** (recommended), **local scripts + Cron**, and **GitHub Actions**. Docker is the preferred approach — zero-config, production-ready.
+A 7-step CLI wizard bootstraps first deployments (auto-triggered on first Docker start); the **Streamlit panel** (12 tabs) handles daily tuning, run-now, live progress and logs, and report previews. Pages you never visited keep their on-disk values on save.
 
 </td>
 <td width="50%" valign="top">
 
 ### 🛡️ Production-Grade Reliability
 
-Built-in **exponential backoff retry**, **MinerU smart degradation**, **file-lock-based concurrency prevention**, **stale lock reclamation**, **per-run log files**, **auto update checks**, **network proxy**, and **WebDAV cross-device data sync** — suitable for long-term unattended operation.
+**SQLite persistent queue** (resume after interruption, failed papers retried first, per-run cap against first-deploy floods), **atomic delivery** (report + delivery + notifications + maintenance in one transaction), **shared LLM timeout/retry policy** (per-request timeout, exponential backoff with jitter, Retry-After honored, fast-fail on auth errors), **arXiv rate-limit backoff with cross-domain cooldown**, **no-progress watchdog**, **file locks**, **gzip DB backups with WebDAV rotation**, **per-service proxy**.
 
 </td>
 </tr>
@@ -153,24 +142,24 @@ Built-in **exponential backoff retry**, **MinerU smart degradation**, **file-loc
 
 ### 📘 Getting Started
 
-| Section | Description |
-| :------------------------: | :-------------------------- |
-| [✨ Core Features](#-core-features) | Feature overview |
-| [🚀 Quick Start](#-quick-start) | Three steps to first run |
-| [🛠️ Config Tools](#️-config-tools) | CLI wizard + Streamlit panel |
-| [🐳 Deployment](#-deployment) | Docker / Actions / local cron |
+|          Section           | Summary                    |
+| :------------------------: | :------------------------- |
+| [✨ Core Features](#-core-features) | Capability overview |
+| [🚀 Quick Start](#-quick-start)     | Three steps to first run  |
+| [🛠️ Config Tools](#%EF%B8%8F-config-tools) | CLI wizard + panel |
+| [🐳 Deployment](#-deployment)       | Docker / Actions / cron    |
 
 </td>
 <td width="50%" valign="top">
 
 ### 📗 In Depth
 
-| Section | Description |
-| :------------------------: | :--------------------------- |
-| [📖 Feature Details](#-feature-details) | Modes, reports, notifications, locking |
-| [📁 Project Structure](#-project-structure) | Directory and module overview |
-| [❓ FAQ](#-faq) | 10 practical troubleshooting & deep-dive guides |
-| [📝 Changelog](CHANGELOG.md) | Complete version history |
+|            Section            | Summary                          |
+| :--------------------------: | :------------------------------- |
+|  [📖 Details](#-feature-details)   | Modes, reports, notifications, locks |
+|  [📁 Structure](#-project-structure) | Directory & module map          |
+|  [❓ FAQ](#-faq)                    | 10 practical troubleshooting guides |
+| [📝 Changelog](CHANGELOG.md)       | Full version history              |
 
 </td>
 </tr>
@@ -186,44 +175,32 @@ Built-in **exponential backoff retry**, **MinerU smart degradation**, **file-loc
 git clone https://github.com/yzr278892/arxiv-daily-researcher.git
 cd arxiv-daily-researcher
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-core.txt              # panel additionally needs requirements-webui.txt
 ```
 
 ### Step 2: Configure
 
-We recommend running the interactive setup wizard first:
+Start with the interactive wizard:
 
 ```bash
 python src/utils/setup_wizard.py
 ```
 
-The wizard guides you through:
-
-- LLM Configuration
-- Search Parameters
-- Data Source Selection
-- Keywords & Research Context
-- Scoring Parameters
-- Notification Channels
-- Advanced Settings
-
-Upon completion, the following are auto-generated:
-- `.env`
-- `configs/config.json`
+It walks you through LLM config, search parameters, sources, keywords & research context, scoring, notifications and advanced settings, then generates `.env` and `configs/config.json` (JSONC — handwritten comments are preserved on panel saves).
 
 > [!TIP]
-> If configs already exist, the wizard pre-fills existing values; just modify the fields you want to change and press Enter to keep the rest.
+> With existing config the wizard pre-fills current values; change what you want and press Enter to keep the rest.
 
 <details>
-<summary><b>Manual Configuration (skip wizard)</b></summary>
+<summary><b>Manual configuration (skip the wizard)</b></summary>
 
-**1) Copy environment template:**
+**1) Copy the template:**
 
 ```bash
 cp .env.example .env
 ```
 
-**2) Configure LLM:**
+**2) Fill in LLMs:**
 
 ```env
 CHEAP_LLM__API_KEY=sk-your-key
@@ -235,7 +212,7 @@ SMART_LLM__BASE_URL=https://api.openai.com/v1
 SMART_LLM__MODEL_NAME=gpt-4o
 ```
 
-**3) Configure core keywords and domains:**
+**3) Core keywords and domains:**
 
 ```jsonc
 {
@@ -244,7 +221,7 @@ SMART_LLM__MODEL_NAME=gpt-4o
       "weight": 1.0,
       "keywords": ["quantum error correction", "surface code"]
     },
-    "research_context": "My research focuses on fault-tolerant quantum computing and quantum error correction codes"
+    "research_context": "My research focuses on fault-tolerant quantum computation"
   },
   "target_domains": {
     "domains": ["quant-ph"]
@@ -257,42 +234,40 @@ SMART_LLM__MODEL_NAME=gpt-4o
 ### Step 3: Run
 
 ```bash
-# Daily research mode (default)
+# Daily research (default)
 python main.py
 
-# Trend research mode
+# Trend research
 python main.py --mode trend_research --keywords "quantum error correction"
 ```
 
-Default output locations:
-- Reports: `data/reports/`
-- Logs: `logs/`
+Outputs go to `data/reports/` and `logs/` by default.
 
 ---
 
 ## 🛠️ Config Tools
 
-This project offers two main configuration methods: **CLI Setup Wizard** and **Streamlit Config Panel**.
+Two main configuration paths: the **CLI wizard** and the **Streamlit panel**.
 
 ### 🧙 Interactive Setup Wizard
 
-Ideal for first-time deployment, SSH environments, and headless servers:
+For first deployments, SSH and headless servers:
 
 ```bash
 python src/utils/setup_wizard.py
 ```
 
-| Step | Content | Description |
-| :---: | :------- | :---------------------------------------- |
-| 1 | LLM Config | Choose provider, enter API key, optional connection test |
-| 2 | Search Settings | Search days, max results per source |
-| 3 | Data Sources | ArXiv & journal toggles, ArXiv categories |
-| 4 | Keywords | Primary keywords, reference PDF extraction, research context |
-| 5 | Scoring | Base score, weight coefficient, author bonus |
-| 6 | Notifications | Channel toggles and credential entry |
-| 7 | Advanced | PDF parsing, concurrency, log retention, etc. |
+| Step | Content       | Notes                                            |
+| :--: | :------------ | :----------------------------------------------- |
+|  1   | LLM config    | Provider, API key, optional connectivity test    |
+|  2   | Search        | Days, max results per source                     |
+|  3   | Sources       | ArXiv & journals, ArXiv categories               |
+|  4   | Keywords      | Primary keywords, reference PDFs, context        |
+|  5   | Scoring       | Base score, weight coefficient, author bonus     |
+|  6   | Notifications | Channels and credentials                         |
+|  7   | Advanced      | PDF parsing, concurrency, log retention          |
 
-The wizard automatically backs up existing configs to `.bak` files before writing.
+Existing config is backed up to `.bak` before writing.
 
 ---
 
@@ -310,25 +285,26 @@ streamlit run src/webui/config_panel.py
 docker compose up -d config-panel
 ```
 
-Open in browser: `http://localhost:8501`
+Visit `http://localhost:8501` (Docker binds `127.0.0.1` only).
 
-The config panel shares the same `.env` and `configs/config.json` as the main program. Changes take effect on the next run.
+The panel shares `.env` and `configs/config.json` with the worker; changes take effect on the next run. The sidebar offers save, reload-from-disk and **🔄 restart worker container** (requests a worker restart via the shared volume; cron is reinstalled from the latest config).
 
-#### 11 Tabs Overview
+#### 12 Tabs Overview
 
-| # | Tab | Functionality |
-| :---: | :----------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 | **Daily Push** | One-click daily research run; run status monitoring (lock file / PID); **Daily Research Settings** (HTML report / Markdown report / Include all papers / per-run cap); run log viewer with auto-redirect to latest non-system log |
-| 2 | **Report Viewer** | Three-column display of Daily Research / Trend Research / Keyword Trend HTML reports with preview and date navigation; **quick marks** below the preview (like/dislike/clear + interest profile); **paper search** at the bottom of the page (full-archive metadata search) |
-| 3 | **Analytics** | Token usage (today / 30-day totals on top, one-month heatmap, static adaptive line chart, per-model table), source health (last 20 scan receipts), slim run diagnostics |
-| 4 | **Trend Analysis** | Set keywords, date range, category filter, sort order, max results, TLDR, output formats and the comprehensive-analysis skill; custom deep-analysis prompt (save/apply/delete templates); one-click start/stop trend research |
-| 5 | **Keywords** | Research context (top), primary keywords, reference PDF extraction (with extracted-keywords box), similarity threshold, weight distribution |
-| 6 | **Search** | Search days, data source toggles, extra sources (built-in dropdown + custom add after enabling), ArXiv categories and fetch timeout |
-| 7 | **Scoring** | Scoring strategy (v1 / V2 / learned), pass threshold formula, max score per keyword, author bonus, live scoring preview |
-| 8 | **Notifications** | Global toggle, success/failure/attachment controls, six-channel config, SMTP test |
-| 9 | **Data Management** | One-click config export (config.json + .env) as zip; **WebDAV sync** (manual / scheduled / post-report auto); **database backup** (gzip + local/WebDAV rotation + backup now) |
-| 10 | **API** | Configure CHEAP_LLM / SMART_LLM / MinerU, with connection test support |
-| 11 | **Advanced** | PDF parsing mode, concurrency, token tracking, auto update check, keyword trend tracking, retry, log rotation, stale lock reclamation, and **Network Proxy** (merged into this tab) |
+|  #    | Tab                    | What it does                                                                                                                                                  |
+| :---: | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+|   1   | **Daily Push**         | Run-now button; **live run status** (lock/PID + **phase heartbeat progress**: prepare → scan → score/translate → analyze → report, with registered/scored/analyzed/failed counts and elapsed time, 5s auto-refresh); stop (with confirmation); **daily research settings** (daily run time / HTML / Markdown / include-all / per-run cap); log viewer |
+|   2   | **Reports**            | Daily / trend / keyword-trend HTML reports with preview and date navigation; mark papers 👍/👎 inside report cards (flash-free, persisted instantly)           |
+|   3   | **Favorites & Search** | **Liked papers** (chronological, titles hyperlink to arXiv, 👍/👎 metrics) + **keyword statistics** (liked-paper keyword frequency, top authors) + **paper search** (full history) |
+|   4   | **Trend Analysis**     | Keywords, date range, **full ArXiv category dropdown**, sorting, max results, TLDR, output formats and skills; custom analysis prompts (save/apply/delete templates); start/stop |
+|   5   | **Keywords**           | Research context (top), primary keywords, reference-PDF extraction (high/medium/low weight tiers + extracted list), similarity threshold                        |
+|   6   | **Search & Sources**   | Search days, source toggles, extra sources (dropdown multi-select + custom), **full ArXiv category multi-select**, fetch timeout                              |
+|   7   | **Scoring**            | Strategy (v1 / V2 / learned), pass-line formula, per-keyword cap, author bonus, learned-library preview, live scoring preview                                  |
+|   8   | **Analytics**          | Token usage (today/30-day totals, one-month heatmap, adaptive line chart, per-model), source health (last 20 scan receipts), compact run diagnostics           |
+|   9   | **Notifications**      | Global toggle, success/failure/attachment control, six channels, SMTP test                                                                                    |
+|  10   | **Data Management**    | Config export (zip), **WebDAV sync** (manual / scheduled / after-report), **DB backup** (gzip + local/WebDAV rotation + run now)                               |
+|  11   | **API**                | CHEAP_LLM / SMART_LLM / MinerU with connectivity tests                                                                                                        |
+|  12   | **Advanced**           | PDF parser (pymupdf default), concurrency, token tracking, update checks, keyword tracking, retries, log rotation, stale-lock recovery, **proxy**              |
 
 ### 🖼️ WebUI Screenshots
 
@@ -337,37 +313,37 @@ The config panel shares the same `.env` and `configs/config.json` as the main pr
     <td align="center" width="50%">
       <img src="assets/img_en.png" alt="English WebUI" width="100%" />
       <br />
-      <sub>English WebUI</sub>
+      <sub>English WebUI main screen</sub>
     </td>
     <td align="center" width="50%">
       <img src="assets/img_noti.png" alt="Notification settings" width="100%" />
       <br />
-      <sub>Chinese Notification Settings</sub>
+      <sub>Notification settings (Chinese)</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
       <img src="assets/img_prev.png" alt="Report preview" width="100%" />
       <br />
-      <sub>Chinese Report Preview</sub>
+      <sub>Report preview (Chinese)</sub>
     </td>
     <td align="center" width="50%">
       <img src="assets/img_serh.png" alt="Search sources settings" width="100%" />
       <br />
-      <sub>Chinese Search Source Settings</sub>
+      <sub>Search & sources settings (Chinese)</sub>
     </td>
   </tr>
 </table>
 
 <details>
-<summary><b>Setup Wizard vs. Config Panel — which should I use?</b></summary>
+<summary><b>Wizard vs panel — which one?</b></summary>
 
-| Tool | Best For | Characteristics |
-| :------------------------------- | :-------------------------- | :-------------------------------------------- |
-| **Setup Wizard** (`setup_wizard.py`) | First deployment, SSH, headless environments | CLI interactive, ideal for initialization, connection testing |
-| **Config Panel** (`config_panel.py`) | Daily tuning, report preview, debugging | 11 tabs, WYSIWYG, run management & trend analysis |
+| Tool                              | Best for                       | Traits                                            |
+| :-------------------------------- | :----------------------------- | :------------------------------------------------ |
+| **Wizard** (`setup_wizard.py`)    | First deploy, SSH, headless    | CLI, init-friendly, connectivity test             |
+| **Panel** (`config_panel.py`)     | Daily tuning, previews, debug  | 12 tabs, WYSIWYG, run management & trend analysis |
 
-**Recommendation**: Use the wizard for initial setup, then the config panel for ongoing daily use.
+**Recommendation**: wizard first, panel for daily use.
 
 </details>
 
@@ -375,11 +351,13 @@ The config panel shares the same `.env` and `configs/config.json` as the main pr
 
 ## 🐳 Deployment
 
-### Docker Deployment <sup>Recommended</sup>
+### Docker <sup>Recommended</sup>
 
-Docker is the **recommended deployment method** for long-term background operation. The main research container uses `network_mode: host` by default for direct access to the host's local LLM services.
+Docker is the recommended long-running deployment. Compose defines two containers (one image, two build targets):
+- **arxiv-daily-researcher** (worker): scheduled jobs, trigger watcher, report generation; `network_mode: host` for direct access to host-local LLMs
+- **arxiv-daily-researcher-config-panel** (WebUI): Streamlit panel bound to `127.0.0.1:8501`, cooperating with the worker through shared volumes
 
-#### Starting Up
+#### Start
 
 ```bash
 git clone https://github.com/yzr278892/arxiv-daily-researcher.git
@@ -388,67 +366,70 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Default container behavior:
-- `CRON_SCHEDULE=0 8 * * *`
-- `RUN_ON_STARTUP=false`
-- `MODE=cron`
-- `SETUP_WIZARD=auto`
+Three scheduled jobs run inside the worker (timezone `TZ`, default `Asia/Shanghai`):
 
-This means, by default:
-1. On first deployment, automatically checks whether to launch the setup wizard
-2. Starts both the main research service and WebUI config panel (`http://localhost:8501`)
-3. Main research container does not run immediately on startup (set `RUN_ON_STARTUP=true` if needed)
-4. Automatically runs daily at 08:00 thereafter
+| Time         | Job                              | Notes                                                                                     |
+| :----------- | :------------------------------- | :---------------------------------------------------------------------------------------- |
+| Configurable | Daily research                   | `daily_research.run_time` (HH:MM, **default 12:00**) in `configs/config.json`; adjust in the Daily Push tab; effective after container restart |
+| `0 0 * * *`  | Keyword normalization + reports  | Silent; logs to `logs/keyword_*.log`; failures never affect the daily report              |
+| Every minute | WebDAV scheduled-sync tick       | Transfers only when scheduled mode is selected and the expression matches                 |
 
-#### Common Commands
+Other defaults:
+- `RUN_ON_STARTUP=false` — the worker does not run immediately on start (set `true` to change)
+- `MODE=cron` — scheduled mode (`run-once` executes once and exits)
+- `SETUP_WIZARD=auto` — the wizard auto-triggers on first deployment (no `.env`)
+
+> [!NOTE]
+> The daily run time is **no longer controlled by an environment variable**: change `daily_research.run_time`, then click "🔄 restart worker container" in the sidebar (or `docker compose restart arxiv-daily-researcher`) to reinstall cron.
+
+#### Common commands
 
 ```bash
-# Check running status
 docker compose ps
-
-# View logs
 docker compose logs -f
+docker compose up -d config-panel && docker compose stop config-panel
 
-# Start / stop WebUI
-docker compose up -d config-panel
-docker compose stop config-panel
-
-# Run trend research directly inside the container
+# Trend research inside the container
 docker exec -it arxiv-daily-researcher python main.py --mode trend_research \
   --keywords "quantum error correction" \
   --date-from 2025-01-01 \
   --categories quant-ph
 
-# Stop the main service
+# Manual keyword maintenance (normally via the 00:00 cron)
+docker exec arxiv-daily-researcher python -m modes.keyword_maintenance
+
 docker compose down
 ```
 
-#### WebUI Trigger Mechanism
+#### WebUI run-now mechanism
 
-The WebUI triggers the main container to execute tasks via shared volume trigger files:
-- WebUI writes: `data/run/webui_run_trigger.flag`
-- Main container's `trigger_watcher` polls every 5 seconds in `entrypoint.sh`
-- On detection, launches `python main.py --mode daily_research`
-- Run logs go to `logs/manual_*.log`
-- The actual Python PID is written to `data/run/webui_triggered.pid`
+The panel asks the worker to run jobs through an **atomic JSON request queue** on a shared volume (no Docker socket needed):
+1. Clicking run-now atomically writes `data/run/webui_triggers/<ts>_<id>.json`
+2. The worker's `trigger_watcher` polls every 5s and atomically claims requests via `mv` (no double execution)
+3. The claimed request launches `python main.py --mode daily_research`; the real PID lands in `data/run/webui_triggered.pid`
+4. Logs go to `logs/manual_*.log`; terminal states (with a safe error summary) to `webui_triggers/status/`
+5. If the same task is already running, the trigger is recorded as `skipped_busy` (exit code 75) instead of fake success
+
+The restart button delivers a `restart_worker.request` marker the same way; the worker archives it and sends TERM to PID 1.
 
 <details>
-<summary><b>Container Environment Variables</b></summary>
+<summary><b>Container environment variables</b></summary>
 
-| Variable | Default | Description |
-| :--------------- | :-------------- | :------------------------------------------------- |
-| `TZ` | `Asia/Shanghai` | Timezone |
-| `CRON_SCHEDULE` | `0 8 * * *` | Daily scheduled execution time |
-| `RUN_ON_STARTUP` | `false` | Whether to run once immediately on startup |
-| `MODE` | `cron` | `cron` for scheduled mode, `run-once` for single execution |
-| `SETUP_WIZARD` | `auto` | `auto` triggers on first deploy, `true` forces trigger, `false` skips |
+| Variable          | Default          | Notes                                        |
+| :---------------- | :--------------- | :------------------------------------------- |
+| `TZ`              | `Asia/Shanghai`  | Timezone (affects all cron times)            |
+| `RUN_ON_STARTUP`  | `false`          | Run once immediately on start                |
+| `MODE`            | `cron`           | `cron` or `run-once`                         |
+| `SETUP_WIZARD`    | `auto`           | `auto` / `true` / `false`                    |
+
+> The daily run time comes from `configs/config.json` (`daily_research.run_time`); there is no environment override.
 
 </details>
 
 <details>
-<summary><b>Using Local LLMs (Ollama, etc.)</b></summary>
+<summary><b>Local LLMs (Ollama etc.)</b></summary>
 
-Since the main research container uses `network_mode: host`, it can directly access local LLM services on the host:
+The worker uses `network_mode: host`, so host-local services are directly reachable:
 
 ```env
 CHEAP_LLM__API_KEY=ollama
@@ -460,212 +441,135 @@ CHEAP_LLM__MODEL_NAME=qwen2.5:7b
 
 ---
 
-### GitHub Actions (Cloud)
+### GitHub Actions
 
-Ideal for scenarios without a dedicated server. Two workflows are provided:
-- `daily-run.yml`: Daily research
-- `trend-research.yml`: Manual trend research
+For machines without an always-on server. Two workflows: `daily-run.yml` and `trend-research.yml`.
 
 > [!IMPORTANT]
-> **Usage note**: GitHub Actions is suitable for basic usage or testing. Please follow GitHub's usage policies and do not abuse Actions resources. The `schedule:` trigger in `daily-run.yml` is **commented out by default** — enable it only after configuring Secrets. **For long-term production use, Docker deployment is recommended**.
+> GitHub Actions suits light or trial usage — please respect Actions quotas. The `schedule:` trigger in `daily-run.yml` is commented out by default. **For production, prefer Docker.**
 
-#### Setup Steps
+#### Setup
 
-1. Fork this repository
-2. Go to **Settings → Secrets and variables → Actions**
-3. Configure at least the following Secrets:
+1. Fork the repo
+2. **Settings → Secrets and variables → Actions**
+3. Provide at least:
 
-| Secret Name | Required | Description |
-| :--------------------- | :---: | :--------------------------- |
-| `CHEAP_LLM_API_KEY` | ✅ | Cheap LLM API key |
-| `CHEAP_LLM_BASE_URL` | ✅ | Cheap LLM API base URL |
-| `CHEAP_LLM_MODEL_NAME` | ✅ | Cheap LLM model name |
-| `SMART_LLM_API_KEY` | ✅ | Smart LLM API key |
-| `SMART_LLM_BASE_URL` | ✅ | Smart LLM API base URL |
-| `SMART_LLM_MODEL_NAME` | ✅ | Smart LLM model name |
-| Notification Secrets | Optional | SMTP / Telegram / Webhook etc. |
+| Secret                  | Required | Notes                          |
+| :---------------------- | :------: | :----------------------------- |
+| `CHEAP_LLM_API_KEY`     |    ✅    | Cheap LLM API key              |
+| `CHEAP_LLM_BASE_URL`    |    ✅    | Cheap LLM base URL             |
+| `CHEAP_LLM_MODEL_NAME`  |    ✅    | Cheap LLM model                |
+| `SMART_LLM_API_KEY`     |    ✅    | Smart LLM API key              |
+| `SMART_LLM_BASE_URL`    |    ✅    | Smart LLM base URL             |
+| `SMART_LLM_MODEL_NAME`  |    ✅    | Smart LLM model                |
+| Notification secrets    | optional | SMTP / Telegram / webhook etc. |
 
-> [!NOTE]
-> The `schedule:` block in `daily-run.yml` is commented out by default. Fork first, configure Secrets, then uncomment the schedule trigger to avoid failed runs from empty configs.
-
-#### Manual Trend Research
-
-`trend-research.yml` accepts:
-- `keywords`
-- `date_from`
-- `date_to`
-- `categories`
-- `sort_order`
-- `max_results`
-
-Reports are saved as Artifacts with 30-day retention.
+`trend-research.yml` accepts `keywords`, `date_from`, `date_to`, `categories`, `sort_order`, `max_results`; reports are kept as artifacts for 30 days.
 
 ---
 
-### Local Cron (System Scheduler)
+### Local cron
 
-If you prefer not to use Docker or GitHub Actions, you can use system cron directly:
+Without Docker or Actions, use system cron:
 
 ```bash
 crontab -e
-0 8 * * * cd /path/to/arxiv-daily-researcher && ./scripts/run_daily.sh >> /tmp/arxiv-cron.log 2>&1
+# Daily research (12:00 example) + silent keyword maintenance at 00:00
+0 12 * * * cd /path/to/arxiv-daily-researcher && ./scripts/run_daily.sh >> /tmp/arxiv-cron.log 2>&1
+0 0 * * * cd /path/to/arxiv-daily-researcher && PYTHONPATH=src python -m modes.keyword_maintenance >> /tmp/arxiv-keyword.log 2>&1
 ```
 
 ---
 
 ## 📖 Feature Details
 
-### 🔄 Two Run Modes
+### 🔄 Two run modes
 
-| Dimension | `daily_research` (default) | `trend_research` |
-| :------- | :----------------------------- | :----------------------------- |
-| Purpose | Daily tracking of latest papers | Long-term trend analysis by topic |
-| Data Sources | ArXiv + journals | ArXiv |
-| Time Range | Last N days | Arbitrary date range |
-| Filtering | Keyword-weighted scoring | No scoring, keep all |
-| Core Analysis | Deep PDF analysis of top papers | TLDR for all + comprehensive trend analysis |
-| Trigger | Cron / Docker / Actions / Panel | CLI / Panel / Actions |
-| Output Path | `data/reports/daily_research/` | `data/reports/trend_research/` |
+| Dimension   | `daily_research` (default)     | `trend_research`               |
+| :---------- | :----------------------------- | :----------------------------- |
+| Purpose     | Daily tracking of new papers   | Long-range topic analysis      |
+| Sources     | ArXiv + declarative journals   | ArXiv                          |
+| Time range  | Last N days (+ announcement grace) | Arbitrary range            |
+| Filtering   | Weighted scoring (3 strategies) | None — keep everything        |
+| Analysis    | PDF deep analysis for top papers | Per-paper TLDR + synthesis    |
+| Triggered   | Cron / Docker / Actions / panel | CLI / panel / Actions         |
+| Output      | `data/reports/daily_research/` | `data/reports/trend_research/`|
 
-### 📅 Daily Research Pipeline
-
-```text
-1. Prepare keywords and dynamic pass threshold
-2. Fetch papers from ArXiv / journals
-3. Skip historically processed papers
-4. Score each paper by keywords using CHEAP_LLM
-5. Extract and track paper keywords
-6. Perform PDF deep analysis on papers that pass the filter
-7. Generate Markdown report (independently toggleable) / HTML report (independently toggleable)
-8. Send notifications
-```
-
-### 🔬 Trend Research Pipeline
+### 📅 Daily pipeline
 
 ```text
-1. Search ArXiv by keywords, date, and category
-2. Generate TLDR for each paper
-3. SMART_LLM comprehensive analysis across five dimensions
-4. Output Markdown / HTML reports (dual-toggle, independently controlled) / metadata.json
-5. Push trend analysis notification
+1. Prepare keywords and the dynamic pass line
+2. Fetch from ArXiv / journals (candidates atomically registered into the SQLite queue)
+3. Score + translate per queue order (exact delivered versions skipped; new versions re-processed)
+4. Deep-analyze papers that passed
+5. Generate Markdown / HTML reports and commit delivery atomically
+6. Send notifications, run DB backup and WebDAV maintenance
 ```
 
-### 🎯 Dynamic Pass Threshold Formula
+Every phase transition writes a heartbeat; the Daily Push tab shows the current phase (prepare/scan/score/analyze/report) plus registered/scored/analyzed/failed counts. `max_papers_per_run` (default 200, `0` = unlimited) prevents first-deploy floods; leftovers stay queued and failed papers are retried first.
 
-The default configuration uses:
+### 🎯 Dynamic pass line
 
 ```text
-threshold = base_score + weight_coefficient × Σ(keyword weights)
+pass line = base_score + weight_coefficient × Σ(keyword weights)
 ```
 
-In the default `configs/config.json`:
-- `base_score = 1.5`
-- `weight_coefficient = 2.5`
+Defaults are `base_score = 1.5`, `weight_coefficient = 2.5` — adjustable in the Daily Push tab or `configs/config.json`.
 
-You can freely adjust these in the Daily Push tab's "Daily Research Settings" or directly in `configs/config.json`.
+### 🛡️ LLM & arXiv retry policy
 
-### 📡 Data Sources & ArXiv-First Strategy
+All OpenAI clients share one set of bounds (the `llm` section of `configs/config.json`):
 
-- ArXiv: uses the official `arxiv` Python library
-- Journals: fetches latest papers via OpenAlex
-- If a journal paper has an ArXiv version, the system preferentially switches to ArXiv metadata and PDF
-- Optional Semantic Scholar integration for citation counts and AI TLDRs
+| Setting                      | Default | Meaning                                                     |
+| :--------------------------- | :-----: | :---------------------------------------------------------- |
+| `llm.timeout_seconds`        |   300   | Per-request HTTP timeout                                    |
+| `llm.sdk_max_retries`        |    1    | SDK-level quick retries (connection blips / Retry-After)    |
+| `llm.retry_max_attempts`     |    5    | Application-level attempt cap                               |
+| `llm.retry_min_wait`         |    5    | Backoff start (seconds, jittered)                           |
+| `llm.retry_max_wait`         |   120   | Backoff cap (seconds)                                       |
 
-### 🔍 PDF Parsing & Smart Degradation
+429/5xx/timeouts/empty bodies retry with exponential backoff; 401/403/404/400 fail fast. A global request pool (`llm_request_pool.requests_per_minute`, default 30) paces low-concurrency relays.
 
-Two parsing modes are supported:
+On the arXiv side: a no-progress watchdog (default 180s, legitimately extended while results keep arriving), exponential backoff for rate limits (60→480s), linear backoff otherwise, **Retry-After honored**, and a 60s cooldown between domains after a failed one. Domain scans and keyword search share the same policy.
 
-| Mode | Strengths | Limitations |
-| :-------- | :--------------------------- | :------------------ |
-| `mineru` | Better structure extraction, handles complex layouts | Requires token |
-| `pymupdf` | Pure local, zero external dependencies | Parse quality varies by PDF |
+### 📡 Sources & ArXiv-first policy
 
-When MinerU is unavailable, the system automatically degrades to PyMuPDF, preventing entire task failure.
+- ArXiv: official `arxiv` library, 6s inter-page delay, submitted+updated dual queries, full pagination
+- Journals: via OpenAlex; declarative definitions enable/customize in the panel
+- Journal papers with an ArXiv version switch to ArXiv metadata and PDFs
+- Optional Semantic Scholar enrichment
 
-### 📈 Keyword Trend Tracking
+### 🔍 PDF parsing & fallback
 
-The keyword tracking module:
-- Writes raw keywords to SQLite
-- Normalizes keywords in batches via AI
-- Generates frequency statistics and trend charts
-- Outputs standalone HTML keyword trend reports
+| Mode      | Strengths                          | Limits                  |
+| :-------- | :--------------------------------- | :---------------------- |
+| `pymupdf` | Local, zero external deps (**default**) | Quality depends on PDF |
+| `mineru`  | Better structure for complex papers | Requires a token        |
 
-Common configuration options:
-- `keyword_tracker.enabled`
-- `keyword_normalization_enabled`
-- `keyword_normalization_batch_size`
-- `keyword_report_frequency`
+MinerU outages fall back to PyMuPDF automatically.
 
-### 🔒 Concurrent Run Mutex Locks
+### 🔒 Concurrency locks
 
-To prevent duplicate runs, the system uses `fcntl` file locks:
+| Mode             | Lock file                               |
+| :--------------- | :-------------------------------------- |
+| `daily_research` | `data/run/daily_research.lock`          |
+| `trend_research` | `data/run/trend_research_<hash8>.lock`  |
 
-| Mode | Lock File |
-| :--------------- | :------------------------------------- |
-| `daily_research` | `data/run/daily_research.lock` |
-| `trend_research` | `data/run/trend_research_<hash8>.lock` |
+Duplicate starts exit safely; locks carry PID and start time; stale locks are reclaimed after 12h by default; reclaim failures exit conservatively.
 
-Features:
-- Duplicate task launches exit safely
-- Lock files contain PID and start time
-- Supports **stale lock reclamation** (default 12 hours)
-- Conservatively exits on reclamation failure to prevent dual-instance concurrency
+### 📄 Reports
 
-### ⏱️ ArXiv Fetch Timeout Guard
+| Report          | Path                                                                 |
+| :-------------- | :------------------------------------------------------------------- |
+| Daily           | `data/reports/daily_research/{markdown,html}/<source>/`              |
+| Trend           | `data/reports/trend_research/{markdown,html}/<slug>/` (+ metadata)   |
+| Keyword trend   | `data/reports/keyword_trend/{markdown,html}/`                        |
 
-ArXiv fetching includes hard timeout protection:
-- Config key: `data_sources.arxiv.fetch_timeout_seconds`
-- Current default: `180`
-- Per-domain timeout triggers retry with logging
+Markdown / HTML are independently switchable. Daily reports include a summary, passing-paper details (with deep analysis and full-text TLDR provenance), the not-passed list, keyword charts and token usage.
 
-### 📄 Report System
+### 🔔 Notifications
 
-#### Daily Research Reports
-
-Paths:
-- `data/reports/daily_research/markdown/<source>/`
-- `data/reports/daily_research/html/<source>/`
-
-Markdown and HTML reports can be **independently toggled** (configured in Daily Push → Daily Research Settings).
-
-Content typically includes:
-- Statistics summary
-- Details of passed papers
-- List of non-passed papers
-- Deep analysis results
-- Keyword trend charts
-- Token consumption statistics
-
-#### Trend Research Reports
-
-Paths:
-- `data/reports/trend_research/markdown/<keyword_slug>/`
-- `data/reports/trend_research/html/<keyword_slug>/`
-
-Also generates:
-- `*_metadata.json`
-
-#### Keyword Trend Reports
-
-Paths:
-- `data/reports/keyword_trend/markdown/`
-- `data/reports/keyword_trend/html/`
-
-### 🔔 Notification System
-
-Six supported channels:
-- Email
-- WeCom
-- DingTalk
-- Telegram
-- Slack
-- Generic Webhook
-
-Notification toggles operate at two levels:
-1. Global notification master switch
-2. Per-channel independent switches
-
-A channel only sends notifications when **configured credentials are present** AND **enabled=true**.
+Email, WeCom, DingTalk, Telegram, Slack and generic webhooks. Two switch layers (global + per channel); a channel fires only when fully configured and enabled. Delivery goes through a SQLite outbox — failures are retained and retried, never silently dropped.
 
 ---
 
@@ -673,57 +577,51 @@ A channel only sends notifications when **configured credentials are present** A
 
 ```text
 arxiv-daily-researcher/
-├── main.py                          # CLI entry point, dispatches by mode
-├── .env.example                     # Environment variable template
-├── requirements.txt                 # Python dependencies
-├── README.md                        # Chinese README (this file is README_EN.md)
+├── main.py                          # CLI entry, mode dispatch
+├── .env.example                     # Environment template
+├── requirements-core.txt            # worker deps (requirements-webui.txt for the panel)
+├── README.md / README_EN.md
 │
 ├── src/
-│   ├── config.py                    # Global config loading
-│   ├── modes/                       # Two run modes
-│   │   ├── daily_research.py
-│   │   └── trend_research.py
-│   ├── agents/                      # LLM analysis agents
-│   ├── sources/                     # ArXiv / OpenAlex / search orchestration
-│   ├── report/                      # Daily / trend / keyword trend report generation
+│   ├── config.py                    # Config loading (.env + JSONC config.json)
+│   ├── scoring_policy.py            # v1 / core_v2 / learned_preference_v1
+│   ├── modes/
+│   │   ├── daily_research.py        # Daily pipeline
+│   │   ├── trend_research.py        # Trend pipeline
+│   │   └── keyword_maintenance.py   # Silent midnight keyword job
+│   ├── agents/                      # LLM agents
+│   ├── sources/                     # ArXiv / OpenAlex / HF Papers / orchestration
+│   ├── report/                      # daily / trend / keyword_trend rendering
 │   ├── notifications/               # Multi-channel notifications
-│   ├── parsers/                     # PDF parsing
+│   ├── parsers/                     # PDF parsing (PyMuPDF / MinerU)
 │   ├── keyword_tracker/             # Keyword tracking & normalization
-│   ├── utils/                       # Config, logging, locks, tokens, wizard, WebDAV, etc.
-│   │   ├── config_io.py
-│   │   ├── updater.py
-│   │   └── webdav_sync.py           # WebDAV sync module
-│   └── webui/                       # Streamlit config panel
+│   ├── utils/
+│   │   ├── config_io.py             # JSONC I/O (comments preserved)
+│   │   ├── daily_research_store.py  # SQLite store (queue/delivery/preferences/usage)
+│   │   ├── llm_resilience.py        # Shared LLM timeout & retry policy
+│   │   ├── llm_request_pool.py      # Global LLM rate limiting
+│   │   ├── run_lock.py / webui_trigger.py / backup.py / webdav_sync.py …
+│   └── webui/                       # Streamlit panel
 │       ├── config_panel.py
-│       ├── i18n.py
-│       └── tabs/
-│           ├── run_manager.py       # Daily Push
-│           ├── reports.py           # Report Viewer
-│           ├── trend_runner.py      # Trend Analysis
-│           ├── keywords.py
-│           ├── search.py
-│           ├── scoring.py
-│           ├── notifications.py
-│           ├── data_management.py   # Config export + WebDAV sync
-│           ├── proxy.py             # Network proxy
-│           ├── llm.py
-│           └── advanced.py
+│       ├── i18n.py                  # zh/en bilingual
+│       ├── arxiv_categories.py      # 153 ArXiv primary categories
+│       ├── report_component/        # Report preview component (flash-free marking)
+│       └── tabs/                    # 12 tab modules
 │
 ├── configs/
-│   ├── config.json                  # Main config file (JSONC)
-│   └── templates/                   # Report, notification, and email templates
+│   ├── config.json                  # Main config (JSONC)
+│   └── templates/                   # Report / notification / email templates
 │
-├── docker-compose.yml               # Docker Compose orchestration file
+├── docker-compose.yml               # Two-container compose (worker + panel)
 ├── docker/
-│   ├── Dockerfile
-│   │   └── (targets: worker / webui)
-│   └── entrypoint.sh
+│   ├── Dockerfile                   # Multi-stage: worker / webui targets
+│   └── entrypoint.sh                # cron install / trigger watcher / restart
 │
-├── VERSION                          # Version number (for Docker update check)
+├── VERSION                          # Version (update checks)
 ├── scripts/                         # Run scripts & Makefile
-├── assets/                          # README / WebUI preview images
-├── data/                            # Runtime data (auto-created)
-└── logs/                            # System logs and per-run logs
+├── assets/                          # README / WebUI screenshots
+├── data/                            # Runtime data (SQLite, reports, trigger queue)
+└── logs/                            # System & per-run logs
 ```
 
 ---
@@ -731,43 +629,40 @@ arxiv-daily-researcher/
 ## ❓ FAQ
 
 <details>
-<summary><b>1. WebDAV connection to Jianguoyun (Nutstore) always fails (403)?</b></summary>
+<summary><b>1. WebDAV to Jianguoyun keeps failing with 403?</b></summary>
 
-Jianguoyun's WebDAV server **does not support HTTP HEAD requests**, and most WebDAV client libraries use HEAD for resource existence checks. This project has built-in compatibility handling (using PROPFIND instead of HEAD).
-
-If you still encounter connection issues, check:
-- WebDAV URL ends with `https://dav.jianguoyun.com/dav/`
-- Password is a Jianguoyun **app-specific password** (generated in account security settings, not your login password)
-- Click "Test Connection" in the WebUI Data Management tab to verify credentials
+Jianguoyun's WebDAV does not support HTTP HEAD, which most clients use for existence checks. This project already uses PROPFIND instead. Also verify:
+- The URL ends with `https://dav.jianguoyun.com/dav/`
+- The password is an **app-specific password** (generated in account security settings), not the login password
+- "Test connection" in the Data Management tab passes
 </details>
 
 <details>
-<summary><b>2. How to choose the right parameters for trend analysis?</b></summary>
+<summary><b>2. How to pick trend-research parameters?</b></summary>
 
-Key recommendations:
-- **Date range**: Start with 90-180 days (`--date-from`) to avoid excessive results
-- **Category filter**: Use `--categories` to scope to relevant fields (e.g., `quant-ph cond-mat`) for much better precision
-- **Output format**: Markdown and HTML are independently toggleable in the Trend Analysis tab
-- **Skill selection**: Default `comprehensive_analysis` covers all five dimensions in one pass; enable individual Skills for single-dimension deep dives
-- **max_results**: Default 500. Lower to 200 if analysis is slow with many results; raise to 1000 if you need more coverage
+- **Date range**: 90–180 days for first use
+- **Categories**: constrain with the full-category dropdown (e.g. `quant-ph · Quantum Physics`)
+- **Output**: Markdown and HTML toggle independently in the Trend Analysis tab
+- **Skill**: default `comprehensive_analysis` covers all five dimensions in one pass
+- **max_results**: default 500; lower to 200 if analysis is slow, raise to 1000 for broad topics
 </details>
 
 <details>
-<summary><b>3. The task says "already running" but I suspect a stale lock?</b></summary>
+<summary><b>3. "Already running" but I suspect a stale lock?</b></summary>
 
-The system provides multiple layers of protection:
-- **Dead process lock auto-cleanup**: On startup, checks if PID is alive; auto-reclaims if not
-- **Stale lock auto-reclamation**: Locks older than `run_lock_max_age_hours` (default 12 hours) are reclaimed
-- **Manual cleanup**: In the WebUI Daily Push tab under "Current Run Status", click the stop/clean button; or delete `data/run/*.lock` files directly
+Multiple safeguards exist:
+- Dead-process locks are reclaimed automatically (PID liveness check at startup)
+- Locks older than `run_lock_max_age_hours` (default 12h) are reclaimed
+- The panel's stop button (with confirmation) keeps completed stages and re-queues unfinished papers
 
 > [!WARNING]
-> Only manually clean locks when you are certain the PID is no longer alive. If the process is genuinely running, removing the lock may cause duplicate execution.
+> Only remove lock files manually when the PID is definitely dead; deleting a live lock can cause duplicate runs.
 </details>
 
 <details>
-<summary><b>4. How to configure and use local LLMs (Ollama / vLLM / LocalAI) in Docker?</b></summary>
+<summary><b>4. Local LLMs (Ollama / vLLM / LocalAI) in Docker?</b></summary>
 
-The main research container uses `network_mode: host` by default, so it can directly access local LLM services on the host:
+The worker uses `network_mode: host`:
 
 ```env
 CHEAP_LLM__API_KEY=ollama
@@ -775,169 +670,145 @@ CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
 CHEAP_LLM__MODEL_NAME=qwen2.5:7b
 ```
 
-If using bridge network mode (WebUI container, etc.), replace `127.0.0.1` with `host.docker.internal` (Windows/Mac) or the host's real IP (Linux).
-
-Ensure your local LLM service is listening on `0.0.0.0` rather than `127.0.0.1`, otherwise containers cannot reach it.
+For bridge networks (the panel container), replace `127.0.0.1` with `host.docker.internal` (Windows/Mac) or the host IP (Linux). Make sure the LLM listens on `0.0.0.0`.
 </details>
 
 <details>
-<summary><b>5. How does the WebUI "Run Now" button work with the main container?</b></summary>
+<summary><b>5. How do run-now and container-restart cooperate with the worker?</b></summary>
 
-Docker mode uses a **file-trigger mechanism** — no Docker socket required:
+Everything rides on **shared-volume messaging**, no Docker socket:
 
-1. User clicks "Run Now" in WebUI
-2. WebUI container writes a trigger file to the shared volume: `data/run/webui_run_trigger.flag`
-3. The main container's `trigger_watcher` polls this file every 5 seconds
-4. On detection, the main container launches `python main.py --mode daily_research`
-5. The actual Python PID is written to `data/run/webui_triggered.pid`
-6. Run logs go to `logs/manual_*.log`, viewable in real-time from WebUI
+- **Run now**: the panel atomically writes `data/run/webui_triggers/<ts>_<id>.json` → the worker's `trigger_watcher` polls every 5s and claims it via `mv` → launches `python main.py --mode daily_research` (PID in `webui_triggered.pid`, logs in `logs/manual_*.log`)
+- **Restart container**: the sidebar button writes `restart_worker.request` → the worker archives the marker and TERMs PID 1 → the container restarts and reinstalls cron from the latest config
+- **Stop run**: the panel forwards SIGTERM to the real PID via the shared volume; unfinished papers stay queued
 
-The key requirement: both containers must mount the **same** `data/` and `logs/` volumes.
+Both containers must mount the **same** `data/` and `logs/` volumes.
 </details>
 
 <details>
-<summary><b>6. How to configure network proxy? Can proxy be controlled per-service?</b></summary>
+<summary><b>6. Proxy configuration — per service?</b></summary>
 
-Configure in the WebUI Network Proxy tab or `configs/config.json` under the `proxy` block:
+In Advanced → proxy or the `proxy` block of `configs/config.json`:
 
 - **Global switch**: `proxy.enabled`
-- **Proxy URL**: `proxy.url`, supports HTTP/SOCKS5 (e.g., `http://127.0.0.1:7890`)
-- **Per-service control** (`proxy.scope`): Independently control whether ArXiv, OpenAlex, Semantic Scholar, LLM API, notifications, and update checks use the proxy
+- **Address**: `proxy.url`, HTTP/SOCKS5 (e.g. `http://127.0.0.1:7890`)
+- **Per-service scope** (`proxy.scope`): ArXiv, OpenAlex, Semantic Scholar, LLM API, notifications, update checks
 
-Docker notes:
-- With `network_mode: host`, use `127.0.0.1`
-- With bridge mode on Linux, use `--add-host=host.docker.internal:host-gateway`
+Docker notes: `127.0.0.1` under `network_mode: host`; bridge networks on Linux need `--add-host=host.docker.internal:host-gateway`.
 </details>
 
 <details>
-<summary><b>7. What's the difference between Markdown and HTML reports? Can I generate only one format?</b></summary>
+<summary><b>7. Markdown vs HTML — can I generate only one?</b></summary>
 
-Same content, different format:
-- **Markdown**: Ideal for Git version control, archiving, plain-text editing
-- **HTML**: Ideal for browser reading, sharing, with styling and KaTeX formula rendering
-
-In the WebUI Daily Push → Daily Research Settings, Markdown and HTML report generation can be independently toggled. Trend analysis reports also have independent Markdown/HTML toggles (in the Trend Analysis tab). Disabling unneeded formats saves storage space and generation time.
+Same content, different formats: Markdown for Git/archival, HTML for reading and sharing with KaTeX. Toggle each independently in Daily Push (daily reports) or Trend Analysis (trend reports).
 </details>
 
 <details>
-<summary><b>8. How does keyword tracking work? Can it be disabled?</b></summary>
+<summary><b>8. When does keyword normalization run?</b></summary>
 
-Keyword tracking flow:
-1. CHEAP_LLM automatically extracts keywords from paper titles and abstracts during scoring
-2. Extracted keywords are written to a SQLite database
-3. AI performs batch semantic merging on raw keywords (e.g., "quantum computing" and "quantum computation" are merged)
-4. Keyword trend reports are generated periodically (frequency configurable in WebUI: daily/weekly/monthly/always)
+1. `CHEAP_LLM` extracts keywords during scoring into SQLite
+2. **Every day at 00:00** a standalone cron job (`modes/keyword_maintenance`) silently runs LLM batch normalization; failures only log and retry the next night — the daily report is never affected
+3. Trend reports are generated at the configured frequency (daily/weekly/monthly/always)
 
-Set `keyword_tracker.enabled` to `false` in the WebUI Advanced tab or `config.json` to disable tracking. Scoring results will still show keywords, but they won't be stored in the database or generate trend reports.
+Disable tracking via `keyword_tracker.enabled` (or just normalization via `keyword_tracker.normalization.enabled`).
 </details>
 
 <details>
-<summary><b>9. How to choose between MinerU and PyMuPDF for PDF parsing? What if the MinerU token expires?</b></summary>
+<summary><b>9. MinerU vs PyMuPDF? Expired MinerU token?</b></summary>
 
-| Scenario | Recommended |
-| :----------------------------- | :-------- |
-| Pursuing parse quality, complex layout papers | `mineru` |
-| Offline environment, long-term stability | `pymupdf` |
+| Scenario                            | Mode                 |
+| :---------------------------------- | :------------------- |
+| No external deps, offline, stability | `pymupdf` (default) |
+| Best structure for complex layouts  | `mineru`             |
 
-Switch in the WebUI API tab or Advanced tab.
-
-MinerU tokens are valid for 3 months. Upon expiration:
-- The system **automatically degrades** to PyMuPDF — no interruption
-- An error alert notification is sent (if notification channels are configured)
-- Apply for a new token at [mineru.net](https://mineru.net/apiManage/apiKey) and update the config
+Switch in the API or Advanced tab. MinerU tokens last 3 months; on expiry the system **falls back to PyMuPDF** without interrupting the run and sends an alert; renew at [mineru.net](https://mineru.net/apiManage/apiKey).
 </details>
 
 <details>
-<summary><b>10. How to use WebDAV sync to share configs and reports across multiple devices?</b></summary>
+<summary><b>10. Sharing config and reports across devices with WebDAV?</b></summary>
 
-WebDAV sync supports three modes (configured in WebUI Data Management tab):
+Three modes (Data Management tab):
 
-| Mode | Description |
-| :------------- | :------------------------------------- |
-| **Manual** | Click "Upload" or "Download" buttons in WebUI |
-| **Scheduled** | Auto-execute on a cron schedule (e.g., daily at 23:00) |
-| **Post-Report Auto** | Auto-upload after each daily research report is generated |
+| Mode       | Behavior                                    |
+| :--------- | :------------------------------------------ |
+| **Manual** | Upload/download buttons in the panel        |
+| **Scheduled** | Cron expression (e.g. daily 23:00)       |
+| **After report** | Auto-upload after each daily report   |
 
-Sync scope options: config files (config.json), history, keyword data, report files. Default: config files only.
-
-Typical usage: Primary device set to "Post-Report Auto" upload; secondary device set to "Manual" mode, download on demand to restore configs and data.
+Scopes: config, history, keyword data, reports (config only by default). Typical setup: primary device "after report", secondary devices "manual".
 </details>
 
 ---
 
 ## 📜 License
 
-This project is licensed under [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html).
+[AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html)
 
-| Term | Description |
-| :--------- | :--------------------------------------- |
-| ✅ Use | Free to use, modify, and distribute |
-| ✅ Commercial | Commercial use allowed |
-| 📋 Source Disclosure | Modified versions must disclose source code under the same license |
-| 🌐 Network Use | Providing the service over a network also requires source disclosure |
-| 📝 Attribution | Original copyright notice and license must be retained |
-
----
-
-## 💬 Community & Feedback
-
-The project is under active development. You're welcome to participate via:
-
-- **🐛 Report Issues**: [GitHub Issues](https://github.com/yzr278892/arxiv-daily-researcher/issues) — Found a bug or have a feature suggestion? Submit an issue
-- **🔀 Contribute**: Fork → Modify → Pull Request. All improvements are welcome
-- **⭐ Star**: If this project helps you, starring it is the greatest encouragement
+| Term        | Meaning                                                    |
+| :---------- | :--------------------------------------------------------- |
+| ✅ Use      | Free to use, modify, distribute                             |
+| ✅ Commercial | Commercial use allowed                                    |
+| 📋 Source   | Modified versions must be open-sourced under the same license |
+| 🌐 Network  | Network service use also requires source disclosure        |
+| 📝 Notice   | Preserve original copyright and license                    |
 
 ---
 
-## 🤝 API Compliance
+## 💬 Community
 
-This project follows the usage policies of all integrated APIs:
+- **🐛 Issues**: [GitHub Issues](https://github.com/yzr278892/arxiv-daily-researcher/issues)
+- **🔀 PRs**: Fork → change → pull request
+- **⭐ Star**: if this project helps you, a star means a lot
 
-| API | Compliance Measures |
-| :------------------- | :---------------------------------------------------------------------- |
-| **ArXiv** | Uses official `arxiv` Python library, built-in 6-second request delay |
-| **OpenAlex** | Request headers include contact info; configuring `OPENALEX_EMAIL` enters the Polite Pool |
-| **Semantic Scholar** | Request headers include User-Agent; supports API key for higher rate limits |
-| **MinerU** | Respects daily 2000-page priority quota, auto-downgrades to normal priority when exceeded |
+---
+
+## 🤝 API Usage
+
+| API                  | Compliance                                                                |
+| :------------------- | :------------------------------------------------------------------------ |
+| **ArXiv**            | Official `arxiv` library, built-in 6s delay, rate-limit backoff, Retry-After honored |
+| **OpenAlex**         | Contact header; configure `OPENALEX_EMAIL` for the polite pool            |
+| **Semantic Scholar** | User-Agent header; optional API key for higher rates                      |
+| **MinerU**           | Respects the 2000-page daily priority quota                               |
 
 > [!NOTE]
-> All external API calls include exponential backoff retry mechanisms — network fluctuations won't interrupt runs.
+> All external API and LLM calls retry with jittered exponential backoff plus a global rate limiter; throttling and network hiccups do not interrupt runs, and auth-class errors fail fast with clear logs.
 
 ---
 
-## 🙏 Acknowledgments
+## 🙏 Acknowledgements
 
-- Thanks to [Claude](https://www.anthropic.com/claude) and [Claude Code](https://claude.ai/code) for assistance during development
-- Thanks to [ArXiv](https://arxiv.org/), [OpenAlex](https://openalex.org/), [Semantic Scholar](https://www.semanticscholar.org/) for providing open academic data
-- Thanks to [MinerU](https://mineru.net/) for providing cloud PDF parsing capabilities
+- [Claude](https://www.anthropic.com/claude) & [Claude Code](https://claude.ai/code) for development assistance
+- [ArXiv](https://arxiv.org/), [OpenAlex](https://openalex.org/), [Semantic Scholar](https://www.semanticscholar.org/) for open scholarly data
+- [MinerU](https://mineru.net/) for cloud PDF parsing
 
 ---
 
 ## 📝 Changelog
 
-See **[CHANGELOG.md](CHANGELOG.md)** for the complete version history.
+See **[CHANGELOG.md](CHANGELOG.md)** for the full history.
 
-### Recent Version Summary
+### Latest releases
 
 <table>
 <tr><th>Version</th><th>Date</th><th>Type</th><th>Highlights</th></tr>
-<tr><td><b>v4.0</b></td><td>2026-08-22</td><td>🚀 Major release</td><td>SQLite daily history with exact-version delivery, durable pending-paper queue (max_papers_per_run), full arXiv pagination with terminal scan receipts, declarative extra data sources (core narrowed to arXiv + PRL), Hugging Face Papers source, read-only scoring diagnostics, learned preference scoring (learned_preference_v1), gzip database backups with rotated WebDAV upload, full-archive paper search, source health page, token usage statistics (heatmap + chart), favorites, live run monitoring with stop control, Docker image split and security fixes (WebUI bound to 127.0.0.1 by default, no secrets leaked to cron), and a large reliability hardening pass (fail-closed state, atomic delivery, boundary hardening)</td></tr>
-<tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ Enhancement + 🐛 Fix</td><td>Network proxy (per-service granularity), WebDAV data sync (with Jianguoyun compatibility fix), one-click config export, Docker update notifications, Daily Push tab (reorganized run manager), independent Markdown/HTML report toggles, trend analysis dual-toggle output, run log auto-redirect, ArXiv fetch optimization with early stopping, configurable daily deep analysis</td></tr>
-<tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ Enhancement + 🐛 Fix</td><td>Run Manager tab, log viewer upgrade, Trend Analysis tab, report viewer enhancements, ArXiv timeout guard, stale lock reclamation</td></tr>
-<tr><td><b>v3.0</b></td><td>2026-03-09</td><td>✨ Major</td><td>Trend research mode, trend analysis GitHub Actions workflow, comprehensive trend analysis, token tracking, auto-trigger setup wizard, concurrent run mutex locks, per-run log files, Streamlit config panel (with report viewer), keyword trend HTML reports</td></tr>
+<tr><td><b>v4.0</b></td><td>2026-08-23</td><td>🚀 Major</td><td>SQLite daily history with exact-version delivery, persistent processing queue, full arXiv pagination with scan receipts, declarative extra sources, learned-mode scoring, gzip DB backups, full-history paper search, standalone Favorites & Search tab (chronological favorites with arXiv links + keyword stats), full ArXiv category dropdowns, panel-configurable daily run time (default 12:00, config-only), silent midnight keyword normalization, live phase progress for long runs, shared LLM timeout/retry hardening and unified arXiv backoff (Retry-After + cross-domain cooldown), one-click worker restart, live run monitoring and stop control, Docker image split with security fixes, large-scale reliability hardening (fail-closed, atomic delivery, boundary hardening)</td></tr>
+<tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ Enhancement + 🐛 Fixes</td><td>Per-service proxy, WebDAV sync (with Jianguoyun compatibility), config export, Docker update notices, independent Markdown/HTML toggles, dual trend-output switches, ArXiv fetch tuning, configurable daily deep analysis</td></tr>
+<tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ Enhancement + 🐛 Fixes</td><td>Run manager tab, log viewer upgrades, trend analysis tab, report viewer improvements, ArXiv timeout guard, stale-lock recovery</td></tr>
+<tr><td><b>v3.0</b></td><td>2026-03-09</td><td>✨ Major</td><td>Trend research mode, trend Actions workflow, comprehensive trend analysis, token tracking, auto-triggered wizard, concurrency locks, per-run logs, Streamlit panel with report viewer, keyword-trend HTML reports</td></tr>
 </table>
 
-[View full changelog →](CHANGELOG.md)
+[Full history →](CHANGELOG.md)
 
 ---
 
 <div align="center">
 
-If this project helps you, please give it a **Star** ⭐
+If this project helps you, consider a **Star** ⭐
 
-[![Star History Chart](https://api.star-history.com/svg?repos=yzr278892/arxiv-daily-researcher&type=Date)](https://star-history.com/#yzr278892/arxiv-daily-researcher&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=yzr278892/arxiv-daily-researcher&type=Date)](https://star-history.com/#/yzr278892/arxiv-daily-researcher&Date)
 
 [![Issues](https://img.shields.io/github/issues/yzr278892/arxiv-daily-researcher?style=flat-square&label=Issues)](https://github.com/yzr278892/arxiv-daily-researcher/issues)
-[![Email](https://img.shields.io/badge/Email-Contact-blue?style=flat-square)](mailto:yzr278892@gmail.com)
+[![Email](https://img.shields.io/badge/Email-Email%20Author-blue?style=flat-square)](mailto:yzr278892@gmail.com)
 
 </div>
