@@ -19,6 +19,7 @@ if __package__ in (None, ""):
 from config import settings
 from utils.daily_research_store import DailyResearchStore
 from utils.legacy_history import LEGACY_IMPORT_STATE_KEY, import_legacy_history
+from utils.legacy_range_scan import scan_legacy_range
 from utils.run_lock import run_lock, wait_for_idle
 
 logger = logging.getLogger("LegacyImport")
@@ -26,6 +27,51 @@ logger = logging.getLogger("LegacyImport")
 # 导入前等待这些锁释放；趋势锁按参数哈希命名，用通配匹配。
 BUSY_LOCK_PATTERNS = ("daily_research", "trend_research_*", "keyword_maintenance")
 WAIT_TIMEOUT_SECONDS = 12 * 3600
+
+
+def _idle_gate() -> None:
+    """长扫描的每个分块前复查：每日研究启动时暂停让路。"""
+    idle = wait_for_idle(
+        ("daily_research", "trend_research_*"),
+        poll_seconds=30,
+        timeout_seconds=WAIT_TIMEOUT_SECONDS,
+        logger=logger,
+    )
+    if not idle:
+        logger.warning("时间段扫描等待空闲超时，继续执行（SQLite 事务有忙超时保护）")
+
+
+def _scan_phase(store: DailyResearchStore, summary: dict) -> dict:
+    """扫描旧历史涉及的时间段，寻找被漏掉的 arXiv 论文。"""
+    try:
+        from sources.arxiv_source import ArxivSource
+
+        proxy_kwargs = settings.get_proxy_dict("arxiv")
+    except Exception as exc:  # pragma: no cover - 环境缺依赖时跳过扫描
+        logger.warning("时间段扫描初始化失败: %s", exc)
+        summary["range_scan"] = {"skipped_reason": f"初始化失败: {exc}"}
+        return summary
+
+    source = ArxivSource(
+        history_dir=settings.HISTORY_DIR,
+        proxy_dict=proxy_kwargs,
+        announcement_lookback_grace_days=int(
+            getattr(settings, "ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS", 2)
+        ),
+        load_legacy_history=False,
+    )
+    domains = list(getattr(settings, "TARGET_DOMAINS", []) or [])
+    scan_summary = scan_legacy_range(
+        store,
+        history_dir=settings.HISTORY_DIR,
+        fetch_between=lambda start, end: source.fetch_domain_papers_between(
+            start, end, domains
+        ),
+        logger_override=logger,
+        idle_check=_idle_gate,
+    )
+    summary["range_scan"] = scan_summary
+    return summary
 
 
 def run_import() -> int:
@@ -39,6 +85,7 @@ def run_import() -> int:
             delivery_run_id=run_id,
             progress_logger=logger,
         )
+        summary = _scan_phase(store, summary)
     except Exception as exc:
         logger.error("旧历史导入失败: %s", exc, exc_info=True)
         store.fail_run(run_id, str(exc))
@@ -54,13 +101,19 @@ def run_import() -> int:
     except Exception as exc:
         logger.warning("旧历史导入汇总写入失败: %s", exc)
 
+    range_scan = summary.get("range_scan") or {}
     logger.info(
-        "旧历史导入完成：历史文件 %s，报告 %s 份，卡片 %s 张，账本 %s 条，积压 %s 条",
+        "旧历史导入完成：历史文件 %s，报告 %s 份，卡片 %s 张，账本 %s 条，积压 %s 条；"
+        "时间段扫描 %s~%s 共 %s 篇、遗漏 %s 篇",
         summary.get("history_files"),
         summary.get("reports_scanned"),
         summary.get("cards_found"),
         summary.get("delivered_ledger_rows"),
         summary.get("backlog_queued"),
+        range_scan.get("range_start"),
+        range_scan.get("range_end"),
+        range_scan.get("papers_scanned"),
+        range_scan.get("missed_found"),
     )
     return 0
 

@@ -736,3 +736,81 @@ class ArxivSource(BasePaperSource):
             raise ArxivFetchError(f"ArXiv 关键词搜索失败: {last_error}") from last_error
 
         return papers
+
+    def fetch_domain_papers_between(
+        self,
+        date_from: date,
+        date_to: date,
+        domains: Optional[List[str]] = None,
+    ) -> List[PaperMetadata]:
+        """按提交日期闭区间完整扫描领域论文（旧历史时间段扫描/过去日期补跑）。
+
+        与每日抓取同一套退避策略和分页看门狗；结果按 paper_id 跨领域去重，
+        不做任何已处理过滤（调用方负责与账本比对）。
+        """
+        domains = normalize_arxiv_domains(domains)
+        window_start = datetime.combine(
+            date_from, datetime.min.time(), tzinfo=timezone.utc
+        )
+        date_to_str = date_to.strftime("%Y%m%d") + "2359"
+        date_from_str = date_from.strftime("%Y%m%d") + "0000"
+
+        try:
+            from config import settings as _settings
+
+            fetch_timeout_seconds = int(getattr(_settings, "ARXIV_FETCH_TIMEOUT_SECONDS", 180))
+        except Exception:
+            fetch_timeout_seconds = 180
+
+        logger.info(
+            "[ArXiv] 时间段扫描: %s 至 %s（领域: %s）",
+            date_from.isoformat(), date_to.isoformat(), domains,
+        )
+
+        all_papers: Dict[str, PaperMetadata] = {}
+        max_retries = 3
+        for domain in domains:
+            retry_count = 0
+            last_error: Exception | None = None
+            while retry_count <= max_retries:
+                try:
+                    search = arxiv.Search(
+                        query=(
+                            f"cat:{domain} AND submittedDate:"
+                            f"[{date_from_str} TO {date_to_str}]"
+                        ),
+                        max_results=None,
+                        sort_by=arxiv.SortCriterion.SubmittedDate,
+                        sort_order=arxiv.SortOrder.Descending,
+                    )
+                    results, _receipt = self._fetch_query_results(
+                        search, window_start, "published", fetch_timeout_seconds
+                    )
+                    for result in results:
+                        paper_id = result.get_short_id()
+                        if paper_id in all_papers:
+                            continue
+                        all_papers[paper_id] = self._metadata_from_result(result)
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    retry_count += 1
+                    if retry_count <= max_retries:
+                        wait_time = _arxiv_retry_wait(e, retry_count)
+                        reason = (
+                            f"时间段扫描超时（{fetch_timeout_seconds}s 无进展）"
+                            if isinstance(e, _ArxivTimeoutError)
+                            else f"时间段扫描出错: {e}"
+                        )
+                        logger.warning(
+                            f"  {reason}，{wait_time} 秒后重试 ({retry_count}/{max_retries})"
+                        )
+                        time.sleep(wait_time)
+            if last_error is not None:
+                raise ArxivFetchError(
+                    f"ArXiv 时间段扫描失败（领域 {domain}）: {last_error}"
+                ) from last_error
+
+        logger.info("[ArXiv] 时间段扫描完成: 共 %s 篇", len(all_papers))
+        return list(all_papers.values())
