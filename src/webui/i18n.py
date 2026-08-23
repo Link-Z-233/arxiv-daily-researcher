@@ -432,16 +432,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "trend_prompt_template_text_required": {"zh": "提示词为空，无需保存模板。", "en": "The prompt is empty; nothing to save."},
     # ── search.py ────────────────────────────────────────────────────────
     "search_settings_title": {"zh": "搜索设置", "en": "Search Settings"},
-    "search_settings_hint": {
-        "zh": "控制每日扫描的时间范围。",
-        "en": "Control the time window scanned each day.",
+    "daily_scan_all_results": {
+        "zh": "日报固定回看最近 3 天并处理窗口内全部新论文；更早日期的论文用「每日推送 → 过去日报」补跑。",
+        "en": "The daily report covers a fixed 3-day window and processes every new paper in it; older dates are handled by the past-date report builder.",
     },
-    "search_days_label": {"zh": "搜索最近 N 天", "en": "Search recent N days"},
-    "search_days_help": {
-        "zh": "推荐：1（每日）、7（每周）、30（每月）",
-        "en": "Recommended: 1 (daily), 7 (weekly), 30 (monthly)",
-    },
-    "daily_scan_all_results": {"zh": "日报会处理时间范围内的全部新论文，不受篇数限制。", "en": "Daily research processes every new paper in the time window, with no item cap."},
     "data_sources_title": {"zh": "数据源", "en": "Data Sources"},
     "arxiv_settings_title": {"zh": "ArXiv 设置", "en": "ArXiv Settings"},
     "sh_hint": {"zh": "成功率按每个数据源最近 20 次扫描计算。", "en": "Success rates cover each source's last 20 scans."},

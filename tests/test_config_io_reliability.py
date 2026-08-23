@@ -41,13 +41,13 @@ class ConfigIOReliabilityTests(unittest.TestCase):
                 encoding="utf-8",
             )
             settings = Settings()
-            original_days = settings.SEARCH_DAYS
+            original_window = settings.DAILY_SCAN_WINDOW_DAYS
             original_domains = list(settings.TARGET_DOMAINS)
 
             with self.assertRaisesRegex(ConfigurationLoadError, "拒绝使用默认配置"):
                 settings.load_from_search_config(config_path)
 
-            self.assertEqual(settings.SEARCH_DAYS, original_days)
+            self.assertEqual(settings.DAILY_SCAN_WINDOW_DAYS, original_window)
             self.assertEqual(settings.TARGET_DOMAINS, original_domains)
 
     def test_non_object_config_root_fails_closed(self):
@@ -201,12 +201,11 @@ class ConfigIOReliabilityTests(unittest.TestCase):
     def test_legacy_daily_result_caps_are_not_written_or_exposed(self):
         """Legacy fetch caps stay ignored; the new limit is downstream only."""
         config = build_config_dict(
-            search_days=3,
             max_results=1,
             max_results_per_source={"arxiv": 1},
             daily_max_papers_per_run=5,
         )
-        self.assertEqual(config["search_settings"], {"search_days": 3})
+        self.assertNotIn("search_settings", config)
         self.assertEqual(config["daily_research"]["max_papers_per_run"], 5)
 
         legacy_flat = flatten_config_dict(
@@ -218,7 +217,7 @@ class ConfigIOReliabilityTests(unittest.TestCase):
                 }
             }
         )
-        self.assertEqual(legacy_flat["search_days"], 3)
+        self.assertNotIn("search_days", legacy_flat)
         self.assertNotIn("max_results", legacy_flat)
         self.assertNotIn("max_results_per_source", legacy_flat)
         self.assertEqual(legacy_flat["daily_max_papers_per_run"], 200)

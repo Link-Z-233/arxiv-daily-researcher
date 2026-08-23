@@ -117,7 +117,6 @@ class BackfillPipelineTests(unittest.TestCase):
                 "ENABLED_SOURCES": ["arxiv"],
                 "TARGET_DOMAINS": ["quant-ph"],
                 "TARGET_JOURNALS": [],
-                "SEARCH_DAYS": 1,
                 "ENABLE_REFERENCE_EXTRACTION": False,
                 "PRIMARY_KEYWORDS": ["quantum"],
                 "PRIMARY_KEYWORD_WEIGHT": 1.0,

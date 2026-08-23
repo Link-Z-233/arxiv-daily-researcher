@@ -21,14 +21,8 @@ def render(_env_values: dict, config_values: dict):
         f'<p class="section-title">🔎 {t("search_settings_title")}</p>', unsafe_allow_html=True
     )
 
-    st.number_input(
-        t("search_days_label"),
-        min_value=1,
-        max_value=365,
-        value=flat.get("search_days", 7),
-        key="search_days",
-        help=t("search_days_help"),
-    )
+    # 日报固定回看最近 3 天（config.DAILY_SCAN_WINDOW_DAYS），
+    # 过去日期由「每日推送 → 过去日报」补跑，不再提供天数配置。
     st.info(t("daily_scan_all_results"))
 
     st.divider()
@@ -329,7 +323,6 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         raise ValueError(f"{t('extra_sources_invalid')}: {exc}") from exc
 
     return {
-        "search_days": current("search_days", 7),
         "enabled_sources": enabled,
         "extra_sources_enabled": bool(current("extra_sources_enabled", False)),
         "extra_source_definitions": extra_definitions,

@@ -107,7 +107,8 @@ class Settings(BaseSettings):
     # Legacy compatibility only.  Daily scans always exhaust their configured
     # time window, so these values are never a fetch/LLM budget.
     MAX_RESULTS: Optional[int] = None
-    SEARCH_DAYS: int = 7  # 搜索最近N天的论文
+    # 日报固定回看最近 3 天；更早日期的论文由「过去时间段每日报告」补跑。
+    DAILY_SCAN_WINDOW_DAYS: int = 3
     TARGET_DOMAINS: List[str] = ["quant-ph"]  # 目标领域列表
 
     # ==================== 数据源配置 ====================
@@ -405,12 +406,11 @@ class Settings(BaseSettings):
 
             # 加载搜索设置
             if "search_settings" in config:
-                settings = config["search_settings"]
-                self.SEARCH_DAYS = settings.get("search_days", self.SEARCH_DAYS)
-                # ``max_results`` and ``max_results_per_source`` are accepted
-                # in legacy files but deliberately ignored.  A daily report
-                # must process every paper within its time window rather than
-                # silently defer an arbitrary tail to a later day.
+                # ``search_days``/``max_results``/``max_results_per_source``
+                # are accepted in legacy files but deliberately ignored.  The
+                # daily window is a fixed 3-day lookback; older papers are
+                # handled by the past-date backfill mode.
+                pass
 
             # 加载目标领域
             if "target_domains" in config:

@@ -288,20 +288,10 @@ def section_search(existing_config: dict) -> dict:
     """Section 2: Search Settings. Returns flat config values."""
     section_header(2, "Search Settings", "Control the daily search time window")
 
-    flat = flatten_config_dict(existing_config) if existing_config else {}
+    # 日报窗口固定为最近 3 天（config.DAILY_SCAN_WINDOW_DAYS）；
+    # 过去日期的论文由「过去时间段每日报告」补跑，此处不再询问天数。
 
-    search_days = questionary.text(
-        "Search recent N days of papers:",
-        default=str(flat.get("search_days", 7)),
-        validate=lambda x: True if _is_positive_int(x) else "Please enter a positive integer",
-        style=WIZARD_STYLE,
-    ).ask()
-    if search_days is None:
-        raise KeyboardInterrupt
-
-    return {
-        "search_days": int(search_days),
-    }
+    return {}
 
 
 def section_data_sources(existing_config: dict) -> dict:

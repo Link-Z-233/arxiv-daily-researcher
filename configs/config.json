@@ -1,27 +1,19 @@
 {
   // ==================================================
-  // Search Configuration
-  // ==================================================
-  "search_settings": {
-    // Daily research exhausts the whole time window. Request pacing and
-    // retries protect upstream services; there is intentionally no result cap.
-    "search_days": 14
-  },
-
-  // ==================================================
   // Data Source Configuration
   // ==================================================
   "data_sources": {
+    // 每日运行结束后自动做一次 gzip 压缩数据库备份
     "enabled": [
       "arxiv"
     ],
-    "reports_by_source": true,
     // Optional sources are data-only declarations. Disabled definitions are
     // retained but not fetched; no Python/import path is ever executed.
     "extra_sources": {
-      "enabled": false,
+      "enabled": true,
       "definitions": []
     },
+    "reports_by_source": true,
     "arxiv": {
       "fetch_timeout_seconds": 180,
       "announcement_lookback_grace_days": 2
@@ -98,16 +90,18 @@
       "base_score": 1.5,
       "weight_coefficient": 2.5
     },
+    "include_all_in_report": true,
     "strategy": {
-      // V2 decides recommendation eligibility from primary-keyword content
-      // relevance. Reference keywords and expert authors only affect the
-      // ordering of papers that are already qualified.
-      "id": "core_relevance_v2",
+      // Switched back to the legacy weighted-keyword formula: it works with
+      // reference-only keyword sets, while V2 requires curated primary
+      // keywords and degraded to all-keywords-as-core without them.
+      "id": "legacy_weighted_keyword_v1",
       "core_relevance_threshold": 6.0,
       "core_keyword_min_score": 7.0,
-      "reference_ranking_weight": 0.25
-    },
-    "include_all_in_report": true
+      "reference_ranking_weight": 0.25,
+      "learned_weight_dampening": 0.5,
+      "learned_term_weight_cap": 2.0
+    }
   },
 
   // ==================================================
@@ -205,27 +199,17 @@
     "enabled": true,
     "workers": 2
   },
-
-  // ==================================================
-  // LLM Request Pool Configuration
-  // ==================================================
   "llm_request_pool": {
     "enabled": true,
     "requests_per_minute": 30,
-    "log_slow_wait_seconds": 5
+    "log_slow_wait_seconds": 5.0
   },
-
-  // ==================================================
-  // Daily Research Configuration
-  // ==================================================
   "daily_research": {
     "enable_deep_analysis": true,
-    // Per-run processing cap. A fresh deployment collects a large backlog in
-    // its first scan; the default 200 prevents huge single runs while later
-    // runs drain the queue. Once drained, a normal day's new papers all fit
-    // below the cap. 0 = process every pending paper. Fetching is never
-    // truncated: excess candidates stay queued in SQLite.
-    "max_papers_per_run": 200,
+    // 0 = process every pending paper; positive values are useful for tests.
+    // Fetching is never truncated: excess candidates stay queued in SQLite.
+    "max_papers_per_run": 3,
+    "run_time": "12:00",
     "db_path": "data/daily_research/daily_research.db"
   },
 
@@ -233,11 +217,11 @@
   // PDF Parser Configuration
   // ==================================================
   "pdf_parser": {
-    "mode": "mineru",
+    "mode": "pymupdf",
     "mineru_model_version": "vlm",
     "poll_interval": 3,
     "poll_timeout": 300,
-    "download_max_bytes": 52428800
+    "download_max_bytes": 26214400
   },
 
   // ==================================================
@@ -276,6 +260,7 @@
       "semantic_scholar": false,
       "llm_api": false,
       "notifications": false,
+      "webdav": true,
       "update_check": false
     }
   },
@@ -298,12 +283,9 @@
   // Database Backup Configuration
   // ==================================================
   "backup": {
-    // 每日运行结束后自动做一次 gzip 压缩数据库备份
     "enabled": true,
     // 本地与 WebDAV 各保留的备份份数，超出后轮转删除最旧的
-    "keep": 5,
-    // 备份压缩后再上传 WebDAV（节省流量），需要启用 WebDAV
-    "upload_to_webdav": true
+    "keep": 5
   },
 
   // ==================================================
@@ -323,8 +305,6 @@
     "enabled_skills": [
       "comprehensive_analysis"
     ],
-    // Custom deep-analysis prompt for the comprehensive skill. Blank keeps
-    // the built-in instruction; the WebUI can save reusable templates.
     "analysis_prompt": ""
   }
 }

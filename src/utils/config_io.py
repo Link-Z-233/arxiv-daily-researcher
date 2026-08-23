@@ -201,7 +201,6 @@ ENV_FIELDS = [
 # ==================== Config JSON Section Comments ====================
 
 SECTION_COMMENTS = {
-    "search_settings": "Search Configuration",
     "data_sources": "Data Source Configuration",
     "run_lock": "Run Lock Configuration",
     "target_domains": "ArXiv Target Domain Configuration",
@@ -577,7 +576,6 @@ def write_config_json(config: Dict[str, Any], path: Optional[Path] = None) -> No
 
 
 def build_config_dict(
-    search_days: int = 7,
     max_results: Optional[int] = None,
     max_results_per_source: Optional[Dict[str, int]] = None,
     enabled_sources: Optional[List[str]] = None,
@@ -771,9 +769,6 @@ def build_config_dict(
         )
 
     config = {
-        "search_settings": {
-            "search_days": search_days,
-        },
         "data_sources": {
             # Preserve an explicit empty list so the worker can reject it
             # visibly.  Replacing it with a hidden default changes a user's
@@ -1003,10 +998,6 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     Returns a dict with descriptive keys matching build_config_dict parameters.
     """
     flat = {}
-
-    # Search settings
-    ss = config.get("search_settings", {})
-    flat["search_days"] = ss.get("search_days", 7)
 
     # Data sources
     ds = config.get("data_sources", {})

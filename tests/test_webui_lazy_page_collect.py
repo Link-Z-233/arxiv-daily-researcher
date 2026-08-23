@@ -63,7 +63,6 @@ class LazyPageCollectTests(unittest.TestCase):
             "primary_keywords": ["superconductivity", "cold atoms"],
             "primary_keyword_weight": 2.0,
             "similarity_threshold": 0.9,
-            "search_days": 21,
             "enabled_sources": ["arxiv", "prl"],
             "domains": ["quant-ph", "cond-mat.stat-mech"],
             "extra_sources_enabled": True,
@@ -107,7 +106,6 @@ class LazyPageCollectTests(unittest.TestCase):
         self.assertFalse(rm["enable_html_report"])
         self.assertEqual(kw["primary_keywords"], ["superconductivity", "cold atoms"])
         self.assertEqual(kw["primary_keyword_weight"], 2.0)
-        self.assertEqual(se["search_days"], 21)
         self.assertEqual(se["enabled_sources"], ["arxiv", "prl"])
         self.assertEqual(se["domains"], ["quant-ph", "cond-mat.stat-mech"])
         self.assertTrue(se["extra_sources_enabled"])

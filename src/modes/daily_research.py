@@ -886,7 +886,7 @@ class DailyResearchPipeline:
                 logger.info(f"ArXiv目标领域: {settings.TARGET_DOMAINS}")
             if settings.TARGET_JOURNALS:
                 logger.info(f"目标期刊: {settings.TARGET_JOURNALS}")
-            logger.info(f"搜索天数: {settings.SEARCH_DAYS}")
+            logger.info(f"搜索窗口: 最近 {settings.DAILY_SCAN_WINDOW_DAYS} 天（固定；过去日期由补跑处理）")
             logger.info("日报抓取: 完整扫描时间窗口内的全部论文（由请求限速和重试保护服务）")
             logger.info(f"启用Reference提取: {settings.ENABLE_REFERENCE_EXTRACTION}")
 
@@ -1036,7 +1036,7 @@ class DailyResearchPipeline:
                 # recovery checkpoint immediately before the source queries, not
                 # before construction/configuration work, so a successful scan
                 # window starts where the APIs were actually queried.
-                effective_scan_days = settings.SEARCH_DAYS
+                effective_scan_days = settings.DAILY_SCAN_WINDOW_DAYS
                 if store and run_id:
                     # A failed run must not let its unreported papers age out of
                     # the user-configured window.  The store records a per-source
@@ -1045,14 +1045,14 @@ class DailyResearchPipeline:
                     # when a prior scan did not reach a durable terminal state.
                     effective_scan_days = store.prepare_scan(
                         run_id,
-                        settings.SEARCH_DAYS,
+                        settings.DAILY_SCAN_WINDOW_DAYS,
                         search_agent.get_enabled_sources(),
                     )
-                    if effective_scan_days > settings.SEARCH_DAYS:
+                    if effective_scan_days > settings.DAILY_SCAN_WINDOW_DAYS:
                         logger.warning(
                             "日报恢复扫描窗口已扩展: 配置 %s 天 -> %s 天；"
                             "已交付版本会由 SQLite 账本过滤，不会重复推送",
-                            settings.SEARCH_DAYS,
+                            settings.DAILY_SCAN_WINDOW_DAYS,
                             effective_scan_days,
                         )
 

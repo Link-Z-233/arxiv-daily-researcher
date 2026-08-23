@@ -209,7 +209,7 @@ class DailyResearchStore:
             # any fetch, scoring, translation, analysis, report generation,
             # or final delivery commit fails, its old checkpoint remains in
             # place and the next run expands its lookback window instead of
-            # letting those papers age out of SEARCH_DAYS.
+            # letting those papers age out of the fixed daily scan window.
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS daily_scan_watermarks (
@@ -580,7 +580,7 @@ class DailyResearchStore:
     ) -> int:
         """Record a scan plan and return a recovery-safe lookback length.
 
-        ``SEARCH_DAYS`` remains the normal overlap window.  When an enabled
+        The fixed daily scan window remains the normal overlap window.  When an enabled
         source has not completed a successful scan recently (because a run
         failed or the scheduler was offline), extend the window back to that
         source's last successful scan start plus a one-day overlap.  The
