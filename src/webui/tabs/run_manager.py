@@ -77,12 +77,58 @@ def _is_lock_held(lock_path: Path) -> bool:
         return True
 
 
+def _configured_worker_lock_dir() -> Path:
+    """Return the worker's configured ``<data_dir>/run`` directory.
+
+    Trigger requests intentionally remain in the default shared ``data/run``
+    volume because the Docker entrypoint watches that stable path.  The worker
+    itself, however, follows ``paths.data_dir`` when it creates its real
+    ``run_lock`` files.  Read that single path from the persisted config so
+    the status panel also works for installations using a custom data root.
+    """
+    try:
+        from utils.config_io import (
+            _resolve_project_relative_config_path,
+            read_config_json,
+        )
+
+        raw_config = read_config_json()
+        paths = raw_config.get("paths", {}) if isinstance(raw_config, dict) else {}
+        configured = paths.get("data_dir", "data") if isinstance(paths, dict) else "data"
+        data_dir = _resolve_project_relative_config_path(
+            configured, label="paths.data_dir"
+        )
+        return data_dir / "run"
+    except (ImportError, OSError, ValueError, TypeError):
+        # Diagnostics must remain available if a hand-edited config is
+        # temporarily malformed or unreadable.  The legacy default is still
+        # the correct trigger-volume location in that case.
+        return _LOCK_DIR
+
+
 def _get_lock_files() -> list[Path]:
-    """只返回 *.lock 文件（main.py 拥有的任务锁），按修改时间倒序。"""
-    if not _LOCK_DIR.exists():
-        return []
-    files = list(_LOCK_DIR.glob("*.lock"))
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    """Return worker ``*.lock`` files from default and configured data roots.
+
+    A custom root is listed in addition to the stable trigger root.  This
+    keeps in-flight jobs visible while a user changes paths and avoids losing
+    an old default-root lock during that transition.
+    """
+    directories = []
+    for directory in (_LOCK_DIR, _configured_worker_lock_dir()):
+        candidate = Path(directory)
+        if candidate not in directories:
+            directories.append(candidate)
+
+    files = []
+    for directory in directories:
+        try:
+            if directory.is_dir():
+                files.extend(directory.glob("*.lock"))
+        except OSError:
+            # A shared volume can briefly be unavailable during a container
+            # restart.  Other readable lock directories remain useful.
+            continue
+    files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return files
 
 

@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -144,6 +145,58 @@ class RunAutoRefreshTests(unittest.TestCase):
         live_fragment.assert_not_called()
         snapshot.assert_called_once_with({})
 
+
+class ConfiguredRunLockPathTests(unittest.TestCase):
+    def test_status_discovers_locks_in_custom_data_dir(self):
+        """The Docker trigger root and worker data root can intentionally differ."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            default_dir = root / "data" / "run"
+            configured_data_dir = root / "custom-state"
+            configured_dir = configured_data_dir / "run"
+            default_dir.mkdir(parents=True)
+            configured_dir.mkdir(parents=True)
+            default_lock = default_dir / "legacy_import.lock"
+            configured_lock = configured_dir / "daily_research.lock"
+            default_lock.write_text("PID=1", encoding="utf-8")
+            configured_lock.write_text("PID=2", encoding="utf-8")
+
+            with (
+                patch.object(run_manager, "_LOCK_DIR", default_dir),
+                patch.object(
+                    run_manager,
+                    "_configured_worker_lock_dir",
+                    return_value=configured_dir,
+                ),
+                patch.object(
+                    run_manager,
+                    "_is_lock_held",
+                    side_effect=lambda path: path == configured_lock,
+                ),
+            ):
+                files = run_manager._get_lock_files()
+                running = run_manager._get_all_running_locks()
+
+            self.assertEqual(set(files), {default_lock, configured_lock})
+            self.assertEqual(running, [(configured_lock, 2)])
+
+    def test_configured_worker_lock_dir_uses_paths_data_dir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            configured_data_dir = Path(temp_dir) / "state"
+            with (
+                patch(
+                    "utils.config_io.read_config_json",
+                    return_value={"paths": {"data_dir": "data/state"}},
+                ),
+                patch(
+                    "utils.config_io._resolve_project_relative_config_path",
+                    return_value=configured_data_dir,
+                ),
+            ):
+                self.assertEqual(
+                    run_manager._configured_worker_lock_dir(),
+                    configured_data_dir / "run",
+                )
 
 if __name__ == "__main__":
     unittest.main()
