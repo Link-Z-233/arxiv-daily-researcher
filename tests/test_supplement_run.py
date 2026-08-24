@@ -165,9 +165,13 @@ class SupplementRunTests(unittest.TestCase):
                 ledger = conn.execute(
                     "SELECT COUNT(*) FROM paper_deliveries WHERE canonical_id = '2602.1'"
                 ).fetchone()[0]
+                run_kind = conn.execute(
+                    "SELECT run_kind FROM daily_runs ORDER BY started_at DESC LIMIT 1"
+                ).fetchone()[0]
             self.assertEqual(statuses["2602.1"], "delivered")
             self.assertEqual(statuses["2602.2"], "pending")
             self.assertEqual(ledger, 1)
+            self.assertEqual(run_kind, "supplement")
 
     def test_supplement_run_without_backlog_completes_quietly(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -230,6 +234,72 @@ class SupplementRunTests(unittest.TestCase):
                 )
             self.assertEqual(statuses["10.1103/nope"], "failed")
             self.assertEqual(statuses["2602.3"], "pending")
+
+    def test_failed_missing_data_is_selected_again_on_a_later_retry(self):
+        from modes.daily_research import _load_supplement_candidates
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = DailyResearchStore(root / "db.sqlite")
+            store.record_supplement_backlog([
+                {
+                    "source": "arxiv",
+                    "canonical_id": "2602.4",
+                    "version": 1,
+                    "paper_id": "2602.4v1",
+                    "reason": "missing_data",
+                }
+            ])
+
+            with patch("modes.daily_research.settings") as fake_settings, patch(
+                "sources.arxiv_source.ArxivSource.fetch_papers_by_ids",
+                return_value={},
+            ):
+                fake_settings.DAILY_MAX_PAPERS_PER_RUN = 10
+                fake_settings.HISTORY_DIR = root
+                fake_settings.get_proxy_dict.return_value = None
+                _, _, failures = _load_supplement_candidates(
+                    store, store.start_run(0)
+                )
+            self.assertEqual(failures, 1)
+            self.assertEqual(store.supplement_backlog_summary()["pending"], 1)
+
+            with patch("modes.daily_research.settings") as fake_settings, patch(
+                "sources.arxiv_source.ArxivSource.fetch_papers_by_ids",
+                return_value={"2602.4": _paper("2602.4v1")},
+            ):
+                fake_settings.DAILY_MAX_PAPERS_PER_RUN = 10
+                fake_settings.HISTORY_DIR = root
+                fake_settings.get_proxy_dict.return_value = None
+                papers_by_source, selected, failures = _load_supplement_candidates(
+                    store, store.start_run(0)
+                )
+
+            self.assertEqual(failures, 0)
+            self.assertEqual(selected, [("arxiv", "2602.4", 1)])
+            self.assertEqual(
+                [paper.paper_id for paper in papers_by_source["arxiv"]], ["2602.4v1"]
+            )
+
+    def test_unlimited_supplement_claim_uses_zero_like_daily_limit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "db.sqlite")
+            store.record_supplement_backlog([
+                {
+                    "source": "arxiv", "canonical_id": "2602.10", "version": 1,
+                    "paper_id": "2602.10v1", "reason": "missing_data",
+                },
+                {
+                    "source": "arxiv", "canonical_id": "2602.11", "version": 1,
+                    "paper_id": "2602.11v1", "reason": "missed_scan",
+                },
+            ])
+
+            rows = store.claim_supplement_backlog(0)
+
+            self.assertEqual(
+                [row["canonical_id"] for row in rows], ["2602.10", "2602.11"]
+            )
 
 
 class ReporterSupplementKindTests(unittest.TestCase):

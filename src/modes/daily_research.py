@@ -621,7 +621,9 @@ def _load_supplement_candidates(
     抓不到或其他来源无法补抓的行记为 failed 留待再次重试。
     """
     limit = int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0) or 0)
-    rows = store.claim_supplement_backlog(limit if limit > 0 else 10000)
+    # ``0`` is the documented unlimited setting for every daily-style run;
+    # do not quietly introduce a different 10,000-paper ceiling here.
+    rows = store.claim_supplement_backlog(limit)
 
     need_fetch_ids: List[str] = []
     for row in rows:

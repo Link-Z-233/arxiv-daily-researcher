@@ -1294,20 +1294,19 @@ class DailyResearchStore:
             "oldest_pending_at": oldest,
         }
 
-    def claim_supplement_backlog(self, limit: int) -> list[Dict[str, Any]]:
+    def claim_supplement_backlog(self, limit: int = 0) -> list[Dict[str, Any]]:
         """Select the next backlog papers for one supplement run.
 
         Data-repair entries (from the legacy import) are drained before
         missed-scan discoveries, oldest first.  Failed fetches retry after
         the pending rows.  Returned rows carry the persisted paper metadata
-        when the import already reconstructed it.
+        when the import already reconstructed it.  ``limit=0`` means all
+        rows, matching ``daily_research.max_papers_per_run`` semantics.
         """
-        bounded = max(0, int(limit))
-        if bounded == 0:
-            return []
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("supplement backlog limit must be a non-negative integer")
+        bounded = int(limit)
+        query = """
                 SELECT source, canonical_id, version, paper_id, reason,
                        detail, paper_json
                 FROM supplement_backlog
@@ -1316,10 +1315,13 @@ class DailyResearchStore:
                          CASE reason WHEN 'missed_scan' THEN 1 ELSE 0 END,
                          created_at ASC,
                          backlog_id ASC
-                LIMIT ?
-                """,
-                (bounded,),
-            ).fetchall()
+                """
+        params: list[Any] = []
+        if bounded:
+            query += " LIMIT ?"
+            params.append(bounded)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
         result = []
         for row in rows:
             item = dict(row)

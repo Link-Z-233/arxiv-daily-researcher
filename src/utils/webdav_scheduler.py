@@ -162,7 +162,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run one cron tick; return nonzero only for invalid settings/bugs."""
     del argv  # Kept for a conventional, testable Python entrypoint signature.
     try:
-        summary = run_scheduled_webdav_sync()
+        # Scheduled sync claims/updates the same maintenance outbox as daily
+        # research.  It participates in the legacy-import shared gate so an
+        # import really starts only after all normal worker activity is idle.
+        from utils.run_lock import legacy_import_activity_gate
+
+        with legacy_import_activity_gate(
+            logger=logger, wait_note="WebDAV 定时同步等待旧历史导入完成"
+        ):
+            summary = run_scheduled_webdav_sync()
     except Exception as exc:
         logger.error("[WebDAV] 定时同步调度失败: %s", exc)
         return 1

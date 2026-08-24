@@ -590,7 +590,13 @@ def import_legacy_history(
             has_score = bool(card["score_payload"])
             needs_translation = bool(card["abstract"].strip())
             has_translation = bool(card["abstract_cn"].strip())
-            needs_analysis = card["score_payload"].get("is_qualified", False)
+            # v3.2 的期刊/OpenAlex 卡片没有 PDF 深度分析能力；它们即使
+            # 及格也不该被误判为缺数据、重新塞进补充队列。旧版只有
+            # arXiv 来源走过深度分析流程。
+            needs_analysis = (
+                card["source"] == "arxiv"
+                and card["score_payload"].get("is_qualified", False)
+            )
             has_analysis = bool(card["analysis"])
 
             reasons: List[str] = []
@@ -616,7 +622,11 @@ def import_legacy_history(
                 "translation_status": (
                     "succeeded" if has_translation else ("not_required" if not needs_translation else "pending")
                 ),
-                "analysis_status": "succeeded" if has_analysis else "pending",
+                "analysis_status": (
+                    "succeeded"
+                    if has_analysis
+                    else ("not_required" if card["source"] != "arxiv" else "pending")
+                ),
                 "completed_at": delivered_at,
                 "report_path": card["report_path"],
                 "delivered_at": delivered_at,
@@ -637,6 +647,10 @@ def import_legacy_history(
                         "paper_id": card["paper_id"],
                         "reason": reasons[0],
                         "detail": "缺失: " + ", ".join(reasons),
+                        # 这张旧报告卡已经带有论文元数据。把它随积压
+                        # 一起保存，后续自动补充可直接重试评分/翻译/分析，
+                        # 不必因为历史 arXiv ID 暂时抓取失败而卡住。
+                        "paper_json": _paper_json_from_card(card),
                     }
                 )
                 for reason in reasons:

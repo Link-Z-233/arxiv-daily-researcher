@@ -100,6 +100,7 @@ LABEL description="ArXiv Daily Researcher - Streamlit Config Panel"
 COPY src/utils/config_io.py ./src/utils/
 COPY src/utils/run_lock.py ./src/utils/
 COPY src/utils/backup.py ./src/utils/
+COPY src/utils/legacy_history.py ./src/utils/
 COPY src/utils/safe_url.py ./src/utils/
 COPY src/utils/daily_research_store.py ./src/utils/
 COPY src/utils/scoring_evaluation.py ./src/utils/

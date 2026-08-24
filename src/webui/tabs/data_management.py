@@ -339,37 +339,26 @@ def _render_legacy_import_section(config_values: dict) -> None:
     )
 
     queue_dir = trigger_directory(_PROJECT_ROOT / "data")
-    trigger_pending = bool(list(queue_dir.glob("*.json"))) if queue_dir.exists() else False
+    trigger_pending = (
+        bool(list(queue_dir.glob("*.json")) or list(queue_dir.glob("*.running")))
+        if queue_dir.exists()
+        else False
+    )
 
-    col_import, col_supplement = st.columns(2)
-    with col_import:
-        if st.button(
-            t("dm_legacy_import_btn"),
-            use_container_width=True,
-            disabled=trigger_pending,
-            type="primary",
-        ):
-            _enqueue_legacy_import()
-    with col_supplement:
-        backlog_pending = None
-        store_probe = _legacy_import_store(config_values)
-        if store_probe is not None:
-            try:
-                backlog_pending = store_probe.supplement_backlog_summary().get("pending", 0)
-            except Exception:
-                backlog_pending = None
-        if st.button(
-            t("dm_supplement_btn"),
-            use_container_width=True,
-            disabled=trigger_pending or not backlog_pending,
-            help=t("dm_supplement_help"),
-        ):
-            _enqueue_legacy_import(mode="supplement_run", queued_key="dm_supplement_queued")
+    # 补充报告是读取旧历史后的自动第二阶段，不再暴露一个会让用户误以为
+    # 必须单独点击的按钮。一个导入请求覆盖导入、时间段扫描和一批补充报告。
+    if st.button(
+        t("dm_legacy_import_btn"),
+        use_container_width=True,
+        disabled=trigger_pending,
+        type="primary",
+    ):
+        _enqueue_legacy_import()
 
     if trigger_pending:
         st.info(t("dm_legacy_running_hint"))
 
-    store = store_probe
+    store = _legacy_import_store(config_values)
     if store is None:
         return
 
@@ -397,6 +386,17 @@ def _render_legacy_import_section(config_values: dict) -> None:
                     backlog=summary.get("backlog_queued", 0),
                 )
             )
+            supplement = summary.get("supplement")
+            if isinstance(supplement, dict):
+                st.caption(
+                    t("dm_legacy_supplement_line").format(
+                        state=supplement.get("state", "—"),
+                        processed=supplement.get("processed", 0),
+                        pending=supplement.get(
+                            "pending_after", supplement.get("pending_before", 0)
+                        ),
+                    )
+                )
     else:
         st.caption(t("dm_legacy_none"))
 
@@ -424,8 +424,10 @@ def _render_legacy_import_section(config_values: dict) -> None:
         )
 
 
-def _enqueue_legacy_import(mode: str = "legacy_import", queued_key: str = "dm_legacy_queued") -> None:
-    """Docker 模式走触发队列；本地模式直接后台启动对应进程。"""
+def _enqueue_legacy_import() -> None:
+    """Queue the complete legacy-import workflow (including auto supplement)."""
+    mode = "legacy_import"
+    queued_key = "dm_legacy_queued"
     main_py = _PROJECT_ROOT / "main.py"
     if not main_py.exists():
         try:
@@ -435,6 +437,7 @@ def _enqueue_legacy_import(mode: str = "legacy_import", queued_key: str = "dm_le
             return
         st.toast(t(queued_key), icon="📜")
         st.rerun()
+        return
 
     logs_dir = _PROJECT_ROOT / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)

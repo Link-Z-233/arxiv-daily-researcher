@@ -287,6 +287,26 @@ class LegacyImportIntegrationTests(unittest.TestCase):
         )
         rows = self.store.claim_supplement_backlog(10)
         self.assertEqual(rows[0]["canonical_id"], "2603.22222")
+        # 缺的是分析结果而非论文元数据；自动补充无需重新向 arXiv 拉取。
+        self.assertEqual(rows[0]["paper_json"]["title"], "Pass Without Analysis")
+
+    def test_qualified_legacy_journal_card_is_not_false_missing_analysis(self):
+        # v3.2 only performed PDF deep analysis for arXiv.  A qualified
+        # journal/OpenAlex card is complete without a deep-analysis section.
+        _write_report(
+            self.reports_dir,
+            "prl",
+            "2026-05-02_08-00-00",
+            _CARD_DOI,
+        )
+
+        summary = self._import()
+
+        self.assertEqual(summary["missing_analysis"], 0)
+        self.assertEqual(summary["delivered_ledger_rows"], 1)
+        self.assertEqual(self.store.supplement_backlog_summary()["pending"], 0)
+        record = self.store.get_paper_record("prl", "https://doi.org/10.1103/ab12-cd34")
+        self.assertEqual(record["analysis_status"], "not_required")
 
     def test_history_entry_without_card_becomes_missing_data(self):
         (self.history_dir / "arxiv_history.json").write_text(

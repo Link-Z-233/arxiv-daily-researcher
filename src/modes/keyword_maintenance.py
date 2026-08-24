@@ -15,7 +15,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import settings  # noqa: E402
-from utils.run_lock import run_lock  # noqa: E402
+from utils.run_lock import legacy_import_activity_gate, run_lock  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,12 @@ def main() -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     with run_lock("keyword_maintenance"):
-        return run_keyword_maintenance()
+        # 标准化与趋势数据同样寄宿于每日 SQLite；持共享 gate 让旧历史
+        # 导入能可靠等待到所有相关工作空闲，而普通维护任务之间不互斥。
+        with legacy_import_activity_gate(
+            logger=logger, wait_note="关键词维护等待旧历史导入完成"
+        ):
+            return run_keyword_maintenance()
 
 
 if __name__ == "__main__":
