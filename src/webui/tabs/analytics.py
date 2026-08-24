@@ -25,6 +25,8 @@ from webui.tabs.run_manager import _daily_db_path_from_config
 
 # GitHub 风格的五档绿色色阶；0 档为无数据灰。
 _HEAT_LEVEL_COLORS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
+_MAX_VISIBLE_TABLE_ROWS = 10
+_TABLE_SCROLL_HEIGHT_PX = 390
 
 
 def _week_labels() -> list[str]:
@@ -55,6 +57,25 @@ _RANGE_DAYS = [
 def components_html(html: str, *, height: int) -> None:
     """components.html 的薄封装，便于测试替换。"""
     components.html(html, height=height, scrolling=False)
+
+
+def _render_bounded_table(table: pd.DataFrame) -> None:
+    """Render every row with a 10-row native scrolling viewport when needed."""
+    if len(table) > _MAX_VISIBLE_TABLE_ROWS:
+        with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
+            st.table(table)
+    else:
+        st.table(table)
+
+
+def _render_bounded_dataframe(rows: list[dict]) -> None:
+    """Render diagnostic rows without letting a large source list grow the page."""
+    kwargs = {"hide_index": True, "use_container_width": True}
+    if len(rows) > _MAX_VISIBLE_TABLE_ROWS:
+        with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
+            st.dataframe(rows, **kwargs)
+    else:
+        st.dataframe(rows, **kwargs)
 
 
 def _scroll_right_document(body_html: str) -> str:
@@ -429,7 +450,7 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
     )
     models = store.get_token_usage_by_model(days=days)
     if models:
-        st.table(
+        _render_bounded_table(
             pd.DataFrame(
                 models,
                 columns=[
@@ -626,7 +647,7 @@ def _render_diagnostics_section(config_values: dict) -> None:
             total=len(receipts),
         )
     )
-    st.dataframe(
+    _render_bounded_dataframe(
         [
             {
                 t("rm_scan_receipt_source"): r.get("source", "unknown"),
@@ -637,9 +658,7 @@ def _render_diagnostics_section(config_values: dict) -> None:
                 t("rm_scan_receipt_scanned_at"): _format_scan_time(r.get("scanned_at")),
             }
             for r in receipts
-        ],
-        hide_index=True,
-        use_container_width=True,
+        ]
     )
 
 

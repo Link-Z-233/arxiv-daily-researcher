@@ -4,6 +4,10 @@ import streamlit as st
 from webui.i18n import t
 
 
+_MAX_VISIBLE_LIBRARY_ROWS = 10
+_LIBRARY_SCROLL_HEIGHT_PX = 320
+
+
 def render(_env_values: dict, config_values: dict):
     """Render the Scoring configuration tab."""
 
@@ -188,6 +192,19 @@ def render(_env_values: dict, config_values: dict):
 
 
 
+def _render_learned_term_rows(terms: list[dict]) -> None:
+    """Render all learned terms, using a native scroll viewport after 10."""
+    def render_rows() -> None:
+        for row in terms:
+            st.markdown(f"- `{row['term']}` ({row['weight']:+.2f})")
+
+    if len(terms) > _MAX_VISIBLE_LIBRARY_ROWS:
+        with st.container(height=_LIBRARY_SCROLL_HEIGHT_PX, border=True):
+            render_rows()
+    else:
+        render_rows()
+
+
 def _render_learned_library_summary(flat: dict):
     """Show what the learned keyword/author library currently looks like."""
     try:
@@ -208,21 +225,15 @@ def _render_learned_library_summary(flat: dict):
         st.caption(t("learned_library_empty"))
         return
 
-    keywords = [row for row in terms if row["term_type"] == "keyword"][:10]
-    authors = [row for row in terms if row["term_type"] == "author"][:10]
+    keywords = [row for row in terms if row["term_type"] == "keyword"]
+    authors = [row for row in terms if row["term_type"] == "author"]
     col_k, col_a = st.columns(2)
     with col_k:
         st.caption(t("learned_library_keywords"))
-        for row in keywords:
-            st.markdown(
-                f"- `{row['term']}` ({row['weight']:+.2f})"
-            )
+        _render_learned_term_rows(keywords)
     with col_a:
         st.caption(t("learned_library_authors"))
-        for row in authors:
-            st.markdown(
-                f"- `{row['term']}` ({row['weight']:+.2f})"
-            )
+        _render_learned_term_rows(authors)
     st.caption(t("learned_library_note"))
 
 

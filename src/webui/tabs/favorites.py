@@ -18,6 +18,7 @@ from webui.tabs import paper_search
 
 _MAX_VISIBLE_LIST_ROWS = 10
 _TABLE_SCROLL_HEIGHT_PX = 390
+_LIST_SCROLL_HEIGHT_PX = 420
 
 
 def _fallback_url(source: str, paper_id: str) -> str | None:
@@ -35,7 +36,10 @@ def _safe_href(url: str) -> str | None:
 
 def _render_favorites_list(store: DailyResearchStore, liked: list[dict]) -> None:
     urls = store.liked_paper_urls()
-    with st.container(border=True):
+    container_args = {"border": True}
+    if len(liked) > _MAX_VISIBLE_LIST_ROWS:
+        container_args["height"] = _LIST_SCROLL_HEIGHT_PX
+    with st.container(**container_args):
         for row in liked:
             time_text = str(row.get("updated_at") or "")[:16].replace("T", " ")
             title = str(row.get("title") or row.get("paper_id") or "")

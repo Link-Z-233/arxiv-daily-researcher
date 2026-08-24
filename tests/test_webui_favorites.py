@@ -20,12 +20,13 @@ class _FakeStreamlit:
     def __init__(self):
         self.containers = []
         self.tables = []
+        self.markdowns = []
 
     def columns(self, count):
         return [_Context() for _ in range(count)]
 
-    def markdown(self, *_args, **_kwargs):
-        pass
+    def markdown(self, value, **_kwargs):
+        self.markdowns.append(value)
 
     def caption(self, *_args, **_kwargs):
         pass
@@ -54,6 +55,11 @@ class _Store:
         ]
 
 
+class _FavoriteListStore:
+    def liked_paper_urls(self):
+        return {}
+
+
 class FavoriteStatsTests(unittest.TestCase):
     def test_long_statistics_keep_all_rows_in_native_scroll_containers(self):
         fake_st = _FakeStreamlit()
@@ -69,6 +75,27 @@ class FavoriteStatsTests(unittest.TestCase):
             ],
         )
         self.assertEqual([len(table) for table in fake_st.tables], [11, 11])
+
+    def test_long_favorite_list_uses_a_ten_row_native_scroll_viewport(self):
+        fake_st = _FakeStreamlit()
+        liked = [
+            {
+                "source": "arxiv",
+                "paper_id": str(index),
+                "title": f"Paper {index}",
+                "updated_at": "2026-08-24T12:00:00",
+            }
+            for index in range(11)
+        ]
+
+        with patch.object(favorites, "st", fake_st):
+            favorites._render_favorites_list(_FavoriteListStore(), liked)
+
+        self.assertEqual(
+            fake_st.containers,
+            [{"border": True, "height": favorites._LIST_SCROLL_HEIGHT_PX}],
+        )
+        self.assertEqual(len(fake_st.markdowns), 11)
 
 
 if __name__ == "__main__":

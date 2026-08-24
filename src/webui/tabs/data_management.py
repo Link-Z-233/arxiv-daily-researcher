@@ -30,6 +30,8 @@ DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "configs" / "config.json"
 DEFAULT_ENV_PATH = _PROJECT_ROOT / ".env"
 
 SECRET_FIELD_KEYS = ("webdav_password",)
+_MAX_VISIBLE_LIST_ROWS = 10
+_TABLE_SCROLL_HEIGHT_PX = 390
 
 
 def render(env_values: dict, config_values: dict):
@@ -293,20 +295,7 @@ def render(env_values: dict, config_values: dict):
             except Exception as e:
                 st.error(f"{t('dm_backup_failed')}: {e}")
 
-    backups = _list_backups()
-    if backups:
-        st.caption(t("dm_backup_existing"))
-        rows = [
-            {
-                t("dm_backup_col_name"): item["name"],
-                t("dm_backup_col_size"): f"{item['size_bytes'] / 1024:.0f} KB",
-                t("dm_backup_col_time"): item["modified_at"],
-            }
-            for item in backups[:10]
-        ]
-        st.table(rows)
-    else:
-        st.caption(t("dm_backup_none"))
+    _render_backup_list(_list_backups())
 
     _render_legacy_import_section(config_values)
 
@@ -536,6 +525,27 @@ def _list_backups():
     except Exception as e:
         logger.warning(f"列出现有备份失败: {e}")
         return []
+
+
+def _render_backup_list(backups: list[dict]) -> None:
+    """Show every local backup, keeping the page viewport to ten rows."""
+    if not backups:
+        st.caption(t("dm_backup_none"))
+        return
+    st.caption(t("dm_backup_existing"))
+    rows = [
+        {
+            t("dm_backup_col_name"): item["name"],
+            t("dm_backup_col_size"): f"{item['size_bytes'] / 1024:.0f} KB",
+            t("dm_backup_col_time"): item["modified_at"],
+        }
+        for item in backups
+    ]
+    if len(rows) > _MAX_VISIBLE_LIST_ROWS:
+        with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
+            st.table(rows)
+    else:
+        st.table(rows)
 
 
 def _do_backup(env_values: dict):
