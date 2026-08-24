@@ -1,5 +1,6 @@
 """Keywords Configuration tab for the Streamlit config panel."""
 
+import html
 import json
 from pathlib import Path
 
@@ -46,16 +47,23 @@ def _render_extracted_keywords_box() -> None:
         st.info(t("kw_extracted_empty"))
         return
     ordered = sorted(extracted.items(), key=lambda pair: (-pair[1], pair[0]))
-    lines = "\n".join(
-        f'<div style="padding:1px 0;">{name}<span style="color:#888;'
-        f'float:right;">{weight:g}</span></div>'
+    lines = "".join(
+        '<div style="display:flex;justify-content:space-between;gap:12px;'
+        'padding:2px 0;line-height:1.55;">'
+        f"<span>{html.escape(name)}</span>"
+        f'<span style="color:#888;white-space:nowrap;">{weight:g}</span>'
+        "</div>"
         for name, weight in ordered
     )
-    with st.container(border=True):
+    # A fixed-height native Streamlit container provides a reliable vertical
+    # scrollbar.  The previous nested HTML ``overflow-y`` was not consistently
+    # scrollable across Streamlit themes and would let long keyword lists grow
+    # the whole page.
+    box_height = min(320, max(100, 64 + len(ordered) * 27))
+    with st.container(height=box_height, border=True):
         st.caption(t("kw_extracted_count").format(total=len(ordered)))
         st.markdown(
-            f'<div style="max-height:260px;overflow-y:auto;font-size:0.9rem;'
-            f'line-height:1.7;">{lines}</div>',
+            f'<div style="font-size:0.9rem;">{lines}</div>',
             unsafe_allow_html=True,
         )
 
@@ -111,16 +119,15 @@ def render(_env_values: dict, config_values: dict):
     st.markdown(f'<p class="section-title">📚 {t("ref_extract_title")}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="hint-text">{t("ref_extract_hint")}</p>', unsafe_allow_html=True)
 
-    st.toggle(
+    reference_extraction_enabled = st.toggle(
         t("enable_ref_extract"),
         value=flat.get("enable_reference_extraction", False),
         key="enable_reference_extraction",
     )
 
-    # 与代理配置一致：开关关闭时收起全部详细设置，磁盘现值保持不变。
-    if st.session_state.get(
-        "enable_reference_extraction", flat.get("enable_reference_extraction", False)
-    ):
+    # 与运行时配置一致：关闭时不显示提取设置，也不展示或使用此前缓存的
+    # 参考关键词；缓存文件保留，重新启用后仍可增量复用。
+    if reference_extraction_enabled:
         col1, col2 = st.columns(2)
         with col1:
             st.number_input(
@@ -198,8 +205,7 @@ def render(_env_values: dict, config_values: dict):
                     key="ref_count_low",
                 )
 
-    # 已提取关键词是只读数据展示，始终可见
-    _render_extracted_keywords_box()
+        _render_extracted_keywords_box()
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:

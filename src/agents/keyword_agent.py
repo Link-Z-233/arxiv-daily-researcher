@@ -420,8 +420,13 @@ class KeywordAgent:
         # 从配置获取主要关键词
         all_keywords = settings.get_merged_keywords()
 
-        # 提取并合并reference关键词
-        reference_keywords = self.generate_weighted_keywords()
+        # 关闭时连缓存读取/合并都不进行。这样旧的关键词缓存仍可在以后
+        # 重新启用时复用，但不会影响当前这次研究的评分或排序。
+        if settings.ENABLE_REFERENCE_EXTRACTION:
+            reference_keywords = self.generate_weighted_keywords()
+        else:
+            reference_keywords = {}
+            logger.info("Reference关键词提取已关闭；仅使用主要关键词。")
 
         # 合并（主要关键词优先，不会被覆盖）
         for kw, weight in reference_keywords.items():
