@@ -364,10 +364,17 @@ def _render_live_status_body() -> None:
 if hasattr(st, "fragment"):
     @st.fragment(run_every="5s")
     def _live_status_fragment() -> None:
-        _render_live_status_body()
+        config_values = st.session_state.get(_PROGRESS_CONFIG_KEY) or {}
+        _render_status_snapshot(config_values)
+        # ``run_every`` is fixed when a fragment starts.  Once the task has
+        # finished, rerun the app scope so the parent stops mounting this
+        # fragment; otherwise an idle status panel would keep polling forever.
+        if not _get_all_running_locks():
+            st.rerun()
 else:  # Streamlit < 1.37：退化为静态渲染，功能不缺失。
     def _live_status_fragment() -> None:
-        _render_live_status_body()
+        config_values = st.session_state.get(_PROGRESS_CONFIG_KEY) or {}
+        _render_status_snapshot(config_values)
 
 
 def _render_run_control() -> None:
@@ -389,19 +396,10 @@ def _render_run_control() -> None:
         st.info(f"⏳ {t('rm_trigger_pending')}")
 
     can_run = not trigger_pending and not is_running
-    col_run, col_refresh = st.columns(2)
-    with col_run:
-        run_clicked = st.button(
-            "▶ " + t("run_now_btn"), key="rm_run_now",
-            type="primary", use_container_width=True, disabled=not can_run,
-        )
-    with col_refresh:
-        st.toggle(
-            t("rm_auto_refresh"),
-            value=st.session_state.get("rm_auto_refresh_on", True),
-            key="rm_auto_refresh_on",
-            help=t("rm_auto_refresh_help"),
-        )
+    run_clicked = st.button(
+        "▶ " + t("run_now_btn"), key="rm_run_now",
+        type="primary", use_container_width=True, disabled=not can_run,
+    )
 
     if run_clicked:
         if _IS_DOCKER_WEBUI:
@@ -584,17 +582,29 @@ def _daily_db_path_from_config(config_values: dict) -> Path:
 # ─── 状态面板 ────────────────────────────────────────────────────────────────
 
 
+def _render_status_snapshot(config_values: dict) -> None:
+    """Render the status-card contents that need periodic updates."""
+    _render_live_status_body()
+    _render_queue_metrics(config_values)
+
+
 def _render_status_panel(config_values: dict) -> None:
-    """运行状态 + 待处理队列合并为一个卡片，避免零散的提示块。"""
+    """运行状态 + 待处理队列；仅在任务运行时自动刷新。"""
     # 进度面板运行在自动刷新的 fragment 里，无法直接接收这里的参数；
     # 把配置快照放进 session_state 供 fragment 每次重绘时读取。
     st.session_state[_PROGRESS_CONFIG_KEY] = dict(config_values or {})
+    auto_refresh = st.toggle(
+        t("rm_auto_refresh"),
+        value=st.session_state.get("rm_auto_refresh_on", True),
+        key="rm_auto_refresh_on",
+        help=t("rm_auto_refresh_help"),
+    )
+    is_running = bool(_get_all_running_locks())
     with st.container(border=True):
-        if st.session_state.get("rm_auto_refresh_on", True):
+        if auto_refresh and is_running:
             _live_status_fragment()
         else:
-            _render_live_status_body()
-        _render_queue_metrics(config_values)
+            _render_status_snapshot(config_values)
 
 
 # ─── 日志查看器 ──────────────────────────────────────────────────────────────

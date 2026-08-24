@@ -67,12 +67,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tab_trend_runner": {"zh": "趋势分析", "en": "Trend Analysis"},
     "rm_auto_refresh": {"zh": "自动刷新", "en": "Auto refresh"},
     "rm_auto_refresh_help": {
-        "zh": "开启后运行状态与日志尾部每 5 秒自动刷新，无需手动刷新页面。",
-        "en": "When on, run status and the log tail refresh every 5 seconds.",
+        "zh": "开启后仅在有任务运行时，每 5 秒刷新状态、队列与日志尾部；任务结束后自动停止刷新。",
+        "en": "When enabled, status, queue, and live log tail refresh every 5 seconds only while a task is running, then stop automatically.",
     },
     "rm_live_tail_hint": {
-        "zh": "尾部 12 行 · 每 5 秒自动刷新",
-        "en": "last 12 lines · auto-refreshes every 5s",
+        "zh": "日志尾部 12 行",
+        "en": "last 12 log lines",
     },
     "rm_queue_pending": {"zh": "待处理队列", "en": "Pending queue"},
     "rm_queue_failed": {"zh": "失败待重试", "en": "Awaiting retry"},
