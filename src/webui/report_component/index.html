@@ -23,7 +23,10 @@
 
   var MIN_HEIGHT = 240;
   var MAX_HEIGHT = 60000;
-  var FALLBACK_HEIGHT = 800;
+  // Long reports resize themselves after the srcdoc height reporter runs.
+  // Keep the initial shell modest so a short/legacy report never leaves a
+  // giant blank block while that handshake is in flight.
+  var FALLBACK_HEIGHT = 360;
   var currentHeight = 0;
   var lastHtml = null;
   var lastStatesText = "{}";

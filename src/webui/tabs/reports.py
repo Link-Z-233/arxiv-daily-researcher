@@ -106,6 +106,38 @@ def _source_from_daily_filename(stem: str) -> str:
     return match.group("source").strip().lower() if match else "unknown"
 
 
+def _disambiguate_daily_displays(reports: list[ReportFile]) -> list[ReportFile]:
+    """Keep timestamp labels unique within each source picker.
+
+    Report filenames include microseconds so two runs in the same wall-clock
+    second never overwrite each other.  The friendly label intentionally hides
+    those microseconds most of the time, but Streamlit's selectbox needs a
+    unique label to let users choose both reports when that rare collision
+    happens (for example a daily report and a supplement report).
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for report in reports:
+        key = (report.source, report.display)
+        counts[key] = counts.get(key, 0) + 1
+
+    used: set[tuple[str, str]] = set()
+    disambiguated: list[ReportFile] = []
+    for report in reports:
+        key = (report.source, report.display)
+        display = report.display
+        if counts[key] > 1:
+            micro = re.search(r"_(\d+)$", report.path.stem)
+            suffix = f".{micro.group(1)}" if micro else " · duplicate"
+            display = f"{display}{suffix}"
+            duplicate_number = 2
+            while (report.source, display) in used:
+                display = f"{report.display}{suffix} · {duplicate_number}"
+                duplicate_number += 1
+        used.add((report.source, display))
+        disambiguated.append(report._replace(display=display))
+    return disambiguated
+
+
 # ─── discovery ────────────────────────────────────────────────────────────────
 
 
@@ -143,6 +175,7 @@ def _discover_reports(reports_dir: Path = _REPORTS_DIR) -> dict[str, list[Report
         # 按报告自身时间戳（文件名）降序：过去日期补跑的报告落在其标注
         # 日期附近，而不是按生成时刻浮到最顶部。
         result["daily"].sort(key=_daily_report_sort_key, reverse=True)
+        result["daily"] = _disambiguate_daily_displays(result["daily"])
 
     # trend_research/html/{keyword-slug}/*.html
     trend_html = reports_dir / "trend_research" / "html"
@@ -371,11 +404,78 @@ iframe {{ display: block; width: 100%; height: 100%; border: 0; }}
 </html>"""
 
 
+_RAW_PREVIEW_HEIGHT_SCRIPT = """<script>(function(){
+  if (window.__arxivPreviewHeightReporter) return;
+  window.__arxivPreviewHeightReporter = true;
+  var lastHeight = 0;
+  var timer = null;
+  function contentHeight(){
+    var body = document.body;
+    if (body) {
+      // ``documentElement.scrollHeight`` includes the iframe viewport.  When
+      // the component starts at its fallback 800px that turns a short report
+      // into a self-reinforcing 800px result.  Measure the actual direct
+      // content instead, including any wrapper used by older report themes.
+      var top = body.getBoundingClientRect().top;
+      var children = body.children || [];
+      var height = 0;
+      for (var i = 0; i < children.length; i++) {
+        height = Math.max(height, Math.ceil(children[i].getBoundingClientRect().bottom - top));
+      }
+      if (height) return height;
+      return Math.max(body.scrollHeight || 0, body.offsetHeight || 0);
+    }
+    var root = document.documentElement;
+    return root ? Math.max(root.scrollHeight || 0, root.offsetHeight || 0) : 0;
+  }
+  function sendHeight(){
+    timer = null;
+    var height = contentHeight();
+    if (!height || height === lastHeight) return;
+    lastHeight = height;
+    parent.postMessage({type:"arxiv-report-height", height:height}, "*");
+  }
+  function schedule(){
+    if (!timer) timer = setTimeout(sendHeight, 80);
+  }
+  window.addEventListener("load", schedule);
+  window.addEventListener("resize", schedule);
+  if (document.readyState === "complete") schedule();
+  if (window.MutationObserver) {
+    new MutationObserver(schedule).observe(document.documentElement, {
+      subtree:true, childList:true, attributes:true
+    });
+  }
+  setTimeout(schedule, 300);
+})();</script>"""
+
+
+def _append_preview_height_reporter(report_html: str) -> str:
+    """Let the existing sandbox component size raw/legacy reports to content.
+
+    Reports with inlined preference controls already carry this protocol. Raw
+    legacy, trend and keyword reports used to take a hard-coded 800px iframe,
+    leaving a conspicuous blank block when their content was short. This
+    small script runs only inside the sandboxed report frame and can only
+    request a bounded visual height from its component parent.
+    """
+    close_idx = report_html.rfind("</body>")
+    if close_idx == -1:
+        return report_html + _RAW_PREVIEW_HEIGHT_SCRIPT
+    return report_html[:close_idx] + _RAW_PREVIEW_HEIGHT_SCRIPT + report_html[close_idx:]
+
+
 def _render_html_iframe(report: ReportFile) -> None:
-    """固定 800px 高度的沙箱 HTML 预览。"""
+    """Render a sandboxed report preview sized to its actual content height."""
     try:
-        html_content = report.path.read_text(encoding="utf-8")
-        components.html(_build_sandboxed_preview_html(html_content), height=800, scrolling=False)
+        html_content = _strip_legacy_title_badges(
+            report.path.read_text(encoding="utf-8")
+        )
+        _render_report_component(
+            _append_preview_height_reporter(html_content),
+            {},
+            f"raw_rv_{report.source}_{report.path.name}",
+        )
     except Exception as e:
         st.error(f"{t('reports_load_error')}: {e}")
 
@@ -542,7 +642,25 @@ _MARK_BAR_JS = """<script>(function(){
     }
   }
   function reportHeight(){
-    var h = document.documentElement && document.documentElement.scrollHeight;
+    // Do not use documentElement.scrollHeight here: in a srcdoc iframe it is
+    // at least the host frame's fallback height (formerly 800px), even when
+    // the actual report is much shorter.
+    var body = document.body;
+    var h = 0;
+    if (body) {
+      var top = body.getBoundingClientRect().top;
+      var children = body.children || [];
+      for (var i = 0; i < children.length; i++) {
+        h = Math.max(h, Math.ceil(children[i].getBoundingClientRect().bottom - top));
+      }
+      if (!h) h = Math.max(body.scrollHeight || 0, body.offsetHeight || 0);
+    }
+    if (!h && document.documentElement) {
+      h = Math.max(
+        document.documentElement.scrollHeight || 0,
+        document.documentElement.offsetHeight || 0
+      );
+    }
     if (!h) return;
     pendingHeight = h;
     if (!heightTimer){ heightTimer = setTimeout(flushHeight, 200); }

@@ -28,6 +28,23 @@ class _IframeAttributeParser(HTMLParser):
 
 
 class WebUiReportPreviewTests(unittest.TestCase):
+    def test_preview_height_reporters_measure_content_not_iframe_viewport(self):
+        from webui.tabs import reports as reports_tab
+
+        raw = reports_tab._append_preview_height_reporter("<html><body><p>x</p></body></html>")
+        # Regression: ``documentElement.scrollHeight`` is at least the
+        # srcdoc iframe height (previously 800px), so it cannot be the primary
+        # measurement for short reports.
+        self.assertIn("function contentHeight()", raw)
+        self.assertIn("children[i].getBoundingClientRect().bottom", raw)
+        self.assertIn("body = document.body", reports_tab._MARK_BAR_JS)
+        self.assertIn("children[i].getBoundingClientRect().bottom", reports_tab._MARK_BAR_JS)
+        component = (
+            Path(reports_tab.__file__).resolve().parent.parent
+            / "report_component" / "index.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn("var FALLBACK_HEIGHT = 360", component)
+
     def test_preview_uses_an_origin_isolated_inner_iframe(self):
         report_html = (
             '<!doctype html><html><body><script>window.parent.pwned = true;</script>'
@@ -159,6 +176,23 @@ class DailyReportTimestampOrderTests(unittest.TestCase):
             "2026-03-03  16:10:08",
         )
         self.assertEqual(_fmt_daily("weird_name"), "weird_name")
+
+    def test_same_second_daily_reports_keep_distinct_picker_labels(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports_root = Path(temp_dir)
+            arxiv_dir = reports_root / "daily_research" / "html" / "arxiv"
+            arxiv_dir.mkdir(parents=True)
+            for micro in ("100001", "200002"):
+                (arxiv_dir / f"ARXIV_Report_2026-08-22_01-57-34_{micro}.html").write_text(
+                    micro, encoding="utf-8"
+                )
+
+            reports = _discover_reports(reports_root)["daily"]
+
+            self.assertEqual(len(reports), 2)
+            self.assertEqual(len({report.display for report in reports}), 2)
+            self.assertIn(".200002", reports[0].display)
+            self.assertIn(".100001", reports[1].display)
 
 
 class DailyReportInlineMarkTests(unittest.TestCase):
