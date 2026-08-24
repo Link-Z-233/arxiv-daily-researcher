@@ -1157,7 +1157,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_backup_import_label": {"zh": "导入备份（zip / gz / db）", "en": "Import backup (zip / gz / db)"},
     "dm_backup_import_btn": {"zh": "📥 导入并覆盖当前数据库", "en": "📥 Import and replace current database"},
     "dm_backup_import_ok": {"zh": "导入成功（来源：{source}）；原数据库已存档：{archived}", "en": "Imported (source: {source}); previous database archived at: {archived}"},
-    "dm_backup_existing": {"zh": "现有备份（最近 10 份）", "en": "Existing backups (latest 10)"},
+    "dm_backup_existing": {"zh": "现有备份", "en": "Existing backups"},
     "dm_backup_none": {"zh": "暂无备份。运行一次每日研究或点击上方按钮即可生成。", "en": "No backups yet. Run the daily research once or use the button above."},
     "dm_backup_col_name": {"zh": "文件名", "en": "File"},
     "dm_backup_col_size": {"zh": "大小", "en": "Size"},
