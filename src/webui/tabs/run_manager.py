@@ -765,14 +765,23 @@ def render(_env_values: dict, config_values: dict) -> None:
     )
     _render_run_control()
 
-    # 过去日报与每日研究是同级运行入口，但它们各自保持清晰的语义：
-    # 前者将一个日期范围排入队列并逐日执行，状态面板统一放在两者之后。
+    st.divider()
+
+    # ── 状态面板 ──────────────────────────────────────────────────────────
+    st.markdown(
+        f'<p class="section-title">📊 {t("rm_status_panel_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    _render_status_panel(config_values)
+
+    st.divider()
+
+    # ── 过去日报 ──────────────────────────────────────────────────────────
     st.markdown(
         f'<p class="section-title">🗓 {t("rm_backfill_section_title")}</p>',
         unsafe_allow_html=True,
     )
     _render_backfill_control(config_values)
-    _render_status_panel(config_values)
 
     st.divider()
 

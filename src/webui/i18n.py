@@ -947,6 +947,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Run request sent! Container will start within 5-10s",
     },
     # ── 过去时间段每日报告 ──
+    "rm_status_panel_title": {"zh": "状态面板", "en": "Status Panel"},
     "rm_backfill_section_title": {"zh": "过去日报", "en": "Past Daily Reports"},
     "rm_backfill_date_from_label": {"zh": "起始日期", "en": "Start date"},
     "rm_backfill_date_to_label": {"zh": "结束日期", "en": "End date"},
