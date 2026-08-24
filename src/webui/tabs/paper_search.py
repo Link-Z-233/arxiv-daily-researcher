@@ -131,6 +131,7 @@ def render(env_values: dict, config_values: dict):
         return
 
     total = result["total"]
+    st.divider()
     st.markdown(
         f'<p class="section-title">{t("ps_result_title").format(total=total)}</p>',
         unsafe_allow_html=True,

@@ -378,6 +378,7 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
         )
 
     # ── 热力图（近一个月，默认滚动到最右/最新）────────────────────────────
+    st.divider()
     st.markdown(
         f'<p class="subsection-title">{t("usage_heatmap_title")}</p>',
         unsafe_allow_html=True,
@@ -386,6 +387,7 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
     components_html(_scroll_right_document(heatmap_html), height=160)
 
     # ── 用量趋势（静态自适应折线图）────────────────────────────────────────
+    st.divider()
     st.markdown(
         f'<p class="subsection-title">{t("usage_trend_title")}</p>',
         unsafe_allow_html=True,
@@ -420,6 +422,7 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
         )
     )
 
+    st.divider()
     st.markdown(
         f'<p class="subsection-title">{t("usage_by_model_title")}</p>',
         unsafe_allow_html=True,
