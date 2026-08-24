@@ -611,7 +611,11 @@ def _do_backup(env_values: dict, config_values: dict | None = None):
         from utils.webdav_sync import WebDAVSync
 
         # 备份默认压缩后上传：只要 WebDAV 凭据可用（表单或 .env）就镜像，
-        # 不再提供单独的上传开关。
+        # 但必须先尊重 WebDAV 总开关；关闭后绝不能因 .env 残留凭据而写远端。
+        flat = config_values or {}
+        webdav_enabled = st.session_state.get(
+            "webdav_enabled", flat.get("webdav_enabled", False)
+        )
         url = (st.session_state.get("webdav_url") or env_values.get("WEBDAV_URL") or "").strip()
         username = (
             st.session_state.get("webdav_username") or env_values.get("WEBDAV_USERNAME") or ""
@@ -620,7 +624,7 @@ def _do_backup(env_values: dict, config_values: dict | None = None):
             env_values, "WEBDAV_PASSWORD", "webdav_password", st.session_state
         )
         webdav_sync = None
-        if url and username:
+        if webdav_enabled and url and username:
             webdav_sync = WebDAVSync(
                 url=url,
                 username=username,

@@ -259,6 +259,58 @@ class LazyPageCollectTests(unittest.TestCase):
             data_management._PROJECT_ROOT / "data" / "custom_sqlite" / "papers.db",
         )
 
+    def test_backup_now_does_not_use_webdav_credentials_when_disabled(self):
+        """Disabled WebDAV must keep a manual backup strictly local."""
+        from webui.tabs import data_management
+
+        class _Spinner:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class _FakeStreamlit:
+            def __init__(self):
+                self.session_state = _FakeSessionState(
+                    {"backup_local_retention_days": 7, "webdav_enabled": False}
+                )
+
+            def info(self, *_args, **_kwargs):
+                pass
+
+            def success(self, *_args, **_kwargs):
+                pass
+
+            def spinner(self, *_args, **_kwargs):
+                return _Spinner()
+
+            def rerun(self):
+                pass
+
+        fake_st = _FakeStreamlit()
+        with (
+            patch.object(data_management, "st", fake_st),
+            patch(
+                "utils.backup.create_backup",
+                return_value={"created": True, "uploaded": False},
+            ) as create_backup,
+            patch(
+                "utils.webdav_sync.WebDAVSync",
+                side_effect=AssertionError("disabled WebDAV must not be initialized"),
+            ),
+        ):
+            data_management._do_backup(
+                {
+                    "WEBDAV_URL": "https://dav.example.test/",
+                    "WEBDAV_USERNAME": "configured-user",
+                    "WEBDAV_PASSWORD": "configured-password",
+                },
+                {"webdav_enabled": False},
+            )
+
+        self.assertIsNone(create_backup.call_args.kwargs["webdav_sync"])
+
 
 if __name__ == "__main__":
     unittest.main()
