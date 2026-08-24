@@ -68,6 +68,59 @@ class DailyResearchStore:
         except ImportError:
             return None
 
+    @staticmethod
+    def _migration_identity(
+        source: object,
+        paper_id: object,
+        canonical_id: object,
+        version: object,
+        paper_identity,
+    ) -> tuple[str, int]:
+        """Return a safe persisted identity while upgrading an older database.
+
+        arXiv versions are recoverable from their paper IDs.  Other sources
+        may use a normalized DOI (rather than their URL-shaped paper ID), so
+        preserve that stored identity whenever possible.  Legacy HTML imports
+        are the important exception: their paper IDs are DOI URLs, which can
+        be normalized deterministically before an exact-delivery index is
+        restored.
+        """
+        source_text = str(source or "").strip().lower()
+        paper_text = str(paper_id or "").strip()
+        canonical_text = str(canonical_id or "").strip()
+        try:
+            normalized_version = max(0, int(version or 0))
+        except (TypeError, ValueError):
+            normalized_version = 0
+
+        if source_text == "arxiv":
+            canonical, parsed_version = paper_identity(source_text, paper_text)
+            return canonical, parsed_version if parsed_version is not None else 0
+
+        def normalize_doi_url(value: str) -> str:
+            lowered = value.lower()
+            for prefix in (
+                "https://doi.org/",
+                "http://doi.org/",
+                "https://dx.doi.org/",
+                "http://dx.doi.org/",
+            ):
+                if lowered.startswith(prefix):
+                    return value[len(prefix) :].strip().rstrip("/.").lower()
+            if lowered.startswith("10."):
+                return value.rstrip("/.").lower()
+            return value
+
+        # A DOI URL is more precise than an old, URL-shaped canonical field.
+        # Otherwise retain the existing canonical value from sources whose
+        # opaque IDs cannot be reconstructed from a generic paper ID.
+        normalized_paper = normalize_doi_url(paper_text)
+        normalized_canonical = normalize_doi_url(canonical_text or paper_text)
+        return (
+            normalized_paper if normalized_paper != paper_text else normalized_canonical,
+            normalized_version,
+        )
+
     def _connect(self):
         conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
@@ -433,8 +486,13 @@ class DailyResearchStore:
             "SELECT source, paper_id, canonical_id, version FROM daily_papers"
         ).fetchall()
         for row in rows:
-            canonical_id, version = paper_identity(row["source"], row["paper_id"])
-            desired_version = version if version is not None else 0
+            canonical_id, desired_version = DailyResearchStore._migration_identity(
+                row["source"],
+                row["paper_id"],
+                row["canonical_id"],
+                row["version"],
+                paper_identity,
+            )
             if row["canonical_id"] != canonical_id or row["version"] != desired_version:
                 conn.execute(
                     "UPDATE daily_papers SET canonical_id = ?, version = ? "
@@ -521,14 +579,29 @@ class DailyResearchStore:
         rows = conn.execute(
             "SELECT delivery_id, source, paper_id, canonical_id, version FROM paper_deliveries"
         ).fetchall()
+        updates = []
         for row in rows:
-            canonical_id, version = paper_identity(row["source"], row["paper_id"])
-            desired_version = version if version is not None else 0
+            canonical_id, desired_version = DailyResearchStore._migration_identity(
+                row["source"],
+                row["paper_id"],
+                row["canonical_id"],
+                row["version"],
+                paper_identity,
+            )
             if row["canonical_id"] != canonical_id or row["version"] != desired_version:
-                conn.execute(
-                    "UPDATE paper_deliveries SET canonical_id = ?, version = ? WHERE delivery_id = ?",
-                    (canonical_id, desired_version, row["delivery_id"]),
-                )
+                updates.append((canonical_id, desired_version, row["delivery_id"]))
+
+        if updates:
+            # Existing releases may already have the exact-version unique
+            # index.  Identity backfill can intentionally merge old aliases
+            # (for example DOI URL vs bare DOI), so update under no exact
+            # constraint, then let the next migration step keep one ledger
+            # row and recreate the index atomically in this transaction.
+            conn.execute("DROP INDEX IF EXISTS idx_paper_deliveries_exact_version")
+            conn.executemany(
+                "UPDATE paper_deliveries SET canonical_id = ?, version = ? WHERE delivery_id = ?",
+                updates,
+            )
 
     @staticmethod
     def _migrate_delivery_exact_version_constraint(conn):

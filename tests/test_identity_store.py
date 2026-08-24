@@ -452,6 +452,79 @@ class IdentityStoreTests(unittest.TestCase):
             self.assertEqual(previous["paper_id"], "2501.12345v1")
             self.assertEqual(previous["version"], 1)
 
+    def test_delivery_identity_migration_deduplicates_legacy_doi_aliases(self):
+        """A DOI URL and bare DOI may merge after a legacy-history import."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "daily.db"
+            doi_url = "https://doi.org/10.1103/example.123"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE paper_deliveries (
+                        delivery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        run_id TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        paper_id TEXT NOT NULL,
+                        canonical_id TEXT NOT NULL,
+                        version INTEGER NOT NULL DEFAULT 0,
+                        report_path TEXT,
+                        delivered_at TEXT NOT NULL,
+                        UNIQUE(run_id, source, paper_id)
+                    )
+                    """
+                )
+                conn.execute(
+                    "CREATE UNIQUE INDEX idx_paper_deliveries_exact_version "
+                    "ON paper_deliveries(source, canonical_id, version)"
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO paper_deliveries(
+                        run_id, source, paper_id, canonical_id, version,
+                        report_path, delivered_at
+                    ) VALUES (?, 'prl', ?, ?, 0, ?, ?)
+                    """,
+                    [
+                        (
+                            "first-run",
+                            doi_url,
+                            doi_url,
+                            "first.html",
+                            "2026-01-01T00:00:00",
+                        ),
+                        (
+                            "second-run",
+                            doi_url,
+                            "10.1103/example.123",
+                            "second.html",
+                            "2026-01-02T00:00:00",
+                        ),
+                    ],
+                )
+
+            store = DailyResearchStore(db_path)
+            with store._connect() as conn:
+                deliveries = conn.execute(
+                    "SELECT run_id, canonical_id, report_path FROM paper_deliveries"
+                ).fetchall()
+                indexes = conn.execute("PRAGMA index_list(paper_deliveries)").fetchall()
+
+            self.assertEqual(len(deliveries), 1)
+            self.assertEqual(
+                dict(deliveries[0]),
+                {
+                    "run_id": "first-run",
+                    "canonical_id": "10.1103/example.123",
+                    "report_path": "first.html",
+                },
+            )
+            self.assertTrue(
+                any(
+                    index[1] == "idx_paper_deliveries_exact_version" and index[2]
+                    for index in indexes
+                )
+            )
+
     def test_report_status_label_identifies_revision_and_retry(self):
         paper = _paper("2501.12345v2")
         self.assertIn("修订版 v2", Reporter._paper_status_label({
