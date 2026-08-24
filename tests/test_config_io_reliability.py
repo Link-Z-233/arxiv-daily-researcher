@@ -320,6 +320,25 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         flat = flatten_config_dict(config)
         self.assertEqual(flat["pdf_download_max_bytes"], 12 * 1024 * 1024)
 
+    def test_custom_path_roots_survive_an_unrelated_config_save_round_trip(self):
+        """Global WebUI saves must retain hidden/custom path settings."""
+        original = {
+            "paths": {
+                "data_dir": "data/migration-test",
+                "reference_pdfs": "data/migration-test/reference_pdfs",
+                "reports": "data/migration-test/reports",
+                "downloaded_pdfs": "data/migration-test/downloaded_pdfs",
+                "history_dir": "data/migration-test/history",
+                "history_file": "data/migration-test/history/arxiv_history.json",
+            },
+            "daily_research": {"max_papers_per_run": 5},
+        }
+
+        saved = build_config_dict(**flatten_config_dict(original))
+
+        self.assertEqual(saved["paths"], original["paths"])
+        self.assertEqual(saved["daily_research"]["max_papers_per_run"], 5)
+
     def test_huggingface_papers_configuration_and_proxy_round_trip(self):
         config = build_config_dict(
             enabled_sources=["arxiv", "huggingface_papers"],

@@ -665,6 +665,12 @@ def build_config_dict(
     daily_max_papers_per_run: int = 200,
     daily_run_time: str = "12:00",
     daily_enable_deep_analysis: bool = True,
+    data_dir: str = "data",
+    reference_pdfs: str = "data/reference_pdfs",
+    reports: str = "data/reports",
+    downloaded_pdfs: str = "data/downloaded_pdfs",
+    history_dir: str = "data/history",
+    history_file: Optional[str] = None,
     pdf_parser_mode: str = "pymupdf",
     mineru_model_version: str = "pipeline",
     mineru_poll_interval: int = 3,
@@ -846,11 +852,11 @@ def build_config_dict(
             "include_all_in_report": include_all_in_report,
         },
         "paths": {
-            "data_dir": "data",
-            "reference_pdfs": "data/reference_pdfs",
-            "reports": "data/reports",
-            "downloaded_pdfs": "data/downloaded_pdfs",
-            "history_dir": "data/history",
+            "data_dir": data_dir,
+            "reference_pdfs": reference_pdfs,
+            "reports": reports,
+            "downloaded_pdfs": downloaded_pdfs,
+            "history_dir": history_dir,
         },
         "keyword_tracker": {
             "enabled": keyword_tracker_enabled,
@@ -993,6 +999,12 @@ def build_config_dict(
             "learned_weight_dampening": learned_weight_dampening,
             "learned_term_weight_cap": learned_term_weight_cap,
         }
+
+    # ``history_file`` was used by older configurations alongside
+    # ``history_dir``.  It is not edited by a current WebUI widget, but a
+    # save from any other tab must never silently discard it.
+    if history_file is not None:
+        config["paths"]["history_file"] = history_file
 
     return config
 
@@ -1139,6 +1151,23 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
         flat["learned_weight_dampening"] = 0.5
         flat["learned_term_weight_cap"] = 2.0
     flat["include_all_in_report"] = sc.get("include_all_in_report", True)
+
+    # Paths have no dedicated visible controls today (apart from the daily
+    # SQLite path in Advanced).  They still need to participate in the flat
+    # save contract: otherwise pressing “保存所有更改” on an unrelated tab
+    # replaces a user's custom data/report/history roots with hard-coded
+    # defaults.
+    paths = config.get("paths", {})
+    if not isinstance(paths, dict):
+        paths = {}
+    flat["data_dir"] = paths.get("data_dir", "data")
+    flat["reference_pdfs"] = paths.get("reference_pdfs", "data/reference_pdfs")
+    flat["reports"] = paths.get("reports", "data/reports")
+    flat["downloaded_pdfs"] = paths.get(
+        "downloaded_pdfs", "data/downloaded_pdfs"
+    )
+    flat["history_dir"] = paths.get("history_dir", "data/history")
+    flat["history_file"] = paths.get("history_file")
 
     # Keyword tracker
     kt = config.get("keyword_tracker", {})
