@@ -112,6 +112,25 @@ Metadata search over SQLite: title/author/abstract/TLDR/extracted-keyword matchi
 </td>
 </tr>
 <tr>
+<td colspan="2" align="center"><sub>— Legacy Migration & Backfill —</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 📜 Legacy History Import + Range Scan
+
+Upgrading from v3.x: one click on **Read Legacy History** (Data Management) parses the v3.2 history JSON and every HTML report card into SQLite (scores, translations, deep analyses included) — newest analysis wins on duplicates, incomplete records go to a retry backlog, and the import is idempotent. A chunked **range re-scan of arXiv** then finds papers the old deployment missed. Both jobs queue up at idle time and never collide with a running daily research.
+
+</td>
+<td width="50%" valign="top">
+
+### 🧩 Supplement Reports + Past-Date Dailies
+
+After Read Legacy History finishes, its backlog (missing data + missed papers) automatically reruns through the daily pipeline as one **supplement report** — same format, capped by the per-run limit. The Daily Push tab can also queue a **past-date range** and rebuild each day in date order; each filename timestamp is that past date plus the actual run time, so reports line up with genuine history under Reports → Daily Research.
+
+</td>
+</tr>
+<tr>
 <td colspan="2" align="center"><sub>— Config & Operations —</sub></td>
 </tr>
 <tr>
@@ -126,7 +145,7 @@ A 7-step CLI wizard bootstraps first deployments (auto-triggered on first Docker
 
 ### 🛡️ Production-Grade Reliability
 
-**SQLite persistent queue** (resume after interruption, failed papers retried first, per-run cap against first-deploy floods), **atomic delivery** (report + delivery + notifications + maintenance in one transaction), **shared LLM timeout/retry policy** (per-request timeout, exponential backoff with jitter, Retry-After honored, fast-fail on auth errors), **arXiv rate-limit backoff with cross-domain cooldown**, **no-progress watchdog**, **file locks**, **gzip DB backups with WebDAV rotation**, **per-service proxy**.
+**SQLite persistent queue** (resume after interruption, failed papers retried first, per-run cap against first-deploy floods), **atomic delivery** (report + delivery + notifications + maintenance in one transaction), **shared LLM timeout/retry policy** (per-request timeout, exponential backoff with jitter, Retry-After honored, fast-fail on auth errors), **arXiv rate-limit backoff with cross-domain cooldown**, **no-progress watchdog**, **file locks**, **gzip DB backups** (local full copies are automatically cleaned by a configurable retention window, 7 days by default; enter `0` to keep them forever; incremental WebDAV mirror never deletes remote files), **per-service proxy**.
 
 </td>
 </tr>
@@ -293,16 +312,16 @@ The panel shares `.env` and `configs/config.json` with the worker; changes take 
 
 |  #    | Tab                    | What it does                                                                                                                                                  |
 | :---: | :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-|   1   | **Daily Push**         | Run-now button; **live run status** (lock/PID + **phase heartbeat progress**: prepare → scan → score/translate → analyze → report, with registered/scored/analyzed/failed counts and elapsed time, 5s auto-refresh); stop (with confirmation); **daily research settings** (daily run time / HTML / Markdown / include-all / per-run cap); log viewer |
+|   1   | **Daily Push**         | Run-now button; a peer-level **Past Daily Reports** section below it (pick a date range, persist it in a queue, rebuild each day in order, then click Start Run); then **live run status** (lock/PID + **phase heartbeat progress**: prepare → scan → score/translate → analyze → report, with registered/scored/analyzed/failed counts and elapsed time, 5s auto-refresh); stop (with confirmation); **daily research settings** (daily run time / HTML / Markdown / include-all / per-run cap); log viewer |
 |   2   | **Reports**            | Daily / trend / keyword-trend HTML reports with preview and date navigation; mark papers 👍/👎 inside report cards (flash-free, persisted instantly)           |
 |   3   | **Favorites & Search** | **Liked papers** (chronological, titles hyperlink to arXiv, 👍/👎 metrics) + **keyword statistics** (liked-paper keyword frequency, top authors) + **paper search** (full history) |
 |   4   | **Trend Analysis**     | Keywords, date range, **full ArXiv category dropdown**, sorting, max results, TLDR, output formats and skills; custom analysis prompts (save/apply/delete templates); start/stop |
 |   5   | **Keywords**           | Research context (top), primary keywords, reference-PDF extraction (high/medium/low weight tiers + extracted list), similarity threshold                        |
-|   6   | **Search & Sources**   | Search days, source toggles, extra sources (dropdown multi-select + custom), **full ArXiv category multi-select**, fetch timeout                              |
+|   6   | **Search & Sources**   | Fixed recent 3-day daily window, source toggles, extra sources (dropdown multi-select + custom), **full ArXiv category multi-select**, fetch timeout         |
 |   7   | **Scoring**            | Strategy (v1 / V2 / learned), pass-line formula, per-keyword cap, author bonus, learned-library preview, live scoring preview                                  |
 |   8   | **Analytics**          | Token usage (today/30-day totals, one-month heatmap, adaptive line chart, per-model), source health (last 20 scan receipts), compact run diagnostics           |
 |   9   | **Notifications**      | Global toggle, success/failure/attachment control, six channels, SMTP test                                                                                    |
-|  10   | **Data Management**    | Config export (zip), **WebDAV sync** (manual / scheduled / after-report), **DB backup** (gzip + local/WebDAV rotation + run now)                               |
+|  10   | **Data Management**    | Config export (zip), **WebDAV sync** (manual / scheduled / after-report), **DB backup** (gzip; configurable local full-backup retention, 7 days by default; enter `0` to keep forever; incremental WebDAV mirror, run now) + **legacy history import** (read legacy history + range scan + supplement report, idle-time)                               |
 |  11   | **API**                | CHEAP_LLM / SMART_LLM / MinerU with connectivity tests                                                                                                        |
 |  12   | **Advanced**           | PDF parser (pymupdf default), concurrency, token tracking, update checks, keyword tracking, retries, log rotation, stale-lock recovery, **proxy**              |
 
@@ -489,7 +508,7 @@ crontab -e
 | :---------- | :----------------------------- | :----------------------------- |
 | Purpose     | Daily tracking of new papers   | Long-range topic analysis      |
 | Sources     | ArXiv + declarative journals   | ArXiv                          |
-| Time range  | Last N days (+ announcement grace) | Arbitrary range            |
+| Time range  | Fixed last 3 days (+ announcement grace; past dates backfillable) | Arbitrary range |
 | Filtering   | Weighted scoring (3 strategies) | None — keep everything        |
 | Analysis    | PDF deep analysis for top papers | Per-paper TLDR + synthesis    |
 | Triggered   | Cron / Docker / Actions / panel | CLI / panel / Actions         |
@@ -506,7 +525,13 @@ crontab -e
 6. Send notifications, run DB backup and WebDAV maintenance
 ```
 
-Every phase transition writes a heartbeat; the Daily Push tab shows the current phase (prepare/scan/score/analyze/report) plus registered/scored/analyzed/failed counts. `max_papers_per_run` (default 200, `0` = unlimited) prevents first-deploy floods; leftovers stay queued and failed papers are retried first.
+Every phase transition writes a heartbeat; the Daily Push tab shows the current phase (prepare/scan/score/analyze/report) plus registered/scored/analyzed/failed counts. Daily reports cover a **fixed 3-day window** and process every new paper in it (failed runs widen the watermark window automatically; delivered versions are deduplicated by the ledger) — older dates are rebuilt through past-date reports. `max_papers_per_run` (default 200, `0` = unlimited) prevents first-deploy floods; leftovers stay queued and failed papers are retried first; supplement reports obey the same cap.
+
+### 🧩 Backfill & Legacy Migration
+
+- **Legacy history import + automatic supplement** (`--mode legacy_import`, one click in Data Management): parses the v3.2 history JSON and all HTML reports into SQLite, then re-scans the covered date range on arXiv for missed papers. Missing and missed papers automatically continue into one capped supplement report within that same workflow; delivered entries settle out, and failures retry on the next Read Legacy History.
+- **Past-date daily report** (`--mode backfill_run --date-from YYYY-MM-DD --date-to YYYY-MM-DD`): persists every selected date in a durable queue and runs them in date order, each with full scoring/translation/analysis. A failed day remains recorded without blocking later days; the report filename timestamp is the past date plus actual run time.
+- These workflows are idle-time jobs: they wait for daily, trend, and maintenance work, do not collide, and are resumable/idempotent.
 
 ### 🎯 Dynamic pass line
 
@@ -792,7 +817,7 @@ See **[CHANGELOG.md](CHANGELOG.md)** for the full history.
 
 <table>
 <tr><th>Version</th><th>Date</th><th>Type</th><th>Highlights</th></tr>
-<tr><td><b>v4.0</b></td><td>2026-08-23</td><td>🚀 Major</td><td>SQLite daily history with exact-version delivery, persistent processing queue, full arXiv pagination with scan receipts, declarative extra sources, learned-mode scoring, gzip DB backups, full-history paper search, standalone Favorites & Search tab (chronological favorites with arXiv links + keyword stats), full ArXiv category dropdowns, panel-configurable daily run time (default 12:00, config-only), silent midnight keyword normalization, live phase progress for long runs, shared LLM timeout/retry hardening and unified arXiv backoff (Retry-After + cross-domain cooldown), one-click worker restart, live run monitoring and stop control, Docker image split with security fixes, large-scale reliability hardening (fail-closed, atomic delivery, boundary hardening)</td></tr>
+<tr><td><b>v4.0</b></td><td>2026-08-23</td><td>🚀 Major</td><td>SQLite daily history with exact-version delivery, persistent processing queue, full arXiv pagination with scan receipts, declarative extra sources, learned-mode scoring, gzip DB backups (local full copies automatically cleaned by a configurable retention window, 7 days by default; enter `0` to keep forever; incremental never-deleting WebDAV mirror), full-history paper search, standalone Favorites & Search tab (chronological favorites with arXiv links + keyword stats), full ArXiv category dropdowns, panel-configurable daily run time (default 12:00, config-only), silent midnight keyword normalization, live phase progress for long runs, shared LLM timeout/retry hardening and unified arXiv backoff (Retry-After + cross-domain cooldown), one-click worker restart, live run monitoring and stop control, one-click v3.2 legacy history import with range re-scan and supplement reports, past-date daily report rebuilds (reports sorted by filename timestamp), fixed 3-day daily window (search-days config removed), Docker image split with security fixes, large-scale reliability hardening (fail-closed, atomic delivery, boundary hardening)</td></tr>
 <tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ Enhancement + 🐛 Fixes</td><td>Per-service proxy, WebDAV sync (with Jianguoyun compatibility), config export, Docker update notices, independent Markdown/HTML toggles, dual trend-output switches, ArXiv fetch tuning, configurable daily deep analysis</td></tr>
 <tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ Enhancement + 🐛 Fixes</td><td>Run manager tab, log viewer upgrades, trend analysis tab, report viewer improvements, ArXiv timeout guard, stale-lock recovery</td></tr>
 <tr><td><b>v3.0</b></td><td>2026-03-09</td><td>✨ Major</td><td>Trend research mode, trend Actions workflow, comprehensive trend analysis, token tracking, auto-triggered wizard, concurrency locks, per-run logs, Streamlit panel with report viewer, keyword-trend HTML reports</td></tr>
