@@ -442,7 +442,7 @@ def _render_backfill_control(config_values: dict) -> None:
         st.warning(f"⚠️ {t('rm_trigger_stale').format(n=int(trigger_age or 0))}")
 
     latest_past_date = datetime.date.today() - datetime.timedelta(days=1)
-    col_from, col_to, col_start = st.columns([2, 2, 1.25])
+    col_from, col_to = st.columns(2)
     with col_from:
         date_from = st.date_input(
             t("rm_backfill_date_from_label"),
@@ -465,14 +465,14 @@ def _render_backfill_control(config_values: dict) -> None:
     valid_range = date_from <= date_to
     if not valid_range:
         st.warning(t("rm_backfill_invalid_range"))
-    with col_start:
-        backfill_clicked = st.button(
-            "▶ " + t("rm_backfill_btn"),
-            key="rm_backfill_run",
-            type="primary",
-            use_container_width=True,
-            disabled=not can_run or not valid_range,
-        )
+    # 操作按钮独占下一行，让日期范围清晰且避免窄列中的长按钮换行。
+    backfill_clicked = st.button(
+        "▶ " + t("rm_backfill_btn"),
+        key="rm_backfill_run",
+        type="primary",
+        use_container_width=True,
+        disabled=not can_run or not valid_range,
+    )
 
     if backfill_clicked:
         if _IS_DOCKER_WEBUI:
