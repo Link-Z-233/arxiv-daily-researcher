@@ -16,6 +16,10 @@ from webui.i18n import t
 from webui.tabs import paper_search
 
 
+_MAX_VISIBLE_LIST_ROWS = 10
+_TABLE_SCROLL_HEIGHT_PX = 390
+
+
 def _fallback_url(source: str, paper_id: str) -> str | None:
     """元数据缺 URL 时按来源构造论文页链接（arXiv 短 id 可直接访问）。"""
     if source.lower() == "arxiv" and paper_id:
@@ -52,21 +56,29 @@ def _render_favorites_list(store: DailyResearchStore, liked: list[dict]) -> None
 
 def _render_preference_stats(store: DailyResearchStore) -> None:
     """收藏画像：关键词统计（取代旧的领域统计）+ 高频作者。"""
+
+    def render_ranked_table(rows: list[dict], columns: list[str]) -> None:
+        """Keep every statistic, with a native scroll viewport after 10 rows."""
+        table = pd.DataFrame(rows, columns=columns)
+        if len(table) > _MAX_VISIBLE_LIST_ROWS:
+            with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
+                st.table(table)
+        else:
+            st.table(table)
+
     aggregation = store.aggregate_liked_preferences()
     col_authors, col_keywords = st.columns(2)
     with col_authors:
         st.markdown(f"**👤 {t('fav_top_authors')}**")
         if aggregation["authors"]:
-            st.table(
-                pd.DataFrame(aggregation["authors"][:10], columns=["name", "count"])
-            )
+            render_ranked_table(aggregation["authors"], ["name", "count"])
         else:
             st.caption(t("fav_no_marks"))
     with col_keywords:
         st.markdown(f"**🔑 {t('fav_keywords_title')}**")
         ranked = store.aggregate_liked_keywords()
         if ranked:
-            st.table(pd.DataFrame(ranked[:10], columns=["keyword", "count"]))
+            render_ranked_table(ranked, ["keyword", "count"])
         else:
             st.caption(t("fav_keywords_empty"))
 
