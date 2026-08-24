@@ -1032,7 +1032,7 @@ class DailyResearchPipeline:
                     store, papers_by_source
                 )
                 registered_candidate_count = store.register_paper_candidates(
-                    run_id, papers_by_source
+                    run_id, papers_by_source, queue_scope="backfill"
                 )
                 limit = int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0) or 0)
                 selected_by_source: Dict[str, List[PaperMetadata]] = {}

@@ -199,6 +199,19 @@ class BackfillPipelineTests(unittest.TestCase):
             store = DailyResearchStore(db_path)
             self.assertTrue(store.is_paper_delivered_strict("arxiv", "2601.1v1"))
             self.assertFalse(store.is_paper_delivered_strict("arxiv", "2601.2v1"))
+            # Deferred past-date work remains durable, but an ordinary daily
+            # run must not pick it up and place it in today's report.
+            ordinary_pending, ordinary_count = store.select_pending_papers(
+                ["arxiv"], limit=0
+            )
+            self.assertEqual(ordinary_pending, {})
+            self.assertEqual(ordinary_count, 0)
+            with store._connect() as conn:
+                deferred_scope = conn.execute(
+                    "SELECT queue_scope FROM daily_papers "
+                    "WHERE source = 'arxiv' AND paper_id = '2601.2v1'"
+                ).fetchone()[0]
+            self.assertEqual(deferred_scope, "backfill")
             # 补跑不推进扫描水位线。
             self.assertIsNone(store.get_scan_watermark("arxiv"))
             with store._connect() as conn:

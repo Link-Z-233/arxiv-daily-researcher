@@ -172,17 +172,23 @@ class DailyResearchStore:
                     analysis_input_fingerprint TEXT,
                     completed_at TEXT,
                     last_error TEXT,
+                    queue_scope TEXT NOT NULL DEFAULT 'daily',
                     PRIMARY KEY (source, paper_id)
                 )
                 """
             )
             self._migrate_paper_identity(conn)
+            self._migrate_paper_queue_scope(conn)
             self._migrate_stage_state(conn)
             self._migrate_stage_fingerprints(conn)
             self._migrate_score_audit_state(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_papers_run ON daily_papers(run_id)")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_papers_completed ON daily_papers(completed_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_daily_papers_scope_pending "
+                "ON daily_papers(queue_scope, completed_at)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_papers_identity "
@@ -499,6 +505,40 @@ class DailyResearchStore:
                     "WHERE source = ? AND paper_id = ?",
                     (canonical_id, desired_version, row["source"], row["paper_id"]),
                 )
+
+    @staticmethod
+    def _migrate_paper_queue_scope(conn):
+        """Keep deferred past-date candidates out of ordinary daily runs.
+
+        Backfill runs use the same durable paper ledger as the normal daily
+        workflow. Before this scope existed, a capped past-date run left its
+        unselected papers in the ordinary pending queue, so the next current
+        daily report could silently include old papers. Existing uncompleted
+        rows whose last owning run was a backfill are safely quarantined too.
+        """
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        if "queue_scope" not in columns:
+            conn.execute(
+                "ALTER TABLE daily_papers "
+                "ADD COLUMN queue_scope TEXT NOT NULL DEFAULT 'daily'"
+            )
+        conn.execute(
+            """
+            UPDATE daily_papers
+            SET queue_scope = 'backfill'
+            WHERE completed_at IS NULL
+              AND queue_scope = 'daily'
+              AND EXISTS (
+                  SELECT 1
+                  FROM daily_runs
+                  WHERE daily_runs.run_id = daily_papers.run_id
+                    AND daily_runs.run_kind = 'backfill'
+              )
+            """
+        )
 
     @staticmethod
     def _migrate_stage_state(conn):
@@ -2052,17 +2092,21 @@ class DailyResearchStore:
         return ranked[: max(1, int(limit))]
 
     def count_pending_papers(self) -> Dict[str, int]:
-        """Global durable-queue depth: uncompleted papers, split by retry need.
+        """Ordinary daily-queue depth, split by retry need.
 
         Pure SQL with no paper-source imports so the thin WebUI image can
-        surface the real backlog any time.
+        surface the normal daily backlog any time. Deferred past-date papers
+        have their own backfill scope and must not make the current-day queue
+        look actionable.
         """
         with self._connect() as conn:
             total = conn.execute(
-                "SELECT COUNT(*) AS n FROM daily_papers WHERE completed_at IS NULL"
+                "SELECT COUNT(*) AS n FROM daily_papers "
+                "WHERE completed_at IS NULL AND queue_scope = 'daily'"
             ).fetchone()["n"] or 0
             failed = conn.execute(
-                "SELECT COUNT(*) AS n FROM daily_papers WHERE completed_at IS NULL "
+                "SELECT COUNT(*) AS n FROM daily_papers "
+                "WHERE completed_at IS NULL AND queue_scope = 'daily' "
                 "AND (score_status = 'failed' OR translation_status = 'failed' "
                 "OR analysis_status = 'failed')"
             ).fetchone()["n"] or 0
@@ -3088,14 +3132,21 @@ class DailyResearchStore:
         self,
         run_id: str,
         papers_by_source: Dict[str, list["PaperMetadata"]],
+        *,
+        queue_scope: str = "daily",
     ) -> int:
         """Durably register every newly discovered candidate before limiting work.
 
         A per-run processing limit must never truncate an upstream scan.  All
         exact source/version candidates enter ``daily_papers`` first; papers
         not selected in this run remain pending and are eligible next time even
-        after the successful scan watermark advances.
+        after the successful scan watermark advances. ``backfill`` rows are
+        deliberately excluded from the ordinary daily selector: a current
+        report must never consume deferred papers from a past-date report.
         """
+        normalized_scope = str(queue_scope or "").strip().lower()
+        if normalized_scope not in {"daily", "backfill"}:
+            raise ValueError("candidate queue scope must be 'daily' or 'backfill'")
         registered = 0
         seen_identities = set()
         candidates = []
@@ -3140,13 +3191,17 @@ class DailyResearchStore:
                     """
                     INSERT INTO daily_papers(
                         source, paper_id, canonical_id, version,
-                        first_seen_at, last_seen_at, run_id, paper_json
+                        first_seen_at, last_seen_at, run_id, queue_scope, paper_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source, paper_id) DO UPDATE SET
                         canonical_id = excluded.canonical_id,
                         version = excluded.version,
                         last_seen_at = excluded.last_seen_at,
+                        queue_scope = CASE
+                            WHEN excluded.queue_scope = 'backfill' THEN 'backfill'
+                            ELSE daily_papers.queue_scope
+                        END,
                         paper_json = excluded.paper_json
                     """,
                     (
@@ -3157,6 +3212,7 @@ class DailyResearchStore:
                         candidate_seen_at,
                         candidate_seen_at,
                         run_id,
+                        normalized_scope,
                         json.dumps(paper.to_dict(), ensure_ascii=False),
                     ),
                 )
@@ -3186,17 +3242,22 @@ class DailyResearchStore:
         )
 
     def select_pending_papers(
-        self, enabled_sources: list[str], limit: int = 0
+        self, enabled_sources: list[str], limit: int = 0, *, queue_scope: str = "daily"
     ) -> tuple[Dict[str, list["PaperMetadata"]], int]:
         """Return the deterministic pending queue and its total size.
 
         ``limit == 0`` means all pending papers.  Failed/retried records are
         attempted first, followed by older queued records and publication time.
         Only currently enabled report sources are selected; disabling a source
-        preserves its backlog without processing it unexpectedly.
+        preserves its backlog without processing it unexpectedly. The default
+        is the ordinary daily queue; historical backfill candidates are only
+        processed by an explicit past-date run.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
             raise ValueError("daily paper limit must be a non-negative integer")
+        normalized_scope = str(queue_scope or "").strip().lower()
+        if normalized_scope not in {"daily", "backfill"}:
+            raise ValueError("pending queue scope must be 'daily' or 'backfill'")
         sources = sorted(
             {str(source).strip().lower() for source in enabled_sources if str(source).strip()}
         )
@@ -3212,6 +3273,7 @@ class DailyResearchStore:
                 + placeholders
                 + """)
                   AND daily_papers.completed_at IS NULL
+                  AND daily_papers.queue_scope = ?
                   AND NOT EXISTS (
                       SELECT 1 FROM paper_deliveries
                       WHERE paper_deliveries.source = daily_papers.source
@@ -3219,7 +3281,7 @@ class DailyResearchStore:
                         AND paper_deliveries.version = daily_papers.version
                   )
                 """,
-                sources,
+                [*sources, normalized_scope],
             ).fetchall()
 
         pending = []
