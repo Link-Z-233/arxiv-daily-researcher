@@ -177,7 +177,7 @@ A 7-step CLI wizard bootstraps first deployments (auto-triggered on first Docker
 | :--------------------------: | :------------------------------- |
 |  [📖 Details](#-feature-details)   | Modes, reports, notifications, locks |
 |  [📁 Structure](#-project-structure) | Directory & module map          |
-|  [❓ FAQ](#-faq)                    | 10 practical troubleshooting guides |
+|  [❓ FAQ](#-faq)                    | 11 practical troubleshooting guides |
 | [📝 Changelog](CHANGELOG.md)       | Full version history              |
 
 </td>
@@ -723,13 +723,56 @@ Docker notes: `127.0.0.1` under `network_mode: host`; bridge networks on Linux n
 </details>
 
 <details>
-<summary><b>7. Markdown vs HTML — can I generate only one?</b></summary>
+<summary><b>7. Docker <code>NameResolutionError</code> / cannot resolve <code>export.arxiv.org</code>?</b></summary>
+
+This is normally a **NAS/host network, Docker DNS, or Tailscale DNS refresh problem after a network change**, not an arXiv-fetching or application-code defect. A typical message is:
+
+```text
+HTTPSConnectionPool(host='export.arxiv.org', ...)
+... NameResolutionError: Temporary failure in name resolution
+```
+
+Check name resolution on both the host and the worker first:
+
+```bash
+getent hosts export.arxiv.org
+docker exec arxiv-daily-researcher getent hosts export.arxiv.org
+docker exec arxiv-daily-researcher cat /etc/resolv.conf
+```
+
+After moving a NAS, changing DHCP/router settings, switching networks, or toggling Tailscale, repair the NAS's upstream DNS first, then recreate the application containers so Docker regenerates their `resolv.conf`:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+If DHCP-provided DNS is repeatedly unreliable, add a **local** `docker-compose.override.yml` (rather than baking one location's DNS into the project's default compose file), then recreate the containers:
+
+```yaml
+services:
+  arxiv-daily-researcher:
+    dns:
+      # Keep only when Tailscale MagicDNS is enabled.
+      - 100.100.100.100
+      # A China-mainland public fallback; use reliable local DNS elsewhere.
+      - 223.5.5.5
+  config-panel:
+    dns:
+      - 100.100.100.100
+      - 223.5.5.5
+```
+
+`100.100.100.100` is Tailscale's MagicDNS address, not a general public resolver. Remove it when MagicDNS is not in use and configure two resolvers appropriate for the local network. The project retries network requests, but a container with no working DNS must be repaired at the deployment layer.
+</details>
+
+<details>
+<summary><b>8. Markdown vs HTML — can I generate only one?</b></summary>
 
 Same content, different formats: Markdown for Git/archival, HTML for reading and sharing with KaTeX. Toggle each independently in Daily Push (daily reports) or Trend Analysis (trend reports).
 </details>
 
 <details>
-<summary><b>8. When does keyword normalization run?</b></summary>
+<summary><b>9. When does keyword normalization run?</b></summary>
 
 1. `CHEAP_LLM` extracts keywords during scoring into SQLite
 2. **Every day at 00:00** a standalone cron job (`modes/keyword_maintenance`) silently runs LLM batch normalization; failures only log and retry the next night — the daily report is never affected
@@ -739,7 +782,7 @@ Disable tracking via `keyword_tracker.enabled` (or just normalization via `keywo
 </details>
 
 <details>
-<summary><b>9. MinerU vs PyMuPDF? Expired MinerU token?</b></summary>
+<summary><b>10. MinerU vs PyMuPDF? Expired MinerU token?</b></summary>
 
 | Scenario                            | Mode                 |
 | :---------------------------------- | :------------------- |
@@ -750,7 +793,7 @@ Switch in the API or Advanced tab. MinerU tokens last 3 months; on expiry the sy
 </details>
 
 <details>
-<summary><b>10. Sharing config and reports across devices with WebDAV?</b></summary>
+<summary><b>11. Sharing config and reports across devices with WebDAV?</b></summary>
 
 Three modes (Data Management tab):
 

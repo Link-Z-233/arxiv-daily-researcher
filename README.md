@@ -177,7 +177,7 @@ ArXiv Daily Researcher 会自动从 **ArXiv** 与**可声明扩展的期刊源**
 | :------------------------: | :--------------------------- |
 |  [📖 功能详解](#-功能详解)  | 运行模式、报告、通知、锁机制 |
 |  [📁 项目结构](#-项目结构)  | 目录与模块说明               |
-|  [❓ 常见问题](#-常见问题)  | 10 个实战排障与深度使用指南  |
+|  [❓ 常见问题](#-常见问题)  | 11 个实战排障与深度使用指南  |
 | [📝 更新日志](CHANGELOG.md) | 完整版本变更历史             |
 
 </td>
@@ -738,13 +738,56 @@ Docker 注意：`network_mode: host` 模式下用 `127.0.0.1`；桥接模式下 
 </details>
 
 <details>
-<summary><b>7. Markdown 和 HTML 报告有什么区别？可以只生成一种吗？</b></summary>
+<summary><b>7. Docker 报错 <code>NameResolutionError</code> 或无法解析 <code>export.arxiv.org</code> 怎么办？</b></summary>
+
+这通常是 **NAS/宿主机网络、Docker DNS 或 Tailscale DNS 在网络切换后未刷新**，不是论文抓取或项目业务代码错误。典型日志为：
+
+```text
+HTTPSConnectionPool(host='export.arxiv.org', ...)
+... NameResolutionError: Temporary failure in name resolution
+```
+
+先在宿主机和 worker 中分别确认解析是否正常：
+
+```bash
+getent hosts export.arxiv.org
+docker exec arxiv-daily-researcher getent hosts export.arxiv.org
+docker exec arxiv-daily-researcher cat /etc/resolv.conf
+```
+
+移动 NAS、重配路由/DHCP、切换网络或启停 Tailscale 后，优先修复 NAS 的上游 DNS，再重新创建应用容器以让 Docker 重建容器内的 `resolv.conf`：
+
+```bash
+docker compose up -d --force-recreate
+```
+
+若 NAS 的 DHCP DNS 经常不稳定，可在**本机**新增 `docker-compose.override.yml`（避免把某个地区/个人网络的 DNS 固化到项目默认编排）并重新创建容器：
+
+```yaml
+services:
+  arxiv-daily-researcher:
+    dns:
+      # 仅在已启用 Tailscale MagicDNS 时保留这一项
+      - 100.100.100.100
+      # 中国大陆网络可用的公共 DNS 备用项；其他地区请改为当地可靠 DNS
+      - 223.5.5.5
+  config-panel:
+    dns:
+      - 100.100.100.100
+      - 223.5.5.5
+```
+
+`100.100.100.100` 是 Tailscale 的 MagicDNS 地址，并非通用公共 DNS；未使用 MagicDNS 时应删除它并配置两台适合本地网络的公共/路由器 DNS。项目会对网络请求重试，但当容器没有任何可用 DNS 时，必须由部署环境恢复解析能力。
+</details>
+
+<details>
+<summary><b>8. Markdown 和 HTML 报告有什么区别？可以只生成一种吗？</b></summary>
 
 两者内容相同，格式不同：**Markdown** 适合 Git 版本管理、归档；**HTML** 适合浏览器阅读、分享，含样式与 KaTeX 公式渲染。在「每日推送」Tab 的「每日研究设置」中可独立开关；趋势分析报告的开关在「趋势分析」Tab。
 </details>
 
 <details>
-<summary><b>8. 关键词追踪与标准化是什么时候运行的？</b></summary>
+<summary><b>9. 关键词追踪与标准化是什么时候运行的？</b></summary>
 
 1. CHEAP_LLM 在评分阶段自动从论文标题、摘要中提取关键词并写入 SQLite
 2. **每天 0 点**由独立 cron 任务（`modes/keyword_maintenance.py`）静默执行 LLM 批量语义归并（如 "quantum computing" 和 "quantum computation" 合并），失败只记日志、次日自动重试，不影响日报
@@ -754,7 +797,7 @@ Docker 注意：`network_mode: host` 模式下用 `127.0.0.1`；桥接模式下 
 </details>
 
 <details>
-<summary><b>9. MinerU PDF 解析和 PyMuPDF 如何选择？MinerU Token 过期了怎么办？</b></summary>
+<summary><b>10. MinerU PDF 解析和 PyMuPDF 如何选择？MinerU Token 过期了怎么办？</b></summary>
 
 | 场景                           | 推荐模式  |
 | :----------------------------- | :-------- |
@@ -765,7 +808,7 @@ Docker 注意：`network_mode: host` 模式下用 `127.0.0.1`；桥接模式下 
 </details>
 
 <details>
-<summary><b>10. 如何利用 WebDAV 同步在多台设备间共享配置和报告？</b></summary>
+<summary><b>11. 如何利用 WebDAV 同步在多台设备间共享配置和报告？</b></summary>
 
 WebDAV 同步支持三种模式（在 WebUI「数据管理」Tab 配置）：
 
