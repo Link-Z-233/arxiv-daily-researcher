@@ -296,7 +296,9 @@ class Settings(BaseSettings):
     WEBDAV_SYNC_REPORTS: bool = False  # 是否同步报告（体积较大）
 
     # ==================== 数据库备份配置 ====================
-    BACKUP_ENABLED: bool = True  # 每日运行结束后自动做一次 gzip 数据库备份（本地保留一周，WebDAV 增量）
+    BACKUP_ENABLED: bool = True  # 每日运行结束后自动做一次 gzip 数据库备份
+    # 本地全量备份按年龄自动清理；0 表示永久保留。WebDAV 增量归档始终不删除。
+    BACKUP_LOCAL_RETENTION_DAYS: int = 7
 
     # ==================== 运行锁配置 ====================
     RUN_LOCK_MAX_AGE_HOURS: int = 12  # 锁超龄告警阈值（小时），不会按 PID 自动终止任务
@@ -892,9 +894,21 @@ class Settings(BaseSettings):
             # 加载数据库备份配置
             if "backup" in config:
                 bk_cfg = config["backup"]
+                if not isinstance(bk_cfg, dict):
+                    raise ValueError("backup 必须是对象")
                 self.BACKUP_ENABLED = bk_cfg.get("enabled", self.BACKUP_ENABLED)
-                # Legacy ``keep`` counts are ignored: local backups rotate by
-                # a one-week age window and WebDAV keeps every upload.
+                from utils.backup import validate_local_backup_retention_days
+
+                self.BACKUP_LOCAL_RETENTION_DAYS = (
+                    validate_local_backup_retention_days(
+                        bk_cfg.get(
+                            "local_retention_days",
+                            self.BACKUP_LOCAL_RETENTION_DAYS,
+                        )
+                    )
+                )
+                # Legacy ``keep`` counts are ignored.  Local retention is an
+                # explicit age window; WebDAV keeps every incremental upload.
 
             # 加载研究趋势模式配置
             if "trend_research" in config:

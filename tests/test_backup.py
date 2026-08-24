@@ -19,6 +19,7 @@ from utils.backup import (  # noqa: E402
     create_backup,
     list_local_backups,
     run_scheduled_backup,
+    validate_local_backup_retention_days,
 )
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 
@@ -123,6 +124,34 @@ class BackupCreationTests(unittest.TestCase):
         self.assertIn(aged, survivors)
         self.assertEqual(result["local_rotated"], [])
 
+    def test_custom_retention_window_deletes_older_local_backups(self):
+        fresh = create_backup(self.data_dir)
+        aged = _rename_backup(self.data_dir / "backups", fresh["name"], 3)
+
+        result = create_backup(self.data_dir, retention_days=2)
+
+        survivors = {entry["name"] for entry in list_local_backups(self.data_dir)}
+        self.assertNotIn(aged, survivors)
+        self.assertIn(aged, result["local_rotated"])
+
+    def test_zero_retention_keeps_local_backups_forever(self):
+        fresh = create_backup(self.data_dir)
+        aged = _rename_backup(self.data_dir / "backups", fresh["name"], 30)
+
+        result = create_backup(self.data_dir, retention_days=0)
+
+        self.assertIn(
+            aged,
+            {entry["name"] for entry in list_local_backups(self.data_dir)},
+        )
+        self.assertEqual(result["local_rotated"], [])
+
+    def test_retention_window_rejects_negative_and_non_integers(self):
+        for invalid in (-1, True, "7"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "local_retention_days"):
+                    validate_local_backup_retention_days(invalid)
+
     def test_missing_database_reports_reason(self):
         empty = self.data_dir / "empty"
         empty.mkdir()
@@ -163,6 +192,22 @@ class BackupCreationTests(unittest.TestCase):
         self.assertEqual(len(fake.client.uploads), 2)
         self.assertIn("daily_research_20200101_000000.db.gz", fake.client.remote_files)
         self.assertEqual(fake.client.deletes, [])
+
+    def test_unchanged_snapshot_is_reuploaded_if_recorded_remote_copy_is_missing(self):
+        fake = _FakeWebDAVSync()
+        first = create_backup(self.data_dir, webdav_sync=fake)
+        self.assertTrue(first["uploaded"])
+        self.assertEqual(len(fake.client.uploads), 1)
+
+        # The local state file still says this content was mirrored, but an
+        # operator/loss removed the remote object.  Incremental mode must
+        # repair the durable copy instead of claiming it is unchanged.
+        fake.client.remote_files.clear()
+        repaired = create_backup(self.data_dir, webdav_sync=fake)
+
+        self.assertTrue(repaired["uploaded"])
+        self.assertEqual(len(fake.client.uploads), 2)
+        self.assertFalse(fake.client.deletes)
 
     def test_upload_failure_keeps_local_backup_and_state(self):
         fake = _FakeWebDAVSync()
@@ -228,6 +273,7 @@ class ScheduledBackupTests(unittest.TestCase):
         self._install_settings(
             {
                 "BACKUP_ENABLED": True,
+                "BACKUP_LOCAL_RETENTION_DAYS": LOCAL_BACKUP_RETENTION_DAYS,
                 "DATA_DIR": self.data_dir,
                 "WEBDAV_ENABLED": False,
             }
@@ -239,6 +285,28 @@ class ScheduledBackupTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result["created"])
         self.assertFalse(result["uploaded"])
+
+    def test_scheduled_backup_uses_configured_local_retention(self):
+        fresh = create_backup(self.data_dir)
+        aged = _rename_backup(self.data_dir / "backups", fresh["name"], 3)
+        self._install_settings(
+            {
+                "BACKUP_ENABLED": True,
+                "BACKUP_LOCAL_RETENTION_DAYS": 2,
+                "DATA_DIR": self.data_dir,
+                "WEBDAV_ENABLED": False,
+            }
+        )
+        try:
+            result = run_scheduled_backup()
+        finally:
+            self.tearDownSettings()
+
+        self.assertTrue(result["created"])
+        self.assertNotIn(
+            aged,
+            {entry["name"] for entry in list_local_backups(self.data_dir)},
+        )
 
 
 if __name__ == "__main__":

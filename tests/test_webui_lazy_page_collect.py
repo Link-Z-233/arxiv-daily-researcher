@@ -72,6 +72,7 @@ class LazyPageCollectTests(unittest.TestCase):
             "notification_top_n": 3,
             "webdav_enabled": True,
             "webdav_cron_schedule": "30 22 * * *",
+            "backup_local_retention_days": 14,
             "pdf_parser_mode": "pymupdf",
             "concurrency_workers": 6,
             "trend_max_results": 250,
@@ -86,6 +87,7 @@ class LazyPageCollectTests(unittest.TestCase):
     def test_unvisited_pages_keep_configured_values_on_save(self):
         from webui.tabs import (
             advanced,
+            data_management,
             keywords,
             notifications,
             run_manager,
@@ -100,6 +102,7 @@ class LazyPageCollectTests(unittest.TestCase):
             se = search.collect({}, flat)
             nf_env, nf_cfg = notifications.collect({}, flat)
             adv = advanced.collect({}, flat)
+            _, dm = data_management.collect({}, flat)
             tr = trend_runner.collect({}, flat)
 
         self.assertEqual(rm["daily_max_papers_per_run"], 7)
@@ -115,6 +118,7 @@ class LazyPageCollectTests(unittest.TestCase):
         self.assertEqual(adv["pdf_download_max_bytes"], 80 * 1024 * 1024)
         self.assertEqual(adv["concurrency_workers"], 6)
         self.assertEqual(adv["pdf_parser_mode"], "pymupdf")
+        self.assertEqual(dm["backup_local_retention_days"], 14)
         self.assertEqual(tr["trend_max_results"], 250)
         self.assertEqual(tr["trend_sort_order"], "descending")
         self.assertEqual(tr["trend_enabled_skills"], ["comprehensive_analysis"])
@@ -148,6 +152,53 @@ class LazyPageCollectTests(unittest.TestCase):
         with _patch_session(session):
             updates = run_manager.collect({}, {"daily_max_papers_per_run": 7})
         self.assertEqual(updates["daily_max_papers_per_run"], 3)
+
+    def test_backup_now_uses_current_retention_value_including_zero(self):
+        """An immediate backup must honor the unsaved value currently in the UI."""
+        from webui.tabs import data_management
+
+        class _Spinner:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class _FakeStreamlit:
+            def __init__(self):
+                self.session_state = _FakeSessionState(
+                    {"backup_local_retention_days": 0}
+                )
+                self.reruns = 0
+
+            def info(self, *_args, **_kwargs):
+                pass
+
+            def success(self, *_args, **_kwargs):
+                pass
+
+            def spinner(self, *_args, **_kwargs):
+                return _Spinner()
+
+            def rerun(self):
+                self.reruns += 1
+
+        fake_st = _FakeStreamlit()
+        with (
+            patch.object(data_management, "st", fake_st),
+            patch(
+                "utils.backup.create_backup",
+                return_value={"created": True, "uploaded": False},
+            ) as create_backup,
+        ):
+            data_management._do_backup({})
+
+        create_backup.assert_called_once()
+        args, kwargs = create_backup.call_args
+        self.assertEqual(args, (data_management._PROJECT_ROOT / "data",))
+        self.assertEqual(kwargs["retention_days"], 0)
+        self.assertIsNone(kwargs["webdav_sync"])
+        self.assertEqual(fake_st.reruns, 1)
 
 
 if __name__ == "__main__":

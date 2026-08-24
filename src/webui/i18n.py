@@ -1128,10 +1128,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_webdav_sync_error": {"zh": "❌ 同步失败", "en": "❌ Sync failed"},
     "dm_backup_title": {"zh": "数据库备份", "en": "Database Backup"},
     "dm_backup_hint": {
-        "zh": "每日运行结束后自动对 SQLite 数据库做 gzip 压缩备份：本地为全量备份、按文件时间戳保留最近一周；WebDAV 为增量备份，仅当数据库内容变化时上传，远端永不删除；也可手动立即备份。",
-        "en": "After each daily run a gzip-compressed SQLite backup is created automatically: locally full backups are kept for one week (by file timestamp); WebDAV mirrors incrementally — uploads happen only when the database content changed and remote copies are never deleted. Manual backup is also available.",
+        "zh": "每日运行结束后自动对 SQLite 数据库做 gzip 压缩备份：本地为全量备份，按下方设置自动删除过期副本（默认保留最近 7 天；填 0 永久保留）；WebDAV 为增量备份，仅当数据库内容变化时上传，远端永不删除；也可手动立即备份。",
+        "en": "After each daily run a gzip-compressed SQLite backup is created automatically: local full backups are automatically deleted after the retention window below (7 days by default; 0 keeps them forever); WebDAV mirrors incrementally — uploads happen only when the database content changed and remote copies are never deleted. Manual backup is also available.",
     },
     "dm_backup_enable": {"zh": "启用自动备份", "en": "Enable automatic backup"},
+    "dm_backup_retention_days_label": {
+        "zh": "本地备份保留天数",
+        "en": "Local backup retention (days)",
+    },
+    "dm_backup_retention_days_help": {
+        "zh": "自动删除早于此天数的本地 SQLite 全量备份；默认 7 天，填 0 永久保留。WebDAV 增量归档不受此设置影响。",
+        "en": "Automatically delete local full SQLite backups older than this many days. Default: 7; enter 0 to keep them forever. WebDAV incremental archives are unaffected.",
+    },
     "dm_backup_now_btn": {"zh": "🗄️ 立即备份", "en": "🗄️ Back Up Now"},
     "dm_backup_export_btn": {"zh": "📤 生成导出（zip）", "en": "📤 Build export (zip)"},
     "dm_backup_download_btn": {"zh": "⬇️ 下载备份压缩包", "en": "⬇️ Download backup archive"},

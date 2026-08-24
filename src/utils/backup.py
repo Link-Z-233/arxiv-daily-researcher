@@ -4,7 +4,8 @@ The daily-research database is the sole durable authority for the pending
 queue, reader preferences and usage statistics. A backup takes a consistent
 snapshot through SQLite's backup API (never a raw copy of a live WAL file)
 and compresses it before any network transfer. Local copies rotate strictly
-by age — a full backup is kept for one week. The WebDAV mirror is
+by the configured age window (seven days by default; zero keeps them forever).
+The WebDAV mirror is
 incremental: an archive is uploaded only when the database content actually
 changed since the last upload, and remote copies are never deleted, so the
 remote directory is a permanent archive of every content state.
@@ -27,12 +28,32 @@ from typing import Any, Dict, List, Optional
 BACKUP_PREFIX = "daily_research_"
 BACKUP_SUFFIX = ".db.gz"
 LOCAL_BACKUP_RETENTION_DAYS = 7
+MIN_LOCAL_BACKUP_RETENTION_DAYS = 0
 _GZIP_CHUNK_BYTES = 1024 * 1024
 _HASH_CHUNK_BYTES = 1024 * 1024
 _BACKUP_NAME_RE = re.compile(r"^daily_research_(\d{8}_\d{6})(?:_\d+)?\.db\.gz$")
 _UPLOAD_STATE_FILENAME = "webdav_upload_state.json"
 
 _backup_lock = threading.Lock()
+
+
+def validate_local_backup_retention_days(value: Any) -> int:
+    """Return a safe local-backup retention window in whole days.
+
+    ``0`` explicitly means keep local backups forever.  Positive values are
+    age windows in days; no artificial upper bound is imposed.  WebDAV
+    retention remains intentionally unlimited and is unaffected.
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < MIN_LOCAL_BACKUP_RETENTION_DAYS
+    ):
+        raise ValueError(
+            "backup.local_retention_days 必须是 "
+            f"大于或等于 {MIN_LOCAL_BACKUP_RETENTION_DAYS} 的整数（0 表示永久保留）"
+        )
+    return value
 
 
 def backups_directory(data_dir: Path) -> Path:
@@ -109,8 +130,14 @@ def _rotate_local(directory: Path, retention_days: int) -> List[str]:
 
     Rotation is strictly age-based (filename timestamp = creation time) and
     never touches files whose name cannot be dated — an undated archive is
-    preserved forever rather than guessed at.
+    preserved forever rather than guessed at. ``retention_days=0`` disables
+    local rotation entirely.
     """
+    # ``0`` is the user-facing "keep forever" setting.  Returning before
+    # calculating a zero-day cutoff also guarantees that a newly created
+    # archive can never be deleted in the same backup operation.
+    if retention_days == 0:
+        return []
     cutoff = datetime.now() - timedelta(days=retention_days)
     removed = []
     for item in directory.iterdir():
@@ -156,12 +183,12 @@ def _save_upload_state(directory: Path, state: Dict[str, str]) -> None:
     )
 
 
-def _remote_backup_names(webdav_sync: Any, remote_dir: str) -> List[str]:
-    """Return backup file names currently present in the remote directory."""
+def _remote_backup_names(webdav_sync: Any, remote_dir: str) -> Optional[List[str]]:
+    """Return remote backup names, or ``None`` when the directory cannot be read."""
     try:
         entries = webdav_sync.client.list(remote_dir)
     except Exception:
-        return []
+        return None
     names = []
     for entry in entries or []:
         if isinstance(entry, dict):
@@ -198,7 +225,8 @@ def _upload_incremental_remote(
         raise RuntimeError("无法创建 WebDAV 备份目录")
     remote_file = f"{remote_dir}/{local_path.name}"
 
-    if local_path.name in _remote_backup_names(webdav_sync, remote_dir):
+    remote_names = _remote_backup_names(webdav_sync, remote_dir)
+    if remote_names is not None and local_path.name in remote_names:
         # A previous run uploaded this archive but crashed before recording
         # the state; treat it as mirrored instead of re-uploading.
         result["skipped_reason"] = "already_on_remote"
@@ -206,9 +234,18 @@ def _upload_incremental_remote(
         return result
 
     state = _load_upload_state(state_directory)
-    if state.get("hash") == snapshot_hash:
+    recorded_remote_name = state.get("remote_name")
+    if (
+        state.get("hash") == snapshot_hash
+        and recorded_remote_name
+        # A temporary list failure must not turn a healthy incremental backup
+        # into a duplicate upload.  When listing succeeds, however, verify
+        # that the last recorded remote archive still exists; otherwise a
+        # manually deleted/lost WebDAV file must be repaired.
+        and (remote_names is None or recorded_remote_name in remote_names)
+    ):
         result["skipped_reason"] = "content_unchanged"
-        result["remote_path"] = state.get("remote_name") or remote_file
+        result["remote_path"] = recorded_remote_name
         return result
 
     webdav_sync.client.upload_file(remote_file, str(local_path))
@@ -235,6 +272,7 @@ def create_backup(
     passing ``None`` keeps the backup local-only. An upload failure never
     discards the local snapshot.
     """
+    retention_days = validate_local_backup_retention_days(retention_days)
     if _backup_lock.locked():
         return {"created": False, "reason": "backup_already_running"}
 
@@ -300,7 +338,7 @@ def run_scheduled_backup(logger: Any = None) -> Optional[Dict[str, Any]]:
     """Worker hook after a daily run; honours the ``backup`` config section.
 
     备份始终先压缩再上传；只要 WebDAV 已启用并配置了凭据就镜像上传
-    （增量：内容未变化时跳过），本地按一周保留期轮转。
+    （增量：内容未变化时跳过），本地按配置的保留天数轮转。
     """
     from config import settings
 
@@ -313,8 +351,16 @@ def run_scheduled_backup(logger: Any = None) -> Optional[Dict[str, Any]]:
 
         webdav_sync = create_sync_client()
 
+    retention_days = validate_local_backup_retention_days(
+        getattr(
+            settings,
+            "BACKUP_LOCAL_RETENTION_DAYS",
+            LOCAL_BACKUP_RETENTION_DAYS,
+        )
+    )
     return create_backup(
         Path(settings.DATA_DIR),
+        retention_days=retention_days,
         webdav_sync=webdav_sync,
         logger=logger,
     )

@@ -12,7 +12,13 @@ from pathlib import Path
 from webui.i18n import t
 from webui.secret_fields import render_secret_input, resolve_secret_value
 from webui.tabs.run_manager import _daily_db_path_from_config
-from utils.backup import export_backup_zip, restore_backup_archive
+from utils.backup import (
+    LOCAL_BACKUP_RETENTION_DAYS,
+    MIN_LOCAL_BACKUP_RETENTION_DAYS,
+    export_backup_zip,
+    restore_backup_archive,
+    validate_local_backup_retention_days,
+)
 from utils.legacy_history import LEGACY_IMPORT_STATE_KEY
 from utils.webui_trigger import enqueue_trigger, trigger_directory
 
@@ -218,6 +224,24 @@ def render(env_values: dict, config_values: dict):
         t("dm_backup_enable"),
         value=flat.get("backup_enabled", True),
         key="backup_enabled",
+    )
+
+    configured_retention = flat.get(
+        "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
+    )
+    if (
+        isinstance(configured_retention, bool)
+        or not isinstance(configured_retention, int)
+        or configured_retention < MIN_LOCAL_BACKUP_RETENTION_DAYS
+    ):
+        configured_retention = LOCAL_BACKUP_RETENTION_DAYS
+    st.number_input(
+        t("dm_backup_retention_days_label"),
+        min_value=MIN_LOCAL_BACKUP_RETENTION_DAYS,
+        value=configured_retention,
+        step=1,
+        key="backup_local_retention_days",
+        help=t("dm_backup_retention_days_help"),
     )
 
     if st.session_state.get("backup_enabled", flat.get("backup_enabled", True)):
@@ -464,6 +488,9 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         "webdav_sync_keywords": current_cfg("webdav_sync_keywords", True),
         "webdav_sync_reports": current_cfg("webdav_sync_reports", False),
         "backup_enabled": current_cfg("backup_enabled", True),
+        "backup_local_retention_days": current_cfg(
+            "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
+        ),
     }
 
     return env_updates, config_updates
@@ -537,8 +564,18 @@ def _do_backup(env_values: dict):
         else:
             st.info(t("dm_backup_local_only"))
 
+        retention_days = validate_local_backup_retention_days(
+            st.session_state.get(
+                "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
+            )
+        )
+
         with st.spinner(t("dm_backup_running")):
-            result = create_backup(_PROJECT_ROOT / "data", webdav_sync=webdav_sync)
+            result = create_backup(
+                _PROJECT_ROOT / "data",
+                retention_days=retention_days,
+                webdav_sync=webdav_sync,
+            )
 
         if not result.get("created"):
             st.warning(t("dm_backup_skip_reason").format(result.get("reason", "")))
