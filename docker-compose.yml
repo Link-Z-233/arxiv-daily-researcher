@@ -62,7 +62,7 @@ services:
     ports:
       # This panel can edit .env and export its secrets.  Keep it local unless
       # the operator deliberately places an authenticated reverse proxy in front.
-      - "127.0.0.1:8501:8501"
+      - "127.0.0.1:8503:8501"
 
     environment:
       - TZ=Asia/Shanghai
