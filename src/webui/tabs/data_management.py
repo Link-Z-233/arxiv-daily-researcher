@@ -213,6 +213,7 @@ def render(env_values: dict, config_values: dict):
     st.divider()
 
     # ==================== 数据库备份 ====================
+    backup_data_dir, backup_database = _configured_backup_paths(flat)
     st.markdown(
         f'<p class="section-title">🗄️ {t("dm_backup_title")}</p>',
         unsafe_allow_html=True,
@@ -248,7 +249,7 @@ def render(env_values: dict, config_values: dict):
 
     if st.session_state.get("backup_enabled", flat.get("backup_enabled", True)):
         if st.button(t("dm_backup_now_btn"), use_container_width=True):
-            _do_backup(env_values)
+            _do_backup(env_values, flat)
 
     # 导入 / 导出：都是压缩包，导入端自动识别 zip / gzip / 原始 SQLite
     st.divider()
@@ -258,7 +259,7 @@ def render(env_values: dict, config_values: dict):
             try:
                 with st.spinner(t("dm_backup_running")):
                     st.session_state["dm_export_bundle"] = export_backup_zip(
-                        _PROJECT_ROOT / "data"
+                        backup_data_dir, database=backup_database
                     )
             except Exception as e:
                 st.error(f"{t('dm_backup_failed')}: {e}")
@@ -284,7 +285,10 @@ def render(env_values: dict, config_values: dict):
             try:
                 with st.spinner(t("dm_backup_running")):
                     result = restore_backup_archive(
-                        _PROJECT_ROOT / "data", uploaded.getvalue(), uploaded.name
+                        backup_data_dir,
+                        uploaded.getvalue(),
+                        uploaded.name,
+                        database=backup_database,
                     )
                 st.success(
                     t("dm_backup_import_ok").format(
@@ -295,7 +299,7 @@ def render(env_values: dict, config_values: dict):
             except Exception as e:
                 st.error(f"{t('dm_backup_failed')}: {e}")
 
-    _render_backup_list(_list_backups())
+    _render_backup_list(_list_backups(flat))
 
     _render_legacy_import_section(config_values)
 
@@ -543,12 +547,37 @@ def _build_export_zip() -> bytes | None:
     return buf.getvalue()
 
 
-def _list_backups():
-    """List rotated database backups under the shared data volume."""
+def _configured_backup_paths(config_values: dict | None) -> tuple[Path, Path]:
+    """Resolve the configured archive root and exact SQLite database safely.
+
+    The worker honours both ``paths.data_dir`` and
+    ``daily_research.db_path``. The WebUI's immediate backup/import/export
+    actions must use those same paths rather than silently falling back to
+    the legacy ``data/`` tree.
+    """
+    flat = config_values or {}
+    try:
+        from utils.config_io import _resolve_project_relative_config_path
+
+        raw_data_dir = flat.get("data_dir", "data")
+        data_dir = _resolve_project_relative_config_path(
+            raw_data_dir, label="paths.data_dir"
+        )
+    except (ImportError, OSError, TypeError, ValueError):
+        data_dir = _PROJECT_ROOT / "data"
+
+    if not isinstance(flat.get("daily_research_db_path"), str):
+        return data_dir, data_dir / "daily_research" / "daily_research.db"
+    return data_dir, _daily_db_path_from_config(flat)
+
+
+def _list_backups(config_values: dict | None = None):
+    """List rotated backups from the configured local archive directory."""
     try:
         from utils.backup import list_local_backups
 
-        return list_local_backups(_PROJECT_ROOT / "data")
+        data_dir, _database = _configured_backup_paths(config_values)
+        return list_local_backups(data_dir)
     except Exception as e:
         logger.warning(f"列出现有备份失败: {e}")
         return []
@@ -575,7 +604,7 @@ def _render_backup_list(backups: list[dict]) -> None:
         st.table(rows)
 
 
-def _do_backup(env_values: dict):
+def _do_backup(env_values: dict, config_values: dict | None = None):
     """立即创建一次压缩数据库备份（WebDAV 已配置时默认镜像上传）。"""
     try:
         from utils.backup import create_backup
@@ -609,10 +638,12 @@ def _do_backup(env_values: dict):
                 "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
             )
         )
+        data_dir, database = _configured_backup_paths(config_values)
 
         with st.spinner(t("dm_backup_running")):
             result = create_backup(
-                _PROJECT_ROOT / "data",
+                data_dir,
+                database=database,
                 retention_days=retention_days,
                 webdav_sync=webdav_sync,
             )

@@ -191,14 +191,73 @@ class LazyPageCollectTests(unittest.TestCase):
                 return_value={"created": True, "uploaded": False},
             ) as create_backup,
         ):
-            data_management._do_backup({})
+            data_management._do_backup({}, {})
 
         create_backup.assert_called_once()
         args, kwargs = create_backup.call_args
         self.assertEqual(args, (data_management._PROJECT_ROOT / "data",))
+        self.assertEqual(
+            kwargs["database"],
+            data_management._PROJECT_ROOT
+            / "data"
+            / "daily_research"
+            / "daily_research.db",
+        )
         self.assertEqual(kwargs["retention_days"], 0)
         self.assertIsNone(kwargs["webdav_sync"])
         self.assertEqual(fake_st.reruns, 1)
+
+    def test_backup_now_uses_configured_data_and_database_paths(self):
+        """Immediate backups must target the same paths used by the worker."""
+        from webui.tabs import data_management
+
+        class _Spinner:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class _FakeStreamlit:
+            def __init__(self):
+                self.session_state = _FakeSessionState(
+                    {"backup_local_retention_days": 7}
+                )
+
+            def info(self, *_args, **_kwargs):
+                pass
+
+            def success(self, *_args, **_kwargs):
+                pass
+
+            def spinner(self, *_args, **_kwargs):
+                return _Spinner()
+
+            def rerun(self):
+                pass
+
+        fake_st = _FakeStreamlit()
+        config = {
+            "data_dir": "data/custom_backup_root",
+            "daily_research_db_path": "data/custom_sqlite/papers.db",
+        }
+        with (
+            patch.object(data_management, "st", fake_st),
+            patch(
+                "utils.backup.create_backup",
+                return_value={"created": True, "uploaded": False},
+            ) as create_backup,
+        ):
+            data_management._do_backup({}, config)
+
+        args, kwargs = create_backup.call_args
+        self.assertEqual(
+            args, (data_management._PROJECT_ROOT / "data" / "custom_backup_root",)
+        )
+        self.assertEqual(
+            kwargs["database"],
+            data_management._PROJECT_ROOT / "data" / "custom_sqlite" / "papers.db",
+        )
 
 
 if __name__ == "__main__":

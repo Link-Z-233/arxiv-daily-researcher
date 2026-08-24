@@ -18,6 +18,7 @@ from utils.backup import (  # noqa: E402
     LOCAL_BACKUP_RETENTION_DAYS,
     create_backup,
     list_local_backups,
+    restore_backup_archive,
     run_scheduled_backup,
     validate_local_backup_retention_days,
 )
@@ -275,6 +276,9 @@ class ScheduledBackupTests(unittest.TestCase):
                 "BACKUP_ENABLED": True,
                 "BACKUP_LOCAL_RETENTION_DAYS": LOCAL_BACKUP_RETENTION_DAYS,
                 "DATA_DIR": self.data_dir,
+                "DAILY_RESEARCH_DB_PATH": (
+                    self.data_dir / "daily_research" / "daily_research.db"
+                ),
                 "WEBDAV_ENABLED": False,
             }
         )
@@ -294,6 +298,9 @@ class ScheduledBackupTests(unittest.TestCase):
                 "BACKUP_ENABLED": True,
                 "BACKUP_LOCAL_RETENTION_DAYS": 2,
                 "DATA_DIR": self.data_dir,
+                "DAILY_RESEARCH_DB_PATH": (
+                    self.data_dir / "daily_research" / "daily_research.db"
+                ),
                 "WEBDAV_ENABLED": False,
             }
         )
@@ -314,6 +321,35 @@ if __name__ == "__main__":
 
 
 class BackupImportExportTests(unittest.TestCase):
+    def test_explicit_database_path_is_used_for_snapshot_and_round_trip(self):
+        import gzip as gzip_mod
+
+        with TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "archives"
+            database = Path(temp_dir) / "custom" / "papers.sqlite"
+            store = DailyResearchStore(database)
+            store.set_app_state("seed", "custom-path")
+
+            created = create_backup(data_dir, database=database)
+            self.assertTrue(created["created"])
+            raw_database = gzip_mod.decompress(Path(created["path"]).read_bytes())
+            restored_path = Path(temp_dir) / "restored.sqlite"
+            restored_path.write_bytes(raw_database)
+            restored = DailyResearchStore(restored_path)
+            self.assertEqual(restored.get_app_state("seed"), "custom-path")
+
+            store.set_app_state("seed", "changed")
+            result = restore_backup_archive(
+                data_dir,
+                Path(created["path"]).read_bytes(),
+                created["name"],
+                database=database,
+            )
+            self.assertTrue(result["restored"])
+            self.assertEqual(
+                DailyResearchStore(database).get_app_state("seed"), "custom-path"
+            )
+
     def test_export_zip_round_trip_restores_and_archives_previous(self):
         import io
         import zipfile

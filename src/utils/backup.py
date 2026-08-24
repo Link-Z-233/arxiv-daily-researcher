@@ -66,6 +66,11 @@ def database_path(data_dir: Path) -> Path:
     return Path(data_dir) / "daily_research" / "daily_research.db"
 
 
+def _backup_database_path(data_dir: Path, database: Optional[Path]) -> Path:
+    """Resolve an explicit configured SQLite path or the legacy default."""
+    return Path(database) if database is not None else database_path(data_dir)
+
+
 def list_local_backups(data_dir: Path) -> List[Dict[str, Any]]:
     """List rotated backup files newest-first with size and mtime."""
     directory = backups_directory(data_dir)
@@ -261,6 +266,7 @@ def _upload_incremental_remote(
 def create_backup(
     data_dir: Path,
     *,
+    database: Optional[Path] = None,
     retention_days: int = LOCAL_BACKUP_RETENTION_DAYS,
     webdav_sync: Any = None,
     logger: Any = None,
@@ -270,14 +276,17 @@ def create_backup(
     ``webdav_sync`` may be any object exposing the small WebDAVSync surface
     (``client.upload_file``/``client.list``, ``_remote``, ``_ensure_remote_dir``);
     passing ``None`` keeps the backup local-only. An upload failure never
-    discards the local snapshot.
+    discards the local snapshot. ``database`` lets installations that keep
+    their SQLite file outside the conventional ``data_dir/daily_research``
+    location snapshot the exact configured database while still storing local
+    archives under ``data_dir/backups``.
     """
     retention_days = validate_local_backup_retention_days(retention_days)
     if _backup_lock.locked():
         return {"created": False, "reason": "backup_already_running"}
 
-    database = database_path(data_dir)
-    if not database.exists():
+    selected_database = _backup_database_path(data_dir, database)
+    if not selected_database.exists():
         return {"created": False, "reason": "database_missing"}
 
     directory = backups_directory(data_dir)
@@ -300,7 +309,7 @@ def create_backup(
                 if not archive_path.exists():
                     break
         try:
-            _create_consistent_snapshot(database, snapshot_path)
+            _create_consistent_snapshot(selected_database, snapshot_path)
             snapshot_hash = _file_sha256(snapshot_path)
             _compress_file(snapshot_path, archive_path)
         finally:
@@ -360,6 +369,7 @@ def run_scheduled_backup(logger: Any = None) -> Optional[Dict[str, Any]]:
     )
     return create_backup(
         Path(settings.DATA_DIR),
+        database=Path(settings.DAILY_RESEARCH_DB_PATH),
         retention_days=retention_days,
         webdav_sync=webdav_sync,
         logger=logger,
@@ -372,20 +382,22 @@ _SQLITE_HEADER = b"SQLite format 3\x00"
 _DB_SUFFIXES = (".db", ".sqlite", ".sqlite3")
 
 
-def export_backup_zip(data_dir: Path) -> tuple[bytes, str]:
+def export_backup_zip(
+    data_dir: Path, *, database: Optional[Path] = None
+) -> tuple[bytes, str]:
     """把当前数据库的一致性快照打包为 zip，返回 (压缩包字节, 文件名)。"""
     import io
     import zipfile
 
-    database = database_path(data_dir)
-    if not database.exists():
+    selected_database = _backup_database_path(data_dir, database)
+    if not selected_database.exists():
         raise FileNotFoundError("数据库不存在，无法导出")
 
     snapshot_fd, snapshot_name = tempfile.mkstemp(suffix=".sqlite")
     os.close(snapshot_fd)
     snapshot_path = Path(snapshot_name)
     try:
-        _create_consistent_snapshot(database, snapshot_path)
+        _create_consistent_snapshot(selected_database, snapshot_path)
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(snapshot_path, arcname="daily_research.db")
@@ -420,7 +432,11 @@ def _extract_database_bytes(data: bytes, filename: str) -> tuple[bytes, str]:
 
 
 def restore_backup_archive(
-    data_dir: Path, data: bytes, filename: str = "import"
+    data_dir: Path,
+    data: bytes,
+    filename: str = "import",
+    *,
+    database: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """把导入的压缩包恢复为当前数据库。
 
@@ -446,27 +462,27 @@ def restore_backup_archive(
             detail = row[0] if row else "unknown"
             raise ValueError(f"导入数据库完整性校验未通过：{detail}")
 
-        database = database_path(data_dir)
+        selected_database = _backup_database_path(data_dir, database)
         archived: Optional[Path] = None
-        if database.exists():
+        if selected_database.exists():
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             archived = backups_directory(data_dir) / f"pre_import_{stamp}.db"
             archived.parent.mkdir(parents=True, exist_ok=True)
-            _create_consistent_snapshot(database, archived)
+            _create_consistent_snapshot(selected_database, archived)
         else:
-            database.parent.mkdir(parents=True, exist_ok=True)
+            selected_database.parent.mkdir(parents=True, exist_ok=True)
 
         staged_fd, staged_name = tempfile.mkstemp(
-            dir=str(database.parent), suffix=".import"
+            dir=str(selected_database.parent), suffix=".import"
         )
         os.close(staged_fd)
         staged = Path(staged_name)
         try:
             staged.write_bytes(database_bytes)
             # 旧库的 WAL/SHM 属于旧文件的派生状态，残留会导致新库被旧日志回放。
-            os.replace(staged, database)
+            os.replace(staged, selected_database)
             for suffix in ("-wal", "-shm"):
-                Path(str(database) + suffix).unlink(missing_ok=True)
+                Path(str(selected_database) + suffix).unlink(missing_ok=True)
         finally:
             staged.unlink(missing_ok=True)
 
