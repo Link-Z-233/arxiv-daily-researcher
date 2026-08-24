@@ -284,19 +284,9 @@ def section_llm(existing_env: dict) -> dict:
     return env_values
 
 
-def section_search(existing_config: dict) -> dict:
-    """Section 2: Search Settings. Returns flat config values."""
-    section_header(2, "Search Settings", "Control the daily search time window")
-
-    # 日报窗口固定为最近 3 天（config.DAILY_SCAN_WINDOW_DAYS）；
-    # 过去日期的论文由「过去时间段每日报告」补跑，此处不再询问天数。
-
-    return {}
-
-
 def section_data_sources(existing_config: dict) -> dict:
-    """Section 3: Data Sources. Returns flat config values."""
-    section_header(3, "Data Sources", "Select paper sources to monitor")
+    """Section 2: Data Sources. Returns flat config values."""
+    section_header(2, "Data Sources", "Select paper sources to monitor")
 
     flat = flatten_config_dict(existing_config) if existing_config else {}
     current = flat.get("enabled_sources", ["arxiv"])
@@ -408,8 +398,8 @@ def section_data_sources(existing_config: dict) -> dict:
 
 
 def section_keywords(existing_config: dict) -> dict:
-    """Section 4: Keywords. Returns flat config values."""
-    section_header(4, "Keywords", "Define research keywords and weights")
+    """Section 3: Keywords. Returns flat config values."""
+    section_header(3, "Keywords", "Define research keywords and weights")
 
     flat = flatten_config_dict(existing_config) if existing_config else {}
 
@@ -460,8 +450,8 @@ def section_keywords(existing_config: dict) -> dict:
 
 
 def section_scoring(existing_config: dict) -> dict:
-    """Section 5: Scoring. Returns flat config values."""
-    section_header(5, "Scoring", "Configure paper relevance scoring")
+    """Section 4: Scoring. Returns flat config values."""
+    section_header(4, "Scoring", "Configure paper relevance scoring")
 
     flat = flatten_config_dict(existing_config) if existing_config else {}
 
@@ -592,8 +582,8 @@ def section_scoring(existing_config: dict) -> dict:
 
 
 def section_notifications(existing_env: dict, existing_config: dict) -> tuple:
-    """Section 6: Notifications. Returns (env_values, config_values)."""
-    section_header(6, "Notifications", "Configure notification channels")
+    """Section 5: Notifications. Returns (env_values, config_values)."""
+    section_header(5, "Notifications", "Configure notification channels")
 
     flat = flatten_config_dict(existing_config) if existing_config else {}
 
@@ -770,8 +760,8 @@ def section_notifications(existing_env: dict, existing_config: dict) -> tuple:
 
 
 def section_advanced(existing_env: dict, existing_config: dict) -> tuple:
-    """Section 7: Advanced settings. Returns (env_values, config_values)."""
-    section_header(7, "Advanced Settings", "Optional advanced configuration")
+    """Section 6: Advanced settings. Returns (env_values, config_values)."""
+    section_header(6, "Advanced Settings", "Optional advanced configuration")
 
     skip = questionary.confirm(
         "Skip advanced settings and use defaults?",
@@ -967,31 +957,27 @@ def main():
         llm_env = section_llm(existing_env)
         all_env.update(llm_env)
 
-        # Section 2: Search
-        search_cfg = section_search(existing_config)
-        all_config_flat.update(search_cfg)
-
-        # Section 3: Data Sources
+        # Section 2: Data Sources
         ds_cfg = section_data_sources(existing_config)
         # Extract env values from data source section
         if "_env" in ds_cfg:
             all_env.update(ds_cfg.pop("_env"))
         all_config_flat.update(ds_cfg)
 
-        # Section 4: Keywords
+        # Section 3: Keywords
         kw_cfg = section_keywords(existing_config)
         all_config_flat.update(kw_cfg)
 
-        # Section 5: Scoring
+        # Section 4: Scoring
         score_cfg = section_scoring(existing_config)
         all_config_flat.update(score_cfg)
 
-        # Section 6: Notifications
+        # Section 5: Notifications
         notif_env, notif_cfg = section_notifications(existing_env, existing_config)
         all_env.update(notif_env)
         all_config_flat.update(notif_cfg)
 
-        # Section 7: Advanced
+        # Section 6: Advanced
         adv_env, adv_cfg = section_advanced(existing_env, existing_config)
         all_env.update(adv_env)
         all_config_flat.update(adv_cfg)
