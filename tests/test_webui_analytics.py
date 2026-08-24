@@ -4,6 +4,7 @@ import sys
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -29,6 +30,17 @@ class NiceCeilingTests(unittest.TestCase):
 
 
 class HeatmapTests(unittest.TestCase):
+    def test_heatmap_includes_today_when_today_is_monday(self):
+        class Monday(date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 8, 24)
+
+        with patch.object(analytics, "date", Monday):
+            html = analytics._render_heatmap_html({"2026-08-24": _row(100, 50)})
+
+        self.assertIn("2026-08-24", html)
+
     def test_heatmap_covers_the_last_year_in_week_columns(self):
         today = date.today()
         inside = today - timedelta(days=300)

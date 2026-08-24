@@ -108,7 +108,9 @@ def _render_heatmap_html(daily: dict[str, dict]) -> str:
     first_day = today - timedelta(days=_HEATMAP_DAYS - 1)
     # 网格从 first_day 所在周的周一开始（GitHub 布局，列为周、行为星期）。
     start = first_day - timedelta(days=first_day.weekday())
-    weeks = -(-(today - start).days // 7)
+    # ``start`` 与 ``today`` 都要包含在网格中。仅对日期差做向上取整会
+    # 在两者相隔恰好整周时漏掉最后一天（例如今天正好是周一）。
+    weeks = (today - start).days // 7 + 1
 
     daily_max = 0
     for offset in range(_HEATMAP_DAYS):
