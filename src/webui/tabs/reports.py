@@ -404,77 +404,16 @@ iframe {{ display: block; width: 100%; height: 100%; border: 0; }}
 </html>"""
 
 
-_RAW_PREVIEW_HEIGHT_SCRIPT = """<script>(function(){
-  if (window.__arxivPreviewHeightReporter) return;
-  window.__arxivPreviewHeightReporter = true;
-  var lastHeight = 0;
-  var timer = null;
-  function contentHeight(){
-    var body = document.body;
-    if (body) {
-      // ``documentElement.scrollHeight`` includes the iframe viewport.  When
-      // the component starts at its fallback 800px that turns a short report
-      // into a self-reinforcing 800px result.  Measure the actual direct
-      // content instead, including any wrapper used by older report themes.
-      var top = body.getBoundingClientRect().top;
-      var children = body.children || [];
-      var height = 0;
-      for (var i = 0; i < children.length; i++) {
-        height = Math.max(height, Math.ceil(children[i].getBoundingClientRect().bottom - top));
-      }
-      if (height) return height;
-      return Math.max(body.scrollHeight || 0, body.offsetHeight || 0);
-    }
-    var root = document.documentElement;
-    return root ? Math.max(root.scrollHeight || 0, root.offsetHeight || 0) : 0;
-  }
-  function sendHeight(){
-    timer = null;
-    var height = contentHeight();
-    if (!height || height === lastHeight) return;
-    lastHeight = height;
-    parent.postMessage({type:"arxiv-report-height", height:height}, "*");
-  }
-  function schedule(){
-    if (!timer) timer = setTimeout(sendHeight, 80);
-  }
-  window.addEventListener("load", schedule);
-  window.addEventListener("resize", schedule);
-  if (document.readyState === "complete") schedule();
-  if (window.MutationObserver) {
-    new MutationObserver(schedule).observe(document.documentElement, {
-      subtree:true, childList:true, attributes:true
-    });
-  }
-  setTimeout(schedule, 300);
-})();</script>"""
-
-
-def _append_preview_height_reporter(report_html: str) -> str:
-    """Let the existing sandbox component size raw/legacy reports to content.
-
-    Reports with inlined preference controls already carry this protocol. Raw
-    legacy, trend and keyword reports used to take a hard-coded 800px iframe,
-    leaving a conspicuous blank block when their content was short. This
-    small script runs only inside the sandboxed report frame and can only
-    request a bounded visual height from its component parent.
-    """
-    close_idx = report_html.rfind("</body>")
-    if close_idx == -1:
-        return report_html + _RAW_PREVIEW_HEIGHT_SCRIPT
-    return report_html[:close_idx] + _RAW_PREVIEW_HEIGHT_SCRIPT + report_html[close_idx:]
-
-
 def _render_html_iframe(report: ReportFile) -> None:
-    """Render a sandboxed report preview sized to its actual content height."""
+    """Render a raw report in the original fixed-height sandboxed preview."""
     try:
         html_content = _strip_legacy_title_badges(
             report.path.read_text(encoding="utf-8")
         )
-        _render_report_component(
-            _append_preview_height_reporter(html_content),
-            {},
-            f"raw_rv_{report.source}_{report.path.name}",
+        components.html(
+            _build_sandboxed_preview_html(html_content),
+            height=800,
+            scrolling=False,
         )
     except Exception as e:
         st.error(f"{t('reports_load_error')}: {e}")
@@ -629,42 +568,6 @@ _MARK_BAR_JS = """<script>(function(){
       applyPref(bars[i], states[bars[i].getAttribute("data-paper")]);
     }
   });
-  var lastHeight = 0;
-  var pendingHeight = 0;
-  var heightTimer = null;
-  // 高度上报做 200ms 节流：宿主侧 setFrameHeight 会再触发组件渲染，
-  // 不节流会形成"上报→渲染→重建→再上报"的自激循环。
-  function flushHeight(){
-    heightTimer = null;
-    if (pendingHeight && pendingHeight !== lastHeight){
-      lastHeight = pendingHeight;
-      post({type:"arxiv-report-height", height:pendingHeight});
-    }
-  }
-  function reportHeight(){
-    // Do not use documentElement.scrollHeight here: in a srcdoc iframe it is
-    // at least the host frame's fallback height (formerly 800px), even when
-    // the actual report is much shorter.
-    var body = document.body;
-    var h = 0;
-    if (body) {
-      var top = body.getBoundingClientRect().top;
-      var children = body.children || [];
-      for (var i = 0; i < children.length; i++) {
-        h = Math.max(h, Math.ceil(children[i].getBoundingClientRect().bottom - top));
-      }
-      if (!h) h = Math.max(body.scrollHeight || 0, body.offsetHeight || 0);
-    }
-    if (!h && document.documentElement) {
-      h = Math.max(
-        document.documentElement.scrollHeight || 0,
-        document.documentElement.offsetHeight || 0
-      );
-    }
-    if (!h) return;
-    pendingHeight = h;
-    if (!heightTimer){ heightTimer = setTimeout(flushHeight, 200); }
-  }
   document.addEventListener("click", function(ev){
     var target = ev.target;
     var btn = target && target.closest ? target.closest(".arxiv-mark-btn") : null;
@@ -684,13 +587,6 @@ _MARK_BAR_JS = """<script>(function(){
       nonce: Date.now() + "-" + Math.random()
     });
   });
-  window.addEventListener("load", reportHeight);
-  window.addEventListener("resize", reportHeight);
-  if (document.readyState === "complete") { reportHeight(); }
-  if (window.MutationObserver) {
-    var observer = new MutationObserver(reportHeight);
-    observer.observe(document.documentElement, {subtree: true, childList: true, attributes: true});
-  }
 })();</script>"""
 
 

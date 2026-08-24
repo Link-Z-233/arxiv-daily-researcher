@@ -28,22 +28,18 @@ class _IframeAttributeParser(HTMLParser):
 
 
 class WebUiReportPreviewTests(unittest.TestCase):
-    def test_preview_height_reporters_measure_content_not_iframe_viewport(self):
+    def test_preview_uses_fixed_800px_frame_without_dynamic_height_protocol(self):
         from webui.tabs import reports as reports_tab
 
-        raw = reports_tab._append_preview_height_reporter("<html><body><p>x</p></body></html>")
-        # Regression: ``documentElement.scrollHeight`` is at least the
-        # srcdoc iframe height (previously 800px), so it cannot be the primary
-        # measurement for short reports.
-        self.assertIn("function contentHeight()", raw)
-        self.assertIn("children[i].getBoundingClientRect().bottom", raw)
-        self.assertIn("body = document.body", reports_tab._MARK_BAR_JS)
-        self.assertIn("children[i].getBoundingClientRect().bottom", reports_tab._MARK_BAR_JS)
+        self.assertNotIn("arxiv-report-height", reports_tab._MARK_BAR_JS)
+        self.assertFalse(hasattr(reports_tab, "_append_preview_height_reporter"))
         component = (
             Path(reports_tab.__file__).resolve().parent.parent
             / "report_component" / "index.html"
         ).read_text(encoding="utf-8")
-        self.assertIn("var FALLBACK_HEIGHT = 360", component)
+        self.assertIn("var PREVIEW_HEIGHT = 800", component)
+        self.assertIn('frame.style.height = PREVIEW_HEIGHT + "px"', component)
+        self.assertNotIn("arxiv-report-height", component)
 
     def test_preview_uses_an_origin_isolated_inner_iframe(self):
         report_html = (

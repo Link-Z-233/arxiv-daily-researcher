@@ -21,27 +21,15 @@
     window.parent.postMessage(message, "*");
   }
 
-  var MIN_HEIGHT = 240;
-  var MAX_HEIGHT = 60000;
-  // Long reports resize themselves after the srcdoc height reporter runs.
-  // Keep the initial shell modest so a short/legacy report never leaves a
-  // giant blank block while that handshake is in flight.
-  var FALLBACK_HEIGHT = 360;
-  var currentHeight = 0;
+  // 报告预览固定为原有的 800px：长报告在这个 iframe 内滚动。外层组件与
+  // 内层 iframe 必须使用同一高度，否则外层被内容撑高后会留下大片空白。
+  var PREVIEW_HEIGHT = 800;
   var lastHtml = null;
   var lastStatesText = "{}";
   var pendingStates = null; // 报告 iframe 就绪后要下发的标记状态
 
-  // 宿主可能在一秒内重发多次 render；高度上报也会再触发一轮组件渲染。
-  // 两个方向都做去重/节流，避免"重建报告 iframe → 上报高度 → 再渲染"的
-  // 自激循环把报告翻个不停。
-  function frameHeight(height) {
-    var value = Math.round(Number(height)) || 0;
-    if (value < MIN_HEIGHT) value = MIN_HEIGHT;
-    if (value > MAX_HEIGHT) value = MAX_HEIGHT;
-    if (value === currentHeight) return;
-    currentHeight = value;
-    send({ type: "streamlit:setFrameHeight", height: value });
+  function setPreviewHeight() {
+    send({ type: "streamlit:setFrameHeight", height: PREVIEW_HEIGHT });
   }
 
   function statesText(states) {
@@ -71,16 +59,14 @@
       // 报告 HTML 保持与旧版预览一致的沙箱：可执行脚本（KaTeX），但与面板源隔离。
       frame.setAttribute("sandbox", "allow-scripts allow-popups");
       frame.setAttribute("referrerpolicy", "no-referrer");
-      frame.style.height = (currentHeight || FALLBACK_HEIGHT) + "px";
+      frame.style.height = PREVIEW_HEIGHT + "px";
       // 通过属性赋值设置 srcdoc，由 DOM 负责编码，报告内容无法逃出 iframe。
       frame.srcdoc = html;
       // srcdoc 内联脚本先于 load 执行：load 后下发状态不会丢。
       frame.addEventListener("load", function () { pushStates(frame, pendingStates); });
       host.appendChild(frame);
       pendingStates = states;
-      if (!currentHeight) {
-        frameHeight(FALLBACK_HEIGHT);
-      }
+      setPreviewHeight();
       return;
     }
 
@@ -114,15 +100,13 @@
           },
         });
         break;
-      case "arxiv-report-height":
-        frameHeight(data.height);
-        break;
       default:
         break;
     }
   });
 
   send({ type: "streamlit:componentReady", apiVersion: 1 });
+  setPreviewHeight();
 })();
 </script>
 </body>
