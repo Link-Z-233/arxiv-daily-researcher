@@ -281,6 +281,31 @@ class SupplementRunTests(unittest.TestCase):
                 [paper.paper_id for paper in papers_by_source["arxiv"]], ["2602.4v1"]
             )
 
+    def test_failed_data_repair_retries_before_pending_scan_discoveries(self):
+        """A large range scan must not starve a failed legacy-data repair."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "db.sqlite")
+            store.record_supplement_backlog([
+                {
+                    "source": "arxiv", "canonical_id": "2602.40", "version": 1,
+                    "paper_id": "2602.40v1", "reason": "missing_translation",
+                },
+                {
+                    "source": "arxiv", "canonical_id": "2602.41", "version": 1,
+                    "paper_id": "2602.41v1", "reason": "missed_scan",
+                },
+            ])
+            store.resolve_supplement_backlog(
+                "first-attempt", [("arxiv", "2602.40", 1)], status="failed"
+            )
+
+            rows = store.claim_supplement_backlog(limit=1)
+
+            self.assertEqual(
+                [(row["canonical_id"], row["reason"]) for row in rows],
+                [("2602.40", "missing_translation")],
+            )
+
     def test_unlimited_supplement_claim_uses_zero_like_daily_limit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "db.sqlite")

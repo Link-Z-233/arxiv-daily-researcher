@@ -1372,9 +1372,12 @@ class DailyResearchStore:
 
         Data-repair entries (from the legacy import) are drained before
         missed-scan discoveries, oldest first.  Failed fetches retry after
-        the pending rows.  Returned rows carry the persisted paper metadata
-        when the import already reconstructed it.  ``limit=0`` means all
-        rows, matching ``daily_research.max_papers_per_run`` semantics.
+        pending *data-repair* rows, but still before a potentially large
+        backlog of scan-only discoveries: an import defect must not be
+        starved just because its date-range scan found many more papers.
+        Returned rows carry the persisted paper metadata when the import
+        already reconstructed it.  ``limit=0`` means all rows, matching
+        ``daily_research.max_papers_per_run`` semantics.
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
             raise ValueError("supplement backlog limit must be a non-negative integer")
@@ -1384,8 +1387,8 @@ class DailyResearchStore:
                        detail, paper_json
                 FROM supplement_backlog
                 WHERE status IN ('pending', 'failed')
-                ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
-                         CASE reason WHEN 'missed_scan' THEN 1 ELSE 0 END,
+                ORDER BY CASE reason WHEN 'missed_scan' THEN 1 ELSE 0 END,
+                         CASE status WHEN 'pending' THEN 0 ELSE 1 END,
                          created_at ASC,
                          backlog_id ASC
                 """
