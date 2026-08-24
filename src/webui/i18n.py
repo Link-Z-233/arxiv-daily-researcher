@@ -597,8 +597,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Use V2 for new configurations; legacy mode preserves historical thresholds for reversible migration.",
     },
     "core_relevance_info": {
-        "zh": "资格要求：主关键词的加权平均相关度达标，且至少一个主关键词强匹配。参考关键词和专家作者都不能让无关论文通过。",
-        "en": "Qualification requires a passing weighted average across primary keywords and one strong primary match. Reference terms and expert authors cannot pass an unrelated paper.",
+        "zh": "V2 资格要求：主关键词的加权平均相关度达到门槛，且至少一个主关键词强匹配。参考关键词和专家作者仅用于合格论文排序，不能让无关论文通过。",
+        "en": "V2 qualification requires a passing weighted average across primary keywords and one strong primary match. Reference terms and expert authors only rank qualified papers; they cannot pass an unrelated paper.",
     },
     "core_relevance_threshold_label": {"zh": "核心相关性门槛", "en": "Core Relevance Threshold"},
     "core_keyword_min_score_label": {"zh": "核心词强匹配门槛", "en": "Strong Core Match Threshold"},
@@ -614,10 +614,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "legacy_strategy_warning": {
         "zh": "兼容模式：作者加分和参考关键词仍会影响是否通过。只建议用于与既有历史结果对比或暂时回退。",
         "en": "Compatibility mode: author bonuses and reference keywords still affect qualification. Use only for historical comparison or a temporary rollback.",
-    },
-    "core_relevance_preview": {
-        "zh": "V2：资格由主关键词内容相关度和强匹配共同决定；排序可额外使用参考词与作者偏好。",
-        "en": "V2: primary-keyword relevance and a strong match decide qualification; reference terms and author preference may further rank qualified papers.",
     },
     "base_score_label": {"zh": "基础分", "en": "Base Score"},
     "weight_coeff_label": {"zh": "权重系数", "en": "Weight Coefficient"},

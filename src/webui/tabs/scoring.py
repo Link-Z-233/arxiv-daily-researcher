@@ -127,10 +127,8 @@ def render(_env_values: dict, config_values: dict):
             key="max_score_per_keyword",
         )
 
-    lang = st.session_state.get("lang", "zh")
-    if strategy == "core_relevance_v2":
-        info_msg = t("core_relevance_preview")
-    else:
+    if strategy != "core_relevance_v2":
+        lang = st.session_state.get("lang", "zh")
         # Preview calculation belongs to the explicit legacy compatibility
         # policy; V2 has no weight-sum qualification formula.
         keywords = flat.get("primary_keywords", [])
@@ -151,7 +149,7 @@ def render(_env_values: dict, config_values: dict):
                 f"With {len(keywords)} keyword(s) at weight {weight}: "
                 f"Passing Score = {base} + {coeff} x {total_weight:.1f} = **{passing:.1f}**"
             )
-    st.info(info_msg)
+        st.info(info_msg)
 
     st.divider()
 
