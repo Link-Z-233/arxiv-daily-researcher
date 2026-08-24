@@ -324,6 +324,136 @@ class DailyResearchStateTests(unittest.TestCase):
                 3,
             )
 
+    def test_partial_stage_failure_delivers_complete_papers_and_keeps_failed_one_retryable(self):
+        """A transient LLM failure must not discard an otherwise valid daily report."""
+
+        class _KeywordAgent:
+            def get_all_keywords(self):
+                return {"quantum": 1.0}
+
+        class _SearchAgent:
+            def __init__(self, **_kwargs):
+                pass
+
+            def get_enabled_sources(self):
+                return ["arxiv"]
+
+            def fetch_all_papers(self, **kwargs):
+                kwargs["scan_receipt_callbacks"]["arxiv"](
+                    {
+                        "source": "arxiv",
+                        "status": "succeeded",
+                        "scanned_at": "2026-08-24T08:00:00+00:00",
+                        "domain_receipts": [],
+                        "total_new_candidates": 2,
+                    }
+                )
+                return {
+                    "arxiv": [
+                        PaperMetadata(
+                            paper_id="2501.20001v1",
+                            title="Fails once",
+                            authors=["Alice"],
+                            abstract="Temporary provider failure",
+                            published_date=datetime.now(timezone.utc),
+                            url="https://arxiv.org/abs/2501.20001v1",
+                            source="arxiv",
+                        ),
+                        PaperMetadata(
+                            paper_id="2501.20002v1",
+                            title="Completes normally",
+                            authors=["Bob"],
+                            abstract="A complete paper",
+                            published_date=datetime.now(timezone.utc),
+                            url="https://arxiv.org/abs/2501.20002v1",
+                            source="arxiv",
+                        ),
+                    ]
+                }
+
+            def can_download_pdf(self, _source):
+                return False
+
+        class _PartialAnalysisAgent(_Agent):
+            def score_paper_with_keywords(self, **kwargs):
+                if kwargs["title"] == "Fails once":
+                    raise RuntimeError("temporary provider outage")
+                return super().score_paper_with_keywords(**kwargs)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "daily.db"
+            report_path = root / "ARXIV_Report.html"
+
+            class _Reporter:
+                processed_titles = []
+
+                def generate_reports_by_source(self, **kwargs):
+                    papers = kwargs["scored_papers_by_source"]["arxiv"]
+                    self.__class__.processed_titles.append(
+                        [paper["title"] for paper in papers]
+                    )
+                    report_path.write_text("<html>partial report</html>", encoding="utf-8")
+                    return {"arxiv_html": report_path}
+
+            overrides = {
+                "TOKEN_TRACKING_ENABLED": False,
+                "DAILY_RESEARCH_DB_PATH": db_path,
+                "ENABLE_NOTIFICATIONS": False,
+                "ENABLED_SOURCES": ["arxiv"],
+                "TARGET_DOMAINS": ["quant-ph"],
+                "TARGET_JOURNALS": [],
+                "ENABLE_REFERENCE_EXTRACTION": False,
+                "PRIMARY_KEYWORDS": ["quantum"],
+                "PRIMARY_KEYWORD_WEIGHT": 1.0,
+                "SCORE_STRATEGY": "legacy_weighted_keyword_v1",
+                "HISTORY_DIR": root / "history",
+                "OPENALEX_EMAIL": "",
+                "OPENALEX_API_KEY": "",
+                "ENABLE_SEMANTIC_SCHOLAR_TLDR": False,
+                "SEMANTIC_SCHOLAR_API_KEY": "",
+                "KEYWORD_TRACKER_ENABLED": False,
+                "DAILY_ENABLE_DEEP_ANALYSIS": False,
+                "DAILY_MAX_PAPERS_PER_RUN": 2,
+                "ENABLE_CONCURRENCY": False,
+                "ENABLE_MARKDOWN_REPORT": False,
+                "ENABLE_HTML_REPORT": True,
+                "REPORTS_DIR": root,
+            }
+            with ExitStack() as stack:
+                for name, value in overrides.items():
+                    stack.enter_context(patch.object(settings, name, value))
+                stack.enter_context(patch("modes.daily_research.KeywordAgent", _KeywordAgent))
+                stack.enter_context(patch("modes.daily_research.SearchAgent", _SearchAgent))
+                stack.enter_context(
+                    patch("modes.daily_research.AnalysisAgent", _PartialAnalysisAgent)
+                )
+                stack.enter_context(patch("modes.daily_research.Reporter", _Reporter))
+                stack.enter_context(
+                    patch(
+                        "modes.daily_research.deliver_pending_after_report_syncs",
+                        return_value={"claimed": 0},
+                    )
+                )
+                stack.enter_context(
+                    patch("modes.daily_research.after_report_sync_maintenance_entry", return_value=None)
+                )
+                result = DailyResearchPipeline().run()
+
+            store = DailyResearchStore(db_path)
+            failed = store.get_paper_record("arxiv", "2501.20001v1")
+            completed = store.get_paper_record("arxiv", "2501.20002v1")
+            _pending, pending_count = store.select_pending_papers(["arxiv"], limit=0)
+
+            self.assertTrue(result.success)
+            self.assertEqual(result.total_papers_fetched, 2)
+            self.assertEqual(_Reporter.processed_titles, [["Completes normally"]])
+            self.assertEqual(failed["score_status"], "failed")
+            self.assertIsNone(failed["completed_at"])
+            self.assertEqual(failed["retry_count"], 1)
+            self.assertIsNotNone(completed["completed_at"])
+            self.assertEqual(pending_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

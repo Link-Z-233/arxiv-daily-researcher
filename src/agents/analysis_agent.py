@@ -1033,7 +1033,10 @@ class AnalysisAgent:
             )
 
         except Exception as e:
-            logger.error(f"论文评分失败 [{title[:50]}]: {e}")
+            # The daily pipeline persists this as a retryable stage failure.
+            # A provider hiccup must not imply that an entire daily report is
+            # unusable, so keep the leaf-level diagnostic at warning level.
+            logger.warning(f"论文评分本次失败，将由流水线重试 [{title[:50]}]: {e}")
             # A synthetic zero score hides outages and permanently loses TLDR
             # data. Let the pipeline persist the failure and retry the stage.
             raise RuntimeError(f"论文评分失败 [{title[:50]}]: {e}") from e
@@ -1070,7 +1073,7 @@ class AnalysisAgent:
             return translation.strip()
 
         except Exception as e:
-            logger.error(f"摘要翻译失败: {e}")
+            logger.warning(f"摘要翻译本次失败，将由流水线重试: {e}")
             raise RuntimeError(f"摘要翻译失败: {e}") from e
 
     # ======================================================================

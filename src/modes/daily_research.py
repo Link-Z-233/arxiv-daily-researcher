@@ -761,6 +761,43 @@ def _delivered_papers_for_finalization(
     return delivered
 
 
+def _reportable_scored_papers(
+    scored_papers_by_source: Dict[str, List[Dict[str, Any]]],
+    analyses_by_source: Dict[str, List[Dict[str, Any]]],
+) -> tuple[Dict[str, List[Dict[str, Any]]], list[tuple[str, str]]]:
+    """Keep incomplete deep-analysis papers out of a partial report.
+
+    A paper whose score/translation failed never reaches ``scored_papers``.
+    A qualified PDF paper can, however, have reached that list before its
+    deep-analysis call failed. It must not be rendered or delivered in a
+    partial report: otherwise it would look complete and lose its durable
+    retry state. The surrounding pipeline records the stage failure in SQLite
+    and includes every other complete paper normally.
+    """
+    reportable: Dict[str, List[Dict[str, Any]]] = {}
+    withheld: list[tuple[str, str]] = []
+    for source, scored_papers in scored_papers_by_source.items():
+        analyzed_ids = {
+            item["paper_id"] for item in analyses_by_source.get(source, [])
+        }
+        complete_papers: List[Dict[str, Any]] = []
+        for paper_info in scored_papers:
+            paper_meta = paper_info.get("paper_metadata")
+            requires_analysis = bool(
+                settings.DAILY_ENABLE_DEEP_ANALYSIS
+                and paper_info["score_response"].is_qualified
+                and paper_meta
+                and paper_meta.has_pdf_access()
+            )
+            if requires_analysis and paper_info["paper_id"] not in analyzed_ids:
+                withheld.append((source, paper_info["paper_id"]))
+                continue
+            complete_papers.append(paper_info)
+        if complete_papers:
+            reportable[source] = complete_papers
+    return reportable, withheld
+
+
 def _run_result_notification_entries(
     notifier: NotifierAgent, result: RunResult
 ) -> List[Dict[str, Any]]:
@@ -1289,7 +1326,11 @@ class DailyResearchPipeline:
                                     scored_papers.append(result)
                                 except Exception as e:
                                     paper = futures[future]
-                                    logger.error(f"论文评分异常 ({paper.title[:30]}...): {e}")
+                                    logger.warning(
+                                        "论文评分/翻译本次失败，已保留供下次重试 (%s...): %s",
+                                        paper.title[:30],
+                                        e,
+                                    )
                                     if store:
                                         stage = e.stage if isinstance(e, PaperStageError) else "score"
                                         store.update_error(
@@ -1325,7 +1366,11 @@ class DailyResearchPipeline:
                                     ),
                                 )
                             except Exception as e:
-                                logger.error(f"论文评分异常 ({paper.title[:30]}...): {e}")
+                                logger.warning(
+                                    "论文评分/翻译本次失败，已保留供下次重试 (%s...): %s",
+                                    paper.title[:30],
+                                    e,
+                                )
                                 if store:
                                     stage = e.stage if isinstance(e, PaperStageError) else "score"
                                     store.update_error(
@@ -1344,10 +1389,10 @@ class DailyResearchPipeline:
                 logger.info(f"    [{source}] 评分完成: {qualified_count}/{len(papers)} 篇及格")
 
             if stage_errors:
-                details = "; ".join(
-                    f"{source}:{paper_id} - {error}" for source, paper_id, error in stage_errors
+                logger.warning(
+                    "评分/翻译阶段有 %s 篇失败；已写入 SQLite 待重试，其余完成论文将继续生成报告",
+                    len(stage_errors),
                 )
-                raise RuntimeError(f"评分/翻译阶段失败，未生成日报: {details}")
 
             if translation_cache:
                 cache_savings = total_papers_count - len(translation_cache)
@@ -1471,8 +1516,10 @@ class DailyResearchPipeline:
                                             )
                                             pbar.write(f"  ✗ 失败: {paper_info['title'][:55]}...")
                                     except Exception as e:
-                                        logger.error(
-                                            f"深度分析异常 ({paper_info['title'][:30]}...): {e}"
+                                        logger.warning(
+                                            "深度分析本次失败，已保留供下次重试 (%s...): %s",
+                                            paper_info["title"][:30],
+                                            e,
                                         )
                                         if store:
                                             store.update_error(
@@ -1523,8 +1570,10 @@ class DailyResearchPipeline:
                                     else:
                                         pbar.write(f"  ✓ 完成: {result['title'][:55]}...")
                                 except Exception as e:
-                                    logger.error(
-                                        f"深度分析异常 ({paper_info['title'][:30]}...): {e}"
+                                    logger.warning(
+                                        "深度分析本次失败，已保留供下次重试 (%s...): %s",
+                                        paper_info["title"][:30],
+                                        e,
                                     )
                                     if store:
                                         store.update_error(
@@ -1547,11 +1596,28 @@ class DailyResearchPipeline:
                     )
 
             if analysis_errors:
+                logger.warning(
+                    "深度分析阶段有 %s 篇失败；这些论文将不进入本次报告，并会在下次运行重试",
+                    len(analysis_errors),
+                )
+
+            reportable_papers_by_source, withheld_analysis = _reportable_scored_papers(
+                scored_papers_by_source, analyses_by_source
+            )
+            if withheld_analysis:
+                logger.warning(
+                    "本次报告跳过 %s 篇尚未完成深度分析的论文，避免将不完整数据标为已交付",
+                    len(withheld_analysis),
+                )
+            if not any(reportable_papers_by_source.values()):
                 details = "; ".join(
                     f"{source}:{paper_id} - {error}"
-                    for source, paper_id, error in analysis_errors
+                    for source, paper_id, error in (stage_errors + analysis_errors)
                 )
-                raise RuntimeError(f"深度分析阶段失败，未生成日报: {details}")
+                raise RuntimeError(
+                    "本次没有可安全交付的论文，未生成报告；失败论文已保留供重试"
+                    + (f": {details}" if details else "")
+                )
 
             # ==================== 阶段6: 生成分数据源报告 ====================
             logger.info(">>> 阶段6: 生成分数据源研究报告...")
@@ -1563,21 +1629,21 @@ class DailyResearchPipeline:
             if run_kind == "backfill":
                 backfill_stamp = datetime.combine(target_date, datetime.now().time())
             report_paths = reporter.generate_reports_by_source(
-                scored_papers_by_source=scored_papers_by_source,
+                scored_papers_by_source=reportable_papers_by_source,
                 keywords_dict=all_keywords,
                 analyses_by_source=analyses_by_source,
                 token_usage=token_counter.get_summary() if settings.TOKEN_TRACKING_ENABLED else None,
                 report_kind="supplement" if run_kind == "supplement" else "daily",
                 report_timestamp=backfill_stamp,
             )
-            _validate_report_paths(report_paths, scored_papers_by_source)
+            _validate_report_paths(report_paths, reportable_papers_by_source)
 
             # Commit the critical daily-delivery state before optional keyword
             # trend post-processing.  A later interruption therefore cannot turn
             # a valid report into a second day's "new" paper batch.
             run_result = _build_daily_run_result(
                 total_papers_count,
-                scored_papers_by_source,
+                reportable_papers_by_source,
                 analyses_by_source,
                 report_paths,
             )
@@ -1593,24 +1659,61 @@ class DailyResearchPipeline:
                         # delivery failure still has its per-channel outbox row.
                         logger.error("无法建立通知 outbox 条目，日报仍将完成: %s", exc)
                 maintenance_entry = after_report_sync_maintenance_entry(run_id)
+                delivered_papers_by_source = _delivered_papers_for_finalization(
+                    reportable_papers_by_source, analyses_by_source
+                )
                 store.finalize_report_delivery(
                     run_id,
                     report_paths,
-                    _delivered_papers_for_finalization(
-                        scored_papers_by_source, analyses_by_source
-                    ),
+                    delivered_papers_by_source,
                     notification_entries,
                     [maintenance_entry] if maintenance_entry is not None else [],
                 )
                 report_delivery_committed = True
 
                 if run_kind == "supplement" and supplement_identities:
-                    # 交付事务已提交：本批积压论文正式销账；失败/未选中的
-                    # 行保持原状态，等待下一次补充运行。
-                    resolved = store.resolve_supplement_backlog(
-                        run_id, supplement_identities, status="delivered"
-                    )
-                    logger.info("补充运行交付完成，销账积压 %s 条", resolved)
+                    # Only the papers included in the committed report are
+                    # delivered. A transient stage failure must stay visible
+                    # and retryable instead of being silently consumed with
+                    # the rest of this supplement batch.
+                    delivered_identities = {
+                        (
+                            source,
+                            str(
+                                paper_info["paper_metadata"].canonical_id
+                                or paper_info["paper_id"]
+                            ),
+                            int(paper_info["paper_metadata"].version or 0),
+                        )
+                        for source, papers in delivered_papers_by_source.items()
+                        for paper_info in papers
+                    }
+                    delivered_backlog = [
+                        identity
+                        for identity in supplement_identities
+                        if identity in delivered_identities
+                    ]
+                    retryable_backlog = [
+                        identity
+                        for identity in supplement_identities
+                        if identity not in delivered_identities
+                    ]
+                    if delivered_backlog:
+                        resolved = store.resolve_supplement_backlog(
+                            run_id, delivered_backlog, status="delivered"
+                        )
+                        logger.info("补充运行交付完成，销账积压 %s 条", resolved)
+                    if retryable_backlog:
+                        retained = store.resolve_supplement_backlog(
+                            run_id,
+                            retryable_backlog,
+                            status="failed",
+                            detail="本次补充处理未完成，等待下一次重试",
+                        )
+                        logger.warning(
+                            "补充运行保留 %s 条未完成积压，下一次读取旧历史会重试",
+                            retained,
+                        )
 
                 # Report delivery has already committed.  A WebDAV failure now
                 # only reschedules its own outbox row and can never make this
@@ -1634,7 +1737,7 @@ class DailyResearchPipeline:
             logger.info("=" * 80)
             logger.info("✅ 任务完成！")
 
-            for source, scored_papers in scored_papers_by_source.items():
+            for source, scored_papers in reportable_papers_by_source.items():
                 logger.info(
                     "  [%s] 抓取: %s | 及格: %s | 深度分析: %s",
                     source,
@@ -1654,7 +1757,7 @@ class DailyResearchPipeline:
             print("=" * 80)
             print("📊 统计信息:")
 
-            for source, scored_papers in scored_papers_by_source.items():
+            for source, scored_papers in reportable_papers_by_source.items():
                 source_qualified = run_result.qualified_by_source.get(source, 0)
                 source_analyzed = run_result.analyzed_by_source.get(source, 0)
                 pct = (source_qualified / len(scored_papers) * 100) if scored_papers else 0
