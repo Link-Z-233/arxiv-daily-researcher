@@ -4,11 +4,13 @@ import tempfile
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from webui.tabs.reports import (  # noqa: E402
     _build_sandboxed_preview_html,
+    _configured_reports_dir,
     _discover_reports,
     _filter_visible_reports,
     _fmt_daily,
@@ -28,6 +30,21 @@ class _IframeAttributeParser(HTMLParser):
 
 
 class WebUiReportPreviewTests(unittest.TestCase):
+    def test_custom_reports_path_is_resolved_from_persisted_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reports_root = Path(temp_dir) / "custom-reports"
+            with (
+                patch(
+                    "utils.config_io.read_config_json",
+                    return_value={"paths": {"reports": "data/custom-reports"}},
+                ),
+                patch(
+                    "utils.config_io._resolve_project_relative_config_path",
+                    return_value=reports_root,
+                ),
+            ):
+                self.assertEqual(_configured_reports_dir(), reports_root)
+
     def test_preview_uses_fixed_800px_frame_without_dynamic_height_protocol(self):
         from webui.tabs import reports as reports_tab
 

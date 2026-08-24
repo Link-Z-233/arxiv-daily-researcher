@@ -857,8 +857,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "reports_refresh": {"zh": "刷新文件列表", "en": "Refresh File List"},
     "reports_empty": {
-        "zh": "data/reports/ 目录下暂无 HTML 报告，请先运行一次研究任务。",
-        "en": "No HTML reports found in data/reports/. Run a research task first.",
+        "zh": "当前报告目录下暂无 HTML 报告，请先运行一次研究任务。",
+        "en": "No HTML reports found in the current reports directory. Run a research task first.",
     },
     "reports_empty_type": {"zh": "暂无报告", "en": "No reports"},
     "reports_count_unit": {"zh": "份", "en": "reports"},

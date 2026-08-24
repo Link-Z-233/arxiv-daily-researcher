@@ -34,6 +34,37 @@ _BARE_VERSION_RE = re.compile(r'\s*<span class="revision-label">\s*v\d+\s*</span
 _RETRY_LABEL_RE = re.compile(r'\s*<span class="revision-label">\s*↻ 重试\s*</span>')
 
 
+def _configured_reports_dir() -> Path:
+    """Resolve the report directory selected by ``paths.reports``.
+
+    The thin WebUI container deliberately does not import the worker settings
+    module.  Reading the validated persisted path keeps report browsing aligned
+    with a custom worker data directory instead of silently showing the legacy
+    ``data/reports`` tree.
+    """
+    try:
+        from utils.config_io import (
+            _resolve_project_relative_config_path,
+            read_config_json,
+        )
+
+        raw_config = read_config_json()
+        paths = raw_config.get("paths", {}) if isinstance(raw_config, dict) else {}
+        if not isinstance(paths, dict):
+            return _REPORTS_DIR
+        configured = paths.get("reports")
+        if configured is None:
+            data_dir = _resolve_project_relative_config_path(
+                paths.get("data_dir", "data"), label="paths.data_dir"
+            )
+            return data_dir / "reports"
+        return _resolve_project_relative_config_path(
+            configured, label="paths.reports"
+        )
+    except (ImportError, OSError, ValueError, TypeError):
+        return _REPORTS_DIR
+
+
 def _strip_legacy_title_badges(report_html: str) -> str:
     """去掉标题旁的历史遗留徽标（仅影响预览显示，不改存档文件）。"""
     report_html = _BARE_VERSION_RE.sub("", report_html)
@@ -783,13 +814,14 @@ def render(env_values: dict, config_values: dict) -> None:
     source_labels = source_display_names(
         config_values.get("extra_source_definitions", [])
     )
-    all_reports = _discover_reports()
+    reports_dir = _configured_reports_dir()
+    all_reports = _discover_reports(reports_dir)
     visible_reports = _filter_visible_reports(all_reports, show_non_arxiv)
     total = sum(len(v) for v in visible_reports.values())
 
     if total == 0:
         st.info(t("reports_empty"))
-        st.caption(f"📂 {t('reports_dir_label')}: `{_REPORTS_DIR}`")
+        st.caption(f"📂 {t('reports_dir_label')}: `{reports_dir}`")
     else:
         _render_report_browser(visible_reports, source_labels, config_values)
 
