@@ -20,7 +20,7 @@ from utils.backup import (
     validate_local_backup_retention_days,
 )
 from utils.legacy_history import LEGACY_IMPORT_STATE_KEY
-from utils.webui_trigger import enqueue_trigger, trigger_directory
+from utils.webui_trigger import enqueue_trigger, read_trigger_payload, trigger_directory
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +311,36 @@ def _legacy_import_store(config_values: dict):
         return None
 
 
+def _legacy_import_already_queued(queue_dir: Path) -> bool:
+    """Return whether this specific workflow already has a durable request.
+
+    Other WebUI jobs are intentionally allowed to remain ahead of a legacy
+    import.  The worker's FIFO trigger queue plus the importer gates make that
+    the safe way to honour a click made while daily research/backfill is busy.
+    Only a duplicate legacy-import request should disable its button.
+    """
+    try:
+        candidates = [
+            *queue_dir.glob("*.json"),
+            *queue_dir.glob("*.running"),
+        ]
+    except OSError:
+        # If the shared queue cannot be read, leave the button available and
+        # let the atomic enqueue operation surface a real filesystem error.
+        return False
+    for request_path in candidates:
+        try:
+            payload = read_trigger_payload(request_path)
+        except (OSError, ValueError):
+            # A malformed or stale request is owned by the watcher and must
+            # not turn an unrelated legacy-import action into a permanent
+            # disabled control.
+            continue
+        if payload.get("mode") == "legacy_import":
+            return True
+    return False
+
+
 def _render_legacy_import_section(config_values: dict) -> None:
     """旧版本（v3.2）历史导入：按钮 + 最近结果 + 补充积压概览。"""
     import json as json_module
@@ -328,23 +358,20 @@ def _render_legacy_import_section(config_values: dict) -> None:
     )
 
     queue_dir = trigger_directory(_PROJECT_ROOT / "data")
-    trigger_pending = (
-        bool(list(queue_dir.glob("*.json")) or list(queue_dir.glob("*.running")))
-        if queue_dir.exists()
-        else False
-    )
+    legacy_pending = _legacy_import_already_queued(queue_dir)
 
     # 补充报告是读取旧历史后的自动第二阶段，不再暴露一个会让用户误以为
-    # 必须单独点击的按钮。一个导入请求覆盖导入、时间段扫描和一批补充报告。
+    # 必须单独点击的按钮。一个导入请求覆盖导入、时间段扫描和一批补充报告；
+    # 其他每日类任务运行时仍可排队，等工作器空闲后自动接手。
     if st.button(
         t("dm_legacy_import_btn"),
         use_container_width=True,
-        disabled=trigger_pending,
+        disabled=legacy_pending,
         type="primary",
     ):
         _enqueue_legacy_import()
 
-    if trigger_pending:
+    if legacy_pending:
         st.info(t("dm_legacy_running_hint"))
 
     store = _legacy_import_store(config_values)
