@@ -67,8 +67,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "tab_trend_runner": {"zh": "趋势分析", "en": "Trend Analysis"},
     "rm_auto_refresh": {"zh": "自动刷新", "en": "Auto refresh"},
     "rm_auto_refresh_help": {
-        "zh": "开启后仅在有任务运行时，每 5 秒刷新状态、队列与日志尾部；任务结束后自动停止刷新。",
-        "en": "When enabled, status, queue, and live log tail refresh every 5 seconds only while a task is running, then stop automatically.",
+        "zh": "开启后，有任务运行时每 5 秒刷新状态、队列与日志尾部；刚点击启动时会短暂检查，任务结束后自动停止刷新。",
+        "en": "When enabled, status, queue, and live log tail refresh every 5 seconds while a task runs; it briefly watches a newly submitted launch, then stops automatically when work ends.",
     },
     "rm_live_tail_hint": {
         "zh": "日志尾部 12 行",

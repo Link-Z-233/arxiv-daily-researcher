@@ -367,9 +367,10 @@ if hasattr(st, "fragment"):
         config_values = st.session_state.get(_PROGRESS_CONFIG_KEY) or {}
         _render_status_snapshot(config_values)
         # ``run_every`` is fixed when a fragment starts.  Once the task has
-        # finished, rerun the app scope so the parent stops mounting this
-        # fragment; otherwise an idle status panel would keep polling forever.
-        if not _get_all_running_locks():
+        # finished (and no newly submitted request is waiting for the worker),
+        # rerun the app scope so the parent stops mounting this fragment;
+        # otherwise an idle status panel would keep polling forever.
+        if not _status_needs_polling():
             st.rerun()
 else:  # Streamlit < 1.37：退化为静态渲染，功能不缺失。
     def _live_status_fragment() -> None:
@@ -588,8 +589,25 @@ def _render_status_snapshot(config_values: dict) -> None:
     _render_queue_metrics(config_values)
 
 
+def _status_needs_polling(active_locks: Optional[list[tuple[Path, Optional[int]]]] = None) -> bool:
+    """Whether the status panel should keep its short-lived live fragment.
+
+    A Docker launch first writes a trigger request; the worker can take up to
+    one watcher interval to create its run lock.  Keep polling across that
+    hand-off so a user who just clicked Run does not need to refresh manually.
+    Once there is neither a held lock nor a non-stale queued request, the
+    fragment is unmounted and the idle page performs no periodic work.
+    """
+    if active_locks is None:
+        active_locks = _get_all_running_locks()
+    if active_locks:
+        return True
+    _age, trigger_pending, _trigger_stale = _trigger_queue_state(active_locks)
+    return trigger_pending
+
+
 def _render_status_panel(config_values: dict) -> None:
-    """运行状态 + 待处理队列；仅在任务运行时自动刷新。"""
+    """运行状态 + 待处理队列；运行中（含刚提交的接手阶段）自动刷新。"""
     # 进度面板运行在自动刷新的 fragment 里，无法直接接收这里的参数；
     # 把配置快照放进 session_state 供 fragment 每次重绘时读取。
     st.session_state[_PROGRESS_CONFIG_KEY] = dict(config_values or {})
@@ -599,9 +617,9 @@ def _render_status_panel(config_values: dict) -> None:
         key="rm_auto_refresh_on",
         help=t("rm_auto_refresh_help"),
     )
-    is_running = bool(_get_all_running_locks())
+    should_poll = _status_needs_polling()
     with st.container(border=True):
-        if auto_refresh and is_running:
+        if auto_refresh and should_poll:
             _live_status_fragment()
         else:
             _render_status_snapshot(config_values)

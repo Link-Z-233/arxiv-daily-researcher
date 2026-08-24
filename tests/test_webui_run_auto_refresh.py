@@ -63,6 +63,7 @@ class RunAutoRefreshTests(unittest.TestCase):
             patch.object(run_manager, "_live_status_fragment", live_fragment),
             patch.object(run_manager, "_render_status_snapshot", snapshot),
             patch.object(run_manager, "_get_all_running_locks", return_value=[]),
+            patch.object(run_manager, "_trigger_queue_state", return_value=(None, False, False)),
         ):
             run_manager._render_status_panel({"daily_max_papers_per_run": 5})
 
@@ -81,6 +82,7 @@ class RunAutoRefreshTests(unittest.TestCase):
                 "_get_all_running_locks",
                 return_value=[(Path("run.lock"), 1)],
             ),
+            patch.object(run_manager, "_trigger_queue_state", return_value=(None, False, False)),
         ):
             run_manager._render_status_panel({})
 
@@ -100,6 +102,42 @@ class RunAutoRefreshTests(unittest.TestCase):
                 "_get_all_running_locks",
                 return_value=[(Path("run.lock"), 1)],
             ),
+            patch.object(run_manager, "_trigger_queue_state", return_value=(None, False, False)),
+        ):
+            run_manager._render_status_panel({})
+
+        live_fragment.assert_not_called()
+        snapshot.assert_called_once_with({})
+
+    def test_recent_trigger_keeps_polling_until_worker_creates_run_lock(self):
+        """A WebUI launch should not lose auto-refresh during watcher pickup."""
+        fake_st = _FakeStreamlit(auto_refresh=True)
+        live_fragment = Mock()
+        snapshot = Mock()
+
+        with (
+            patch.object(run_manager, "st", fake_st),
+            patch.object(run_manager, "_live_status_fragment", live_fragment),
+            patch.object(run_manager, "_render_status_snapshot", snapshot),
+            patch.object(run_manager, "_get_all_running_locks", return_value=[]),
+            patch.object(run_manager, "_trigger_queue_state", return_value=(2.0, True, False)),
+        ):
+            run_manager._render_status_panel({})
+
+        live_fragment.assert_called_once_with()
+        snapshot.assert_not_called()
+
+    def test_stale_trigger_does_not_keep_idle_panel_polling(self):
+        fake_st = _FakeStreamlit(auto_refresh=True)
+        live_fragment = Mock()
+        snapshot = Mock()
+
+        with (
+            patch.object(run_manager, "st", fake_st),
+            patch.object(run_manager, "_live_status_fragment", live_fragment),
+            patch.object(run_manager, "_render_status_snapshot", snapshot),
+            patch.object(run_manager, "_get_all_running_locks", return_value=[]),
+            patch.object(run_manager, "_trigger_queue_state", return_value=(31.0, False, True)),
         ):
             run_manager._render_status_panel({})
 
