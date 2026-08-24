@@ -81,6 +81,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "上次请求 {state}{suffix}；详情见运行日志。",
         "en": "Last request {state}{suffix}; see run logs.",
     },
+    "rm_trigger_state_succeeded": {
+        "zh": "上次面板请求已完成（{mode}）；详情见运行日志。",
+        "en": "Last panel request completed ({mode}); see run logs.",
+    },
     "rm_trigger_docker_keep": {
         "zh": "为避免丢失主容器尚未消费的请求，Docker 模式不从 WebUI 删除队列文件。",
         "en": "In Docker mode the WebUI does not delete queue files the worker may not have consumed yet.",
@@ -330,6 +334,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_progress_phase_score": {"zh": "评分与翻译", "en": "Scoring & translating"},
     "rm_progress_phase_analyze": {"zh": "深度分析", "en": "Deep analysis"},
     "rm_progress_phase_report": {"zh": "生成报告", "en": "Writing reports"},
+    "rm_progress_phase_legacy_import": {"zh": "导入旧历史", "en": "Importing legacy history"},
+    "rm_progress_phase_legacy_scan": {"zh": "扫描旧历史时间段", "en": "Scanning legacy date range"},
     "rm_progress_caption": {
         "zh": "{phase} · 登记 {registered} · 已评分 {scored} · 深度分析 {analyzed} · 交付 {completed} · 失败 {failed} · 已运行 {elapsed}",
         "en": "{phase} · registered {registered} · scored {scored} · analyzed {analyzed} · delivered {completed} · failed {failed} · elapsed {elapsed}",

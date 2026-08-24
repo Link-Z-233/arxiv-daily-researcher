@@ -47,6 +47,8 @@ _PHASE_LABEL_KEYS = {
     "score": "rm_progress_phase_score",
     "analyze": "rm_progress_phase_analyze",
     "report": "rm_progress_phase_report",
+    "legacy_import": "rm_progress_phase_legacy_import",
+    "legacy_scan": "rm_progress_phase_legacy_scan",
 }
 
 
@@ -89,7 +91,7 @@ def _scan_all_logs() -> dict[str, list[Path]]:
     扫描 logs/ 目录下所有 *.log，按类型分组（最新在前）。
 
     分组：
-      manual  → manual_*.log（面板手动触发）
+      manual  → manual_/legacy_import_/supplement_/backfill_*.log（面板触发）
       daily   → daily_*.log / cron_*.log / startup_*.log（定时/启动触发）
       trend   → trend_*.log
       system  → system*.log / arxiv_researcher*.log
@@ -108,7 +110,9 @@ def _scan_all_logs() -> dict[str, list[Path]]:
     }
     for p in all_logs:
         name = p.name.lower()
-        if name.startswith("manual_"):
+        if name.startswith((
+            "manual_", "legacy_import_", "supplement_", "backfill_"
+        )):
             groups["manual"].append(p)
         elif name.startswith(("daily_", "cron_", "startup_")):
             groups["daily"].append(p)
@@ -338,6 +342,10 @@ def _render_live_status_body() -> None:
     status = _latest_trigger_status()
     if status and status.get("state") == "skipped_busy":
         st.info(t("rm_status_skipped_busy"))
+    elif status and status.get("state") == "succeeded":
+        mode = str(status.get("mode") or "worker")
+        st.success(t("rm_trigger_state_succeeded").format(mode=mode))
+        _show_last_run_hint()
     elif status and status.get("state") in {"failed", "rejected", "interrupted"}:
         # The worker-owned status may contain an exception string.
         # Keep that detail in the worker log: local WebUI feedback
