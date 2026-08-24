@@ -950,15 +950,29 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Run request sent! Container will start within 5-10s",
     },
     # ── 过去时间段每日报告 ──
-    "rm_backfill_date_label": {"zh": "过去日报日期", "en": "Past report date"},
+    "rm_backfill_section_title": {"zh": "过去日报", "en": "Past Daily Reports"},
+    "rm_backfill_date_from_label": {"zh": "起始日期", "en": "Start date"},
+    "rm_backfill_date_to_label": {"zh": "结束日期", "en": "End date"},
     "rm_backfill_help": {
-        "zh": "为过去的某一天补跑当天的每日研究：只处理当天提交且尚未推送过的论文，报告时间戳使用该日期 + 当前时刻，会消耗 LLM 额度。",
-        "en": "Re-run the daily research for a past date: only that day's undelivered papers are processed, the report is stamped with that date plus the current time, and LLM quota is consumed.",
+        "zh": "所选日期会进入持久化队列，按天从早到晚逐日运行；每一天只处理当天提交且尚未推送过的论文，报告时间戳使用该日期 + 实际运行时刻，会消耗 LLM 额度。",
+        "en": "The selected dates enter a durable queue and run one day at a time, oldest first. Each day processes its undelivered submissions and stamps the report with that date plus the actual run time; LLM quota is consumed.",
     },
-    "rm_backfill_btn": {"zh": "生成过去日报", "en": "Build Past Daily Report"},
+    "rm_backfill_btn": {"zh": "开始运行", "en": "Start Run"},
     "rm_backfill_sent": {
-        "zh": "已发送过去日报请求，任务将在空闲时运行。",
-        "en": "Past-report request sent; it will run when idle.",
+        "zh": "已加入过去日报队列，将在空闲时按日期顺序逐日运行。",
+        "en": "Added to the past-report queue; it will run day by day when idle.",
+    },
+    "rm_backfill_invalid_range": {
+        "zh": "结束日期不能早于起始日期。",
+        "en": "The end date cannot be earlier than the start date.",
+    },
+    "rm_backfill_queue_line": {
+        "zh": "队列：待处理 {pending} · 运行中 {running} · 已完成 {completed} · 失败 {failed}{active}",
+        "en": "Queue: pending {pending} · running {running} · completed {completed} · failed {failed}{active}",
+    },
+    "rm_backfill_queue_active": {
+        "zh": " · 当前日期 {date}",
+        "en": " · current date {date}",
     },
     "rm_last_run_at": {"zh": "上次运行完成", "en": "Last run completed"},
     "rm_clean_lock_btn": {"zh": "清理", "en": "Clean"},

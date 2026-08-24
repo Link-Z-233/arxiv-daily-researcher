@@ -26,9 +26,20 @@ from typing import List, Optional
 # 非零返回码只进日志，无副作用。
 LOCK_SKIPPED_EXIT_CODE = 75
 
-# 面板触发的后台作业模式。它们启动前等待主流程空闲，daily 模式也会等待
-# 这些作业释放锁，避免与 cron 每日运行在同一个 SQLite 库上互相踩踏。
+# 面板触发的后台作业模式。保留该常量给兼容调用方和运行状态展示使用。
 AUX_JOB_MODES = ("legacy_import", "supplement_run", "backfill_run")
+
+# 旧历史导入会批量写入同一个 SQLite 状态库，不能只依赖“先检查再运行”
+# 的锁文件轮询：检查结束到进程真正启动之间仍可能有每日任务插入。这个
+# 隐藏 gate 用 flock 的共享/独占语义消除该竞态：普通 worker 作业持共享锁，
+# 历史导入持独占锁。它故意不以 ``.lock`` 结尾，因此不会被运行管理面板误
+# 当成一个可停止的任务；真实任务仍由各自的 ``run_lock`` 展示和控制。
+LEGACY_IMPORT_ACTIVITY_GATE = ".legacy_import_activity.gate"
+
+# 正常日报、补充报告和过去日报都写同一个论文队列/交付账本，因此三者
+# 之间也必须原子串行。它与上面的旧历史 gate 分工：前者保护日常流水线
+# 家族，后者让历史导入与所有普通 worker 活动隔离。
+DAILY_WORKFLOW_GATE = ".daily_workflow.gate"
 
 
 def _lock_dir() -> Path:
@@ -180,6 +191,89 @@ def wait_for_idle(
                 )
             return False
         _time.sleep(max(1.0, float(poll_seconds)))
+
+
+@contextmanager
+def _activity_gate(
+    gate_name: str,
+    *,
+    operation: int,
+    logger=None,
+    wait_note: str = "",
+    default_wait_note: str = "任务等待其他任务完成",
+):
+    """Acquire one hidden blocking flock gate and always release it safely."""
+    gate_path = _lock_dir() / gate_name
+    gate_file = gate_path.open("a+")
+    acquired = False
+    try:
+        try:
+            fcntl.flock(gate_file.fileno(), operation | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            if logger is not None:
+                logger.info("%s", wait_note or default_wait_note)
+            fcntl.flock(gate_file.fileno(), operation)
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired:
+                fcntl.flock(gate_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            gate_file.close()
+
+
+@contextmanager
+def legacy_import_activity_gate(
+    *,
+    exclusive: bool = False,
+    logger=None,
+    wait_note: str = "",
+):
+    """Atomically coordinate legacy import with normal worker activity.
+
+    ``exclusive=True`` is reserved for the v3.2 history importer.  Normal
+    worker flows acquire a shared lock, so their established concurrency
+    behaviour is preserved while an import waits until they are all idle.
+    Once the importer owns the exclusive lock, newly started normal flows wait
+    rather than touching the database concurrently.  This is deliberately a
+    blocking, durable queue point: a click on "Read Legacy History" should run
+    automatically after the active work has finished, not fail because a
+    polling timeout happened to expire.
+    """
+    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    default_wait_note = (
+        "旧历史导入等待其他任务空闲"
+        if exclusive
+        else "任务等待旧历史导入完成"
+    )
+    with _activity_gate(
+        LEGACY_IMPORT_ACTIVITY_GATE,
+        operation=operation,
+        logger=logger,
+        wait_note=wait_note,
+        default_wait_note=default_wait_note,
+    ):
+        yield
+
+
+@contextmanager
+def daily_workflow_gate(*, logger=None, wait_note: str = ""):
+    """Serialize daily, supplement and past-date pipeline executions.
+
+    This gate deliberately blocks rather than treating a different daily-style
+    mode as a successful no-op.  Its caller has already acquired the visible
+    per-mode ``run_lock``; this hidden gate is solely the atomic protection for
+    the shared SQLite queue and delivery ledger.
+    """
+    with _activity_gate(
+        DAILY_WORKFLOW_GATE,
+        operation=fcntl.LOCK_EX,
+        logger=logger,
+        wait_note=wait_note,
+        default_wait_note="每日研究流水线等待其他每日类任务完成",
+    ):
+        yield
 
 
 @contextmanager

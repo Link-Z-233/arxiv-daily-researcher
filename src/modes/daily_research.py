@@ -842,7 +842,11 @@ class DailyResearchPipeline:
             # delivery state; falling back to JSON would discard those
             # guarantees on an upgraded installation.
             store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
-            run_id = store.start_run(0)
+            # Keep the durable run ledger truthful: supplement/backfill runs
+            # share the daily pipeline, but they are distinct operations in
+            # diagnostics and must never be presented as an ordinary daily
+            # scan.
+            run_id = store.start_run(0, run_kind=run_kind)
             store.record_run_phase(run_id, "prepare")
             logger.info(f"每日研究 SQLite 状态库已启用: {settings.DAILY_RESEARCH_DB_PATH}")
 
@@ -1734,9 +1738,12 @@ class DailyResearchPipeline:
                     usage = token_counter.get_summary()
                     by_model = usage.get("by_model") or {}
                     if by_model:
-                        store.record_token_usage(
-                            run_id, by_model, mode="daily_research"
-                        )
+                        token_mode = {
+                            "daily": "daily_research",
+                            "supplement": "supplement_run",
+                            "backfill": "backfill_run",
+                        }.get(run_kind, str(run_kind or "daily_research"))
+                        store.record_token_usage(run_id, by_model, mode=token_mode)
                 except Exception:
                     logger.debug("Token 用量记录失败", exc_info=True)
 

@@ -3,7 +3,8 @@
 import json
 import sqlite3
 import threading
-from datetime import datetime, timedelta, timezone
+import uuid
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
@@ -354,6 +355,32 @@ class DailyResearchStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_supplement_backlog_status "
                 "ON supplement_backlog(status, reason, created_at)"
+            )
+
+            # A requested historical date range is durable work, not merely a
+            # transient WebUI click.  Each calendar day gets its own queue row
+            # so the worker can process reports sequentially and retain the
+            # remaining dates across a restart or a per-day failure.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS backfill_queue (
+                    backfill_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id TEXT NOT NULL,
+                    target_date TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+                    requested_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    run_id TEXT,
+                    error TEXT,
+                    UNIQUE(batch_id, target_date)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_backfill_queue_pending "
+                "ON backfill_queue(status, requested_at, target_date, backfill_id)"
             )
 
     @staticmethod
@@ -1331,6 +1358,190 @@ class DailyResearchStore:
                 )
                 resolved += max(0, cursor.rowcount or 0)
         return resolved
+
+    # ─── 过去日报日期队列 ────────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_backfill_date(value: date | str) -> date:
+        """Validate one historical report date without accepting datetimes."""
+        if isinstance(value, datetime):
+            value = value.date()
+        if isinstance(value, date):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = date.fromisoformat(value)
+            except ValueError as exc:
+                raise ValueError("过去日报日期必须是 YYYY-MM-DD") from exc
+        else:
+            raise ValueError("过去日报日期必须是 YYYY-MM-DD")
+        if parsed >= date.today():
+            raise ValueError("过去日报日期必须早于今天")
+        if parsed < date(1991, 1, 1):
+            raise ValueError("过去日报日期早于 arXiv 可用范围")
+        return parsed
+
+    def enqueue_backfill_range(
+        self, date_from: date | str, date_to: date | str
+    ) -> Dict[str, Any]:
+        """Persist every day in a user-requested historical-report range.
+
+        A new ``batch_id`` intentionally allows the same day to be requested
+        again later.  That is useful when the per-report paper cap left
+        undelivered candidates on a prior run; SQLite's delivery ledger still
+        prevents duplicate paper deliveries.
+        """
+        start = self._normalize_backfill_date(date_from)
+        end = self._normalize_backfill_date(date_to)
+        if start > end:
+            raise ValueError("过去日报起始日期不能晚于结束日期")
+
+        now = datetime.now().isoformat()
+        batch_id = f"{datetime.now():%Y%m%d_%H%M%S_%f}_{uuid.uuid4().hex[:8]}"
+        dates: list[tuple[str, str, str]] = []
+        cursor = start
+        while cursor <= end:
+            dates.append((batch_id, cursor.isoformat(), now))
+            cursor += timedelta(days=1)
+
+        with self._lock, self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO backfill_queue(
+                    batch_id, target_date, status, requested_at
+                ) VALUES (?, ?, 'pending', ?)
+                """,
+                dates,
+            )
+        return {
+            "batch_id": batch_id,
+            "queued": len(dates),
+            "date_from": start.isoformat(),
+            "date_to": end.isoformat(),
+        }
+
+    def recover_interrupted_backfill_jobs(self) -> int:
+        """Return a stale in-progress day to the durable pending queue.
+
+        This method is called only by the single ``backfill_run`` worker after
+        it owns the mode lock.  It therefore never steals a genuinely running
+        day from another worker.
+        """
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE backfill_queue
+                SET status = 'pending', started_at = NULL,
+                    error = COALESCE(error, '工作进程中断，已恢复到待处理队列'),
+                    completed_at = NULL
+                WHERE status = 'running'
+                """
+            )
+        return max(0, cursor.rowcount or 0)
+
+    def claim_next_backfill_job(self) -> Optional[Dict[str, Any]]:
+        """Atomically claim the oldest pending historical-report day."""
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT backfill_id, batch_id, target_date, requested_at
+                FROM backfill_queue
+                WHERE status = 'pending'
+                ORDER BY requested_at ASC, target_date ASC, backfill_id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE backfill_queue
+                SET status = 'running', started_at = ?, completed_at = NULL,
+                    error = NULL
+                WHERE backfill_id = ? AND status = 'pending'
+                """,
+                (now, row["backfill_id"]),
+            )
+            # The enclosing context commits this state change atomically before
+            # another process can see the row as pending again.
+            return dict(row)
+
+    def complete_backfill_job(
+        self, backfill_id: int, *, run_id: Optional[str] = None
+    ) -> bool:
+        """Mark one claimed calendar day complete after its report run succeeds."""
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE backfill_queue
+                SET status = 'completed', completed_at = ?, run_id = ?, error = NULL
+                WHERE backfill_id = ? AND status = 'running'
+                """,
+                (now, run_id, int(backfill_id)),
+            )
+        return bool(cursor.rowcount)
+
+    def fail_backfill_job(self, backfill_id: int, error: str) -> bool:
+        """Keep a failed date visible for a later user-requested retry."""
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE backfill_queue
+                SET status = 'failed', completed_at = ?, error = ?
+                WHERE backfill_id = ? AND status = 'running'
+                """,
+                (now, str(error or "过去日报运行失败")[:4000], int(backfill_id)),
+            )
+        return bool(cursor.rowcount)
+
+    def requeue_backfill_job(self, backfill_id: int, detail: str = "") -> bool:
+        """Return an interrupted day to pending so a later worker resumes it."""
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE backfill_queue
+                SET status = 'pending', started_at = NULL, completed_at = NULL,
+                    error = NULLIF(?, '')
+                WHERE backfill_id = ? AND status = 'running'
+                """,
+                (str(detail)[:4000], int(backfill_id)),
+            )
+        return bool(cursor.rowcount)
+
+    def backfill_queue_summary(self) -> Dict[str, Any]:
+        """Return compact queue state for the WebUI without exposing errors."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM backfill_queue GROUP BY status"
+            ).fetchall()
+            active = conn.execute(
+                """
+                SELECT target_date, batch_id, started_at
+                FROM backfill_queue WHERE status = 'running'
+                ORDER BY started_at ASC, backfill_id ASC LIMIT 1
+                """
+            ).fetchone()
+            next_row = conn.execute(
+                """
+                SELECT target_date, batch_id
+                FROM backfill_queue WHERE status = 'pending'
+                ORDER BY requested_at ASC, target_date ASC, backfill_id ASC LIMIT 1
+                """
+            ).fetchone()
+        counts = {str(row["status"]): int(row["n"] or 0) for row in rows}
+        return {
+            "pending": counts.get("pending", 0),
+            "running": counts.get("running", 0),
+            "completed": counts.get("completed", 0),
+            "failed": counts.get("failed", 0),
+            "active_date": active["target_date"] if active else None,
+            "next_date": next_row["target_date"] if next_row else None,
+        }
 
     # ─── 小型键值状态（跨运行决策） ─────────────────────────────────────
 

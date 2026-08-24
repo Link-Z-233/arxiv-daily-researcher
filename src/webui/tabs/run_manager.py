@@ -159,6 +159,24 @@ def _trigger_age_seconds() -> Optional[float]:
     return time.time() - oldest
 
 
+def _trigger_queue_state(active_locks: Optional[list[tuple[Path, Optional[int]]]] = None) -> tuple[Optional[float], bool, bool]:
+    """Classify a queued trigger without mistaking deliberate idle waiting for failure.
+
+    The worker consumes requests synchronously.  A user may queue a past-date
+    range while a daily run is still active; that request can legitimately sit
+    in ``*.json`` for much longer than the short watcher pickup interval.
+    Treat it as pending while a visible worker lock is held, and only mark it
+    stale when no worker activity can explain the wait.
+    """
+    trigger_age = _trigger_age_seconds()
+    if trigger_age is None:
+        return None, False, False
+    if active_locks is None:
+        active_locks = _get_all_running_locks()
+    trigger_stale = trigger_age > 30 and not active_locks
+    return trigger_age, not trigger_stale, trigger_stale
+
+
 def _latest_trigger_status() -> Optional[dict]:
     """Load the newest worker-owned trigger status for concise UI feedback."""
     if not _TRIGGER_STATUS_DIR.exists():
@@ -345,12 +363,9 @@ else:  # Streamlit < 1.37：退化为静态渲染，功能不缺失。
 
 
 def _render_run_control() -> None:
-    trigger_age   = _trigger_age_seconds()
-    trigger_stale   = trigger_age is not None and trigger_age > 30
-    trigger_pending = trigger_age is not None and not trigger_stale
-
     active_locks = _get_all_running_locks()
     is_running   = bool(active_locks)
+    trigger_age, trigger_pending, trigger_stale = _trigger_queue_state(active_locks)
 
     if trigger_stale:
         st.warning(f"⚠️ {t('rm_trigger_stale').format(n=int(trigger_age))}")
@@ -404,28 +419,59 @@ def _render_run_control() -> None:
             except Exception:
                 st.error(t("rm_launch_failed"))
 
-    # 过去时间段每日报告：为过去的某一天补跑当天的每日研究。
-    col_date, col_back = st.columns([3, 2])
-    with col_date:
-        backfill_date = st.date_input(
-            t("rm_backfill_date_label"),
-            value=None,
+def _render_backfill_control(config_values: dict) -> None:
+    """Render the historical daily-report range queue before run status."""
+    active_locks = _get_all_running_locks()
+    trigger_age, trigger_pending, trigger_stale = _trigger_queue_state(active_locks)
+    # A past-date request is durable and is intentionally allowed to queue
+    # behind a currently running daily/legacy task.  The worker watcher and
+    # workflow gates will consume it safely once that task becomes idle.
+    can_run = not trigger_pending and not trigger_stale
+
+    if trigger_pending:
+        st.caption(f"⏳ {t('rm_trigger_pending')}")
+    elif trigger_stale:
+        st.warning(f"⚠️ {t('rm_trigger_stale').format(n=int(trigger_age or 0))}")
+
+    latest_past_date = datetime.date.today() - datetime.timedelta(days=1)
+    col_from, col_to, col_start = st.columns([2, 2, 1.25])
+    with col_from:
+        date_from = st.date_input(
+            t("rm_backfill_date_from_label"),
+            value=latest_past_date,
             min_value=datetime.date(1991, 1, 1),
-            max_value=datetime.date.today() - datetime.timedelta(days=1),
-            key="rm_backfill_date",
+            max_value=latest_past_date,
+            key="rm_backfill_date_from",
             help=t("rm_backfill_help"),
         )
-    with col_back:
-        backfill_clicked = st.button(
-            "🗓 " + t("rm_backfill_btn"),
-            key="rm_backfill_run",
-            use_container_width=True,
-            disabled=not can_run or backfill_date is None,
+    with col_to:
+        date_to = st.date_input(
+            t("rm_backfill_date_to_label"),
+            value=latest_past_date,
+            min_value=datetime.date(1991, 1, 1),
+            max_value=latest_past_date,
+            key="rm_backfill_date_to",
+            help=t("rm_backfill_help"),
         )
-    if backfill_clicked and backfill_date is not None:
+
+    valid_range = date_from <= date_to
+    if not valid_range:
+        st.warning(t("rm_backfill_invalid_range"))
+    with col_start:
+        backfill_clicked = st.button(
+            "▶ " + t("rm_backfill_btn"),
+            key="rm_backfill_run",
+            type="primary",
+            use_container_width=True,
+            disabled=not can_run or not valid_range,
+        )
+
+    if backfill_clicked:
         if _IS_DOCKER_WEBUI:
             ok, _ = _enqueue_worker_trigger(
-                "backfill_run", target_date=backfill_date.isoformat()
+                "backfill_run",
+                date_from=date_from.isoformat(),
+                date_to=date_to.isoformat(),
             )
             if ok:
                 st.toast(t("rm_backfill_sent"), icon="🗓")
@@ -439,17 +485,56 @@ def _render_run_control() -> None:
                 with open(log_file, "w") as lf:
                     subprocess.Popen(
                         [
-                            sys.executable, str(_MAIN_PY), "--mode", "backfill_run",
-                            "--target-date", backfill_date.isoformat(),
+                            sys.executable,
+                            str(_MAIN_PY),
+                            "--mode",
+                            "backfill_run",
+                            "--date-from",
+                            date_from.isoformat(),
+                            "--date-to",
+                            date_to.isoformat(),
                         ],
                         cwd=str(_PROJECT_ROOT),
-                        stdout=lf, stderr=lf, start_new_session=True,
+                        stdout=lf,
+                        stderr=lf,
+                        start_new_session=True,
                     )
                 st.toast(t("rm_backfill_sent"), icon="🗓")
                 time.sleep(0.5)
                 st.rerun()
             except Exception:
                 st.error(t("rm_launch_failed"))
+
+    _render_backfill_queue_summary(config_values)
+
+
+def _render_backfill_queue_summary(config_values: dict) -> None:
+    """Show the durable historical-day queue without exposing run errors."""
+    db_path = _daily_db_path_from_config(config_values or {})
+    if not db_path.exists():
+        return
+    try:
+        from utils.daily_research_store import DailyResearchStore
+
+        summary = DailyResearchStore(db_path).backfill_queue_summary()
+    except Exception:
+        return
+    if not any(summary.get(key, 0) for key in ("pending", "running", "completed", "failed")):
+        return
+    active = ""
+    if summary.get("active_date"):
+        active = t("rm_backfill_queue_active").format(
+            date=summary["active_date"]
+        )
+    st.caption(
+        t("rm_backfill_queue_line").format(
+            pending=summary.get("pending", 0),
+            running=summary.get("running", 0),
+            completed=summary.get("completed", 0),
+            failed=summary.get("failed", 0),
+            active=active,
+        )
+    )
 
 def _show_last_run_hint() -> None:
     log_groups  = _scan_all_logs()
@@ -671,6 +756,14 @@ def render(_env_values: dict, config_values: dict) -> None:
         unsafe_allow_html=True,
     )
     _render_run_control()
+
+    # 过去日报与每日研究是同级运行入口，但它们各自保持清晰的语义：
+    # 前者将一个日期范围排入队列并逐日执行，状态面板统一放在两者之后。
+    st.markdown(
+        f'<p class="section-title">🗓 {t("rm_backfill_section_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    _render_backfill_control(config_values)
     _render_status_panel(config_values)
 
     st.divider()

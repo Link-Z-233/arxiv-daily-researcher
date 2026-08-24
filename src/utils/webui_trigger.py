@@ -124,6 +124,23 @@ def _validate_optional_date(value: Any, field: str) -> Optional[str]:
         raise TriggerValidationError(f"{field} must be an ISO date") from exc
 
 
+def _validate_backfill_date(value: Any, field: str) -> str:
+    """Validate one past-date queue item accepted by ``backfill_run``."""
+    if not isinstance(value, str) or not value.strip():
+        raise TriggerValidationError(f"{field} must be an ISO date (YYYY-MM-DD)")
+    try:
+        parsed = date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise TriggerValidationError(
+            f"{field} must be an ISO date (YYYY-MM-DD)"
+        ) from exc
+    if parsed >= date.today():
+        raise TriggerValidationError(f"{field} must be in the past")
+    if parsed < _BACKFILL_EARLIEST:
+        raise TriggerValidationError(f"{field} is unreasonably old")
+    return parsed.isoformat()
+
+
 def _validate_request_id(value: Any) -> str:
     if not isinstance(value, str):
         raise TriggerValidationError("request_id must be a UUID")
@@ -162,20 +179,34 @@ def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         return normalized
 
     if mode == "backfill_run":
+        allowed = {"target_date", "date_from", "date_to"}
+        unexpected = set(args).difference(allowed)
+        if unexpected:
+            raise TriggerValidationError("backfill_run contains unsupported arguments")
+
         target_date = args.get("target_date")
-        if not isinstance(target_date, str):
-            raise TriggerValidationError("backfill_run requires a target_date string")
-        try:
-            parsed_target = date.fromisoformat(target_date.strip())
-        except ValueError as exc:
+        date_from = args.get("date_from")
+        date_to = args.get("date_to")
+        has_target = target_date not in (None, "")
+        has_range = date_from not in (None, "") or date_to not in (None, "")
+        if has_target and has_range:
             raise TriggerValidationError(
-                "target_date must be an ISO date (YYYY-MM-DD)"
-            ) from exc
-        if parsed_target >= date.today():
-            raise TriggerValidationError("target_date must be in the past")
-        if parsed_target < _BACKFILL_EARLIEST:
-            raise TriggerValidationError("target_date is unreasonably old")
-        normalized["args"] = {"target_date": parsed_target.isoformat()}
+                "backfill_run cannot mix target_date with date_from/date_to"
+            )
+        if has_target:
+            normalized["args"] = {
+                "target_date": _validate_backfill_date(target_date, "target_date")
+            }
+            return normalized
+        if not has_range:
+            raise TriggerValidationError(
+                "backfill_run requires target_date or date_from/date_to"
+            )
+        start = _validate_backfill_date(date_from, "date_from")
+        end = _validate_backfill_date(date_to, "date_to")
+        if start > end:
+            raise TriggerValidationError("date_from must not be after date_to")
+        normalized["args"] = {"date_from": start, "date_to": end}
         return normalized
 
     keywords = _validate_text_list(
@@ -271,7 +302,11 @@ def build_main_command(payload: Mapping[str, Any], project_root: Path) -> list[s
     request = validate_trigger_payload(payload)
     command = [sys.executable, str(Path(project_root) / "main.py"), "--mode", request["mode"]]
     if request["mode"] == "backfill_run":
-        command.extend(["--target-date", request["args"]["target_date"]])
+        args = request["args"]
+        if args.get("target_date"):
+            command.extend(["--target-date", args["target_date"]])
+        else:
+            command.extend(["--date-from", args["date_from"], "--date-to", args["date_to"]])
     if request["mode"] == "trend_research":
         args = request["args"]
         command.extend(["--keywords", *args["keywords"]])

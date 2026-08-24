@@ -63,6 +63,28 @@ class BackfillTriggerValidationTests(unittest.TestCase):
         self.assertIn("--target-date", command)
         self.assertIn(target, command)
 
+    def test_date_range_round_trips_into_queue_command(self):
+        start = (date.today() - timedelta(days=5)).isoformat()
+        end = (date.today() - timedelta(days=3)).isoformat()
+        payload = build_trigger_payload(
+            "backfill_run", date_from=start, date_to=end
+        )
+        command = build_main_command(payload, Path("/worker"))
+        self.assertEqual(payload["args"], {"date_from": start, "date_to": end})
+        self.assertIn("--date-from", command)
+        self.assertIn("--date-to", command)
+        self.assertIn(start, command)
+        self.assertIn(end, command)
+
+        with self.assertRaises(TriggerValidationError):
+            build_trigger_payload(
+                "backfill_run", date_from=end, date_to=start
+            )
+        with self.assertRaises(TriggerValidationError):
+            build_trigger_payload(
+                "backfill_run", target_date=start, date_from=start, date_to=end
+            )
+
     def test_today_and_future_dates_are_rejected(self):
         with self.assertRaises(TriggerValidationError):
             build_trigger_payload("backfill_run", target_date=date.today().isoformat())
@@ -179,6 +201,11 @@ class BackfillPipelineTests(unittest.TestCase):
             self.assertFalse(store.is_paper_delivered_strict("arxiv", "2601.2v1"))
             # 补跑不推进扫描水位线。
             self.assertIsNone(store.get_scan_watermark("arxiv"))
+            with store._connect() as conn:
+                run_kind = conn.execute(
+                    "SELECT run_kind FROM daily_runs ORDER BY started_at DESC LIMIT 1"
+                ).fetchone()[0]
+            self.assertEqual(run_kind, "backfill")
 
     def test_backfill_requires_target_date(self):
         with self.assertRaises(ValueError):

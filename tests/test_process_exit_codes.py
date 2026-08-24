@@ -42,6 +42,10 @@ class ProcessExitCodeTests(unittest.TestCase):
         with patch("main.settings", fake_settings), patch(
             "main.setup_run_log", return_value=None
         ), patch("main.run_lock", return_value=_Lock()), patch(
+            "main.daily_workflow_gate", return_value=_Lock()
+        ), patch(
+            "main.legacy_import_activity_gate", return_value=_Lock()
+        ), patch(
             "modes.daily_research.DailyResearchPipeline", _Pipeline
         ):
             self.assertEqual(main.main([]), 1)
@@ -70,6 +74,10 @@ class ProcessExitCodeTests(unittest.TestCase):
         )
         with patch("main.settings", fake_settings), patch("main.setup_run_log", return_value=None), patch(
             "main.run_lock", return_value=_Lock()
+        ), patch(
+            "main.daily_workflow_gate", return_value=_Lock()
+        ), patch(
+            "main.legacy_import_activity_gate", return_value=_Lock()
         ), patch("modes.trend_research.TrendResearchPipeline", _Pipeline):
             self.assertEqual(main.main(["--mode", "trend_research", "--keywords", "quantum"]), 0)
 
