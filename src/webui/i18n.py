@@ -438,7 +438,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "trend_prompt_template_text_required": {"zh": "提示词为空，无需保存模板。", "en": "The prompt is empty; nothing to save."},
     # ── search.py ────────────────────────────────────────────────────────
     "arxiv_source_enabled": {"zh": "启用 arXiv 来源", "en": "Enable arXiv source"},
-    "prl_source_enabled": {"zh": "启用 PRL 来源", "en": "Enable PRL source"},
     "sh_hint": {"zh": "成功率按每个数据源最近 20 次扫描计算。", "en": "Success rates cover each source's last 20 scans."},
     "extra_sources_title": {"zh": "额外数据源", "en": "Extra Data Sources"},
     "extra_sources_enabled": {"zh": "启用额外数据源", "en": "Enable extra data sources"},

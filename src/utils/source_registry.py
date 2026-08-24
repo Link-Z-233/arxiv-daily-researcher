@@ -21,10 +21,11 @@ SOURCE_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 ISSN_RE = re.compile(r"^\d{4}-\d{3}[\dX]$", re.IGNORECASE)
 
 
-# PRL remains a first-class core choice in the WebUI. The rest of this
-# catalog is exposed as copyable declarations rather than a growing checkbox
-# matrix. OpenAlexSource imports the same mapping, so adding a custom journal
-# through config does not require editing worker code.
+# PRL remains a first-class core worker source for backward compatibility.
+# The WebUI presents it alongside the copyable built-in declarations, but
+# never persists it as one: it stays in ``enabled_sources``. OpenAlexSource
+# imports the same mapping, so adding a custom journal through config does not
+# require editing worker code.
 OPENALEX_JOURNAL_CATALOG: Dict[str, Dict[str, Any]] = {
     "prl": {
         "full_name": "Physical Review Letters",

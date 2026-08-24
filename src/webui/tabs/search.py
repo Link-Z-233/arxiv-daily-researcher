@@ -4,9 +4,46 @@ import streamlit as st
 from webui.arxiv_categories import ARXIV_CATEGORIES, format_arxiv_category
 from webui.i18n import t
 from utils.source_registry import (
+    OPENALEX_JOURNAL_CATALOG,
+    OPENALEX_JOURNAL_TYPE,
     builtin_extra_source_definitions,
     validate_source_definitions,
 )
+
+
+def _builtin_source_options() -> dict[str, dict]:
+    """Return the built-in source choices shown by the extra-source UI.
+
+    PRL is a core worker source for backward-compatible configuration, but
+    belongs with the other built-in choices in the WebUI.  It is deliberately
+    excluded before validating/persisting declarative extra-source definitions.
+    """
+    prl = OPENALEX_JOURNAL_CATALOG["prl"]
+    options = {
+        "prl": {
+            "type": OPENALEX_JOURNAL_TYPE,
+            "code": "prl",
+            "display_name": prl["display_name"],
+            "full_name": prl["full_name"],
+            "issn": list(prl["issn"]),
+        }
+    }
+    options.update({d["code"]: d for d in builtin_extra_source_definitions()})
+    return options
+
+
+def _configured_builtin_codes(
+    configured_codes: set[str],
+    current_sources: list[str],
+    builtin_templates: dict[str, dict],
+) -> list[str]:
+    """Get UI selections from persisted definitions and the legacy PRL flag."""
+    return [
+        code
+        for code in builtin_templates
+        if code in configured_codes or (code == "prl" and code in current_sources)
+    ]
+
 
 def render(_env_values: dict, config_values: dict):
     """Render the Data Sources tab."""
@@ -83,14 +120,9 @@ def render(_env_values: dict, config_values: dict):
         help=t("extra_sources_help"),
     )
     if extra_enabled:
-        prl_enabled = st.toggle(
-            t("prl_source_enabled"),
-            value="prl" in current_sources,
-            key="source_prl",
-        )
-
-        # 内置来源模板目录：PRA/PRB/Nature/…/Hugging Face Papers
-        builtin_templates = {d["code"]: d for d in builtin_extra_source_definitions()}
+        # 内置来源模板目录：PRL/PRA/PRB/Nature/…/Hugging Face Papers。
+        # PRL 在配置层仍是核心来源，不能写入 declarative definitions。
+        builtin_templates = _builtin_source_options()
         configured_codes = {str(d.get("code", "")).lower() for d in extra_cfg}
 
         # 自定义（非内置）来源保存在会话里，初始值来自磁盘配置
@@ -108,7 +140,9 @@ def render(_env_values: dict, config_values: dict):
         selected_builtins = st.multiselect(
             t("extra_sources_builtin_label"),
             options=list(builtin_templates),
-            default=[c for c in builtin_templates if c in configured_codes],
+            default=_configured_builtin_codes(
+                configured_codes, current_sources, builtin_templates
+            ),
             format_func=_builtin_label,
             key="extra_builtin_selected",
         )
@@ -193,14 +227,19 @@ def render(_env_values: dict, config_values: dict):
         # 由多选与自定义列表推导出最终定义（供 HF 参数区与报告归类开关判断）
         try:
             parsed_extra = validate_source_definitions(
-                [builtin_templates[code] for code in selected_builtins] + custom_definitions
+                [
+                    builtin_templates[code]
+                    for code in selected_builtins
+                    if code != "prl"
+                ]
+                + custom_definitions
             )
         except ValueError:
             parsed_extra = []
 
         # 单一 arXiv 来源没有按来源拆分目录的必要；只有真正启用了额外
         # 来源时才显示该选项。
-        if prl_enabled or parsed_extra:
+        if "prl" in selected_builtins or parsed_extra:
             st.toggle(
                 t("reports_by_source_toggle"),
                 value=flat.get("reports_by_source", True),
@@ -266,16 +305,9 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         st.session_state.get("source_arxiv", "arxiv" in configured_sources)
     )
     extra_enabled = bool(current("extra_sources_enabled", False))
-    prl_enabled = bool(
-        st.session_state.get("source_prl", "prl" in configured_sources)
-    )
     enabled = []
     if arxiv_enabled:
         enabled.append("arxiv")
-    # PRL is presented as an extra data source in the UI. Turning that group
-    # off must therefore stop it as well as the declarative extra sources.
-    if extra_enabled and prl_enabled:
-        enabled.append("prl")
 
     configured_domains = flat.get("domains", ["quant-ph"])
     if not isinstance(configured_domains, list) or not configured_domains:
@@ -291,18 +323,27 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         configured_extra = []
     configured_extra = [d for d in configured_extra if isinstance(d, dict)]
 
-    builtin_templates = {d["code"]: d for d in builtin_extra_source_definitions()}
+    builtin_templates = _builtin_source_options()
     configured_codes = {
         str(d.get("code", "")).lower() for d in configured_extra
     }
 
     # 页面未渲染时（保存前从未打开过本页）保留磁盘现值
     if "extra_builtin_selected" not in st.session_state:
-        selected_builtins = [
-            code for code in builtin_templates if code in configured_codes
-        ]
+        selected_builtins = _configured_builtin_codes(
+            configured_codes, configured_sources, builtin_templates
+        )
     else:
-        selected_builtins = list(st.session_state["extra_builtin_selected"])
+        selected_builtins = [
+            code
+            for code in st.session_state["extra_builtin_selected"]
+            if code in builtin_templates
+        ]
+
+    # Turning the extra-source group off stops PRL alongside declarative
+    # sources.  PRL itself remains an enabled_sources entry for compatibility.
+    if extra_enabled and "prl" in selected_builtins:
+        enabled.append("prl")
 
     if "extra_custom_definitions" not in st.session_state:
         custom_definitions = [
@@ -315,7 +356,12 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
 
     try:
         extra_definitions = validate_source_definitions(
-            [builtin_templates[code] for code in selected_builtins] + custom_definitions
+            [
+                builtin_templates[code]
+                for code in selected_builtins
+                if code != "prl"
+            ]
+            + custom_definitions
         )
     except ValueError as exc:
         raise ValueError(f"{t('extra_sources_invalid')}: {exc}") from exc

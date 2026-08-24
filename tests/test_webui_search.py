@@ -28,7 +28,7 @@ class DataSourceCollectTests(unittest.TestCase):
         session = _FakeSessionState(
             {
                 "source_arxiv": True,
-                "source_prl": True,
+                "extra_builtin_selected": ["prl"],
                 "extra_sources_enabled": False,
             }
         )
@@ -43,7 +43,7 @@ class DataSourceCollectTests(unittest.TestCase):
         session = _FakeSessionState(
             {
                 "source_arxiv": True,
-                "source_prl": True,
+                "extra_builtin_selected": ["prl"],
                 "extra_sources_enabled": True,
             }
         )
@@ -53,6 +53,7 @@ class DataSourceCollectTests(unittest.TestCase):
 
         self.assertEqual(updates["enabled_sources"], ["arxiv", "prl"])
         self.assertTrue(updates["extra_sources_enabled"])
+        self.assertEqual(updates["extra_source_definitions"], [])
 
 
 if __name__ == "__main__":
