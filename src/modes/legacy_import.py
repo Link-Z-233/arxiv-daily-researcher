@@ -94,6 +94,17 @@ def run_import() -> int:
         )
         store.record_run_phase(run_id, "legacy_scan")
         summary = _scan_phase(store, summary)
+    except KeyboardInterrupt:
+        # WebUI 的“停止运行”会向该子进程发送 SIGINT。导入/扫描已经
+        # 写入的数据保持可恢复，但这条 daily_runs 记录必须离开 running，
+        # 否则状态面板和后续诊断会永久误报一个不存在的任务。
+        error = "用户中断旧历史导入；已写入的数据与补充积压会保留"
+        logger.warning(error)
+        try:
+            store.fail_run(run_id, error)
+        except Exception as finish_exc:
+            logger.warning("旧历史导入中断状态写入失败: %s", finish_exc)
+        return 130
     except Exception as exc:
         logger.error("旧历史导入失败: %s", exc, exc_info=True)
         store.fail_run(run_id, str(exc))

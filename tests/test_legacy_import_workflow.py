@@ -176,6 +176,40 @@ class LegacyImportWorkflowTests(unittest.TestCase):
             summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
             self.assertEqual(summary["supplement"]["state"], "failed")
 
+    def test_interrupted_import_marks_its_run_failed_before_exiting(self):
+        """The WebUI stop action must not leave a phantom running import."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "daily.db"
+
+            with (
+                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
+                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
+                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
+                patch.object(
+                    legacy_import,
+                    "import_legacy_history",
+                    side_effect=KeyboardInterrupt,
+                ),
+                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
+                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
+                patch.object(
+                    legacy_import,
+                    "legacy_import_activity_gate",
+                    side_effect=_no_lock,
+                ),
+            ):
+                self.assertEqual(legacy_import.main(), 130)
+
+            store = DailyResearchStore(db_path)
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT status, completed_at, error FROM daily_runs"
+                ).fetchone()
+            self.assertEqual(row["status"], "failed")
+            self.assertIsNotNone(row["completed_at"])
+            self.assertIn("用户中断旧历史导入", row["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
