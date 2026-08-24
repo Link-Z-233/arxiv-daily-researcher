@@ -202,7 +202,7 @@ tab_labels = [
     t("tab_favorites"),  # 收藏与检索
     t("tab_trend_runner"),  # 趋势分析
     t("tab_keywords"),  # 关键词
-    t("tab_search"),  # 搜索与数据源
+    t("tab_search"),  # 数据源
     t("tab_scoring"),  # 评分
     t("tab_analytics"),  # 数据分析
     t("tab_notifications"),  # 通知

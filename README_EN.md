@@ -317,7 +317,7 @@ The panel shares `.env` and `configs/config.json` with the worker; changes take 
 |   3   | **Favorites & Search** | **Liked papers** (chronological, titles hyperlink to arXiv, 👍/👎 metrics) + **keyword statistics** (liked-paper keyword frequency, top authors) + **paper search** (full history) |
 |   4   | **Trend Analysis**     | Keywords, date range, **full ArXiv category dropdown**, sorting, max results, TLDR, output formats and skills; custom analysis prompts (save/apply/delete templates); start/stop |
 |   5   | **Keywords**           | Research context (top), primary keywords, reference-PDF extraction (high/medium/low weight tiers + extracted list), similarity threshold                        |
-|   6   | **Search & Sources**   | Fixed recent 3-day daily window, source toggles, extra sources (dropdown multi-select + custom), **full ArXiv category multi-select**, fetch timeout         |
+|   6   | **Data Sources**       | Source toggles, extra sources (dropdown multi-select + custom), **full ArXiv category multi-select**, fetch timeout         |
 |   7   | **Scoring**            | Strategy (v1 / V2 / learned), pass-line formula, per-keyword cap, author bonus, learned-library preview, live scoring preview                                  |
 |   8   | **Analytics**          | Token usage (today/30-day totals, one-month heatmap, adaptive line chart, per-model), source health (last 20 scan receipts), compact run diagnostics           |
 |   9   | **Notifications**      | Global toggle, success/failure/attachment control, six channels, SMTP test                                                                                    |

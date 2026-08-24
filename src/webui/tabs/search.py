@@ -1,4 +1,4 @@
-"""Search & Data Sources tab for the Streamlit config panel."""
+"""Data Sources tab for the Streamlit config panel."""
 
 import streamlit as st
 from webui.arxiv_categories import ARXIV_CATEGORIES, format_arxiv_category
@@ -8,81 +8,99 @@ from utils.source_registry import (
     validate_source_definitions,
 )
 
-CORE_DATA_SOURCES = ("arxiv", "prl")
-
-
 def render(_env_values: dict, config_values: dict):
-    """Render the Search & Data Sources tab."""
+    """Render the Data Sources tab."""
 
     flat = config_values
-
-    # ---- Search Settings ----
-    st.markdown(
-        f'<p class="section-title">🔎 {t("search_settings_title")}</p>', unsafe_allow_html=True
-    )
-
-    # 日报固定回看最近 3 天（config.DAILY_SCAN_WINDOW_DAYS），
-    # 过去日期由「每日推送 → 过去日报」补跑，不再提供天数配置。
-    st.info(t("daily_scan_all_results"))
-
-    st.divider()
-
-    # ---- Data Sources ----
-    st.markdown(
-        f'<p class="section-title">🧭 {t("data_sources_title")}</p>', unsafe_allow_html=True
-    )
-
     current_sources = flat.get("enabled_sources", ["arxiv"])
     if not isinstance(current_sources, list):
         current_sources = []
 
-    source_states = {}
-    col_arxiv, col_prl = st.columns(2)
-    with col_arxiv:
-        source_states["arxiv"] = st.checkbox(
-            "arXiv", value="arxiv" in current_sources, key="source_arxiv"
-        )
-    with col_prl:
-        source_states["prl"] = st.checkbox(
-            "PRL", value="prl" in current_sources, key="source_prl"
-        )
-
-    st.toggle(
-        t("reports_by_source_toggle"),
-        value=flat.get("reports_by_source", True),
-        key="reports_by_source",
-        help=t("reports_by_source_help"),
+    # ---- arXiv ----
+    st.markdown('<p class="section-title">arXiv</p>', unsafe_allow_html=True)
+    arxiv_enabled = st.toggle(
+        t("arxiv_source_enabled"),
+        value="arxiv" in current_sources,
+        key="source_arxiv",
     )
+    if arxiv_enabled:
+        st.markdown(
+            f'<p class="hint-text">{t("arxiv_domains_hint")}</p>',
+            unsafe_allow_html=True,
+        )
 
-    # ---- Extra Sources（数据源区内，紧跟核心来源；不单开小标题）----
+        current_domains = flat.get("domains", ["quant-ph"])
+        if not isinstance(current_domains, list):
+            current_domains = []
+
+        st.multiselect(
+            t("select_arxiv_cats"),
+            options=ARXIV_CATEGORIES,
+            default=[d for d in current_domains if d in ARXIV_CATEGORIES],
+            format_func=format_arxiv_category,
+            key="arxiv_domains",
+        )
+
+        col_ax1, col_ax2 = st.columns(2)
+        with col_ax1:
+            st.number_input(
+                t("arxiv_fetch_timeout_label"),
+                min_value=30,
+                max_value=1800,
+                value=flat.get("arxiv_fetch_timeout_seconds", 180),
+                key="arxiv_fetch_timeout_seconds",
+                help=t("arxiv_fetch_timeout_help"),
+            )
+        with col_ax2:
+            st.number_input(
+                t("arxiv_announcement_lookback_grace_label"),
+                min_value=0,
+                max_value=30,
+                value=flat.get("arxiv_announcement_lookback_grace_days", 2),
+                key="arxiv_announcement_lookback_grace_days",
+                help=t("arxiv_announcement_lookback_grace_help"),
+            )
+
+    st.divider()
+
+    # ---- Extra data sources ----
+    st.markdown(
+        f'<p class="section-title">{t("extra_sources_title")}</p>',
+        unsafe_allow_html=True,
+    )
     extra_cfg = flat.get("extra_source_definitions", [])
     if not isinstance(extra_cfg, list):
         extra_cfg = []
     extra_cfg = [d for d in extra_cfg if isinstance(d, dict)]
+
+    # PRL predates declarative source definitions. Treat an existing enabled
+    # PRL source as an enabled extra-source group so it remains visible and
+    # cannot be accidentally disabled merely by opening this redesigned page.
     extra_enabled = st.toggle(
         t("extra_sources_enabled"),
-        value=bool(flat.get("extra_sources_enabled", False)),
+        value=bool(flat.get("extra_sources_enabled", False) or "prl" in current_sources),
         key="extra_sources_enabled",
         help=t("extra_sources_help"),
     )
-
-    # 内置来源模板目录：PRA/PRB/Nature/…/Hugging Face Papers
-    builtin_templates = {d["code"]: d for d in builtin_extra_source_definitions()}
-    configured_codes = {str(d.get("code", "")).lower() for d in extra_cfg}
-
-    # 自定义（非内置）来源保存在会话里，初始值来自磁盘配置
-    if "extra_custom_definitions" not in st.session_state:
-        st.session_state["extra_custom_definitions"] = [
-            d
-            for d in extra_cfg
-            if str(d.get("code", "")).lower() not in builtin_templates
-        ]
-
-    selected_builtins: list[str] = []
-    custom_definitions: list[dict] = list(st.session_state["extra_custom_definitions"])
-
-    # 额外来源启用后才展开来源配置
     if extra_enabled:
+        prl_enabled = st.toggle(
+            t("prl_source_enabled"),
+            value="prl" in current_sources,
+            key="source_prl",
+        )
+
+        # 内置来源模板目录：PRA/PRB/Nature/…/Hugging Face Papers
+        builtin_templates = {d["code"]: d for d in builtin_extra_source_definitions()}
+        configured_codes = {str(d.get("code", "")).lower() for d in extra_cfg}
+
+        # 自定义（非内置）来源保存在会话里，初始值来自磁盘配置
+        if "extra_custom_definitions" not in st.session_state:
+            st.session_state["extra_custom_definitions"] = [
+                d
+                for d in extra_cfg
+                if str(d.get("code", "")).lower() not in builtin_templates
+            ]
+
         def _builtin_label(code: str) -> str:
             info = builtin_templates[code]
             return f"{info['display_name']}（{code}）"
@@ -95,6 +113,7 @@ def render(_env_values: dict, config_values: dict):
             key="extra_builtin_selected",
         )
 
+        custom_definitions: list[dict] = list(st.session_state["extra_custom_definitions"])
         if custom_definitions:
             st.markdown(f"**{t('extra_sources_custom_title')}**")
             for index, definition in enumerate(custom_definitions):
@@ -171,92 +190,62 @@ def render(_env_values: dict, config_values: dict):
                     st.toast(t("extra_sources_added"), icon="✅")
                     st.rerun()
 
-    # 由多选与自定义列表推导出最终定义（供 HF 参数区判断）
-    try:
-        parsed_extra = validate_source_definitions(
-            [builtin_templates[code] for code in selected_builtins] + custom_definitions
-        )
-    except ValueError:
-        parsed_extra = []
+        # 由多选与自定义列表推导出最终定义（供 HF 参数区与报告归类开关判断）
+        try:
+            parsed_extra = validate_source_definitions(
+                [builtin_templates[code] for code in selected_builtins] + custom_definitions
+            )
+        except ValueError:
+            parsed_extra = []
 
-    extra_codes = {item["code"] for item in parsed_extra} if extra_enabled else set()
-    if "huggingface_papers" in extra_codes:
-        st.info(t("huggingface_papers_source_notice"))
-        hf_col1, hf_col2 = st.columns(2)
-        with hf_col1:
-            st.number_input(
-                t("huggingface_papers_availability_lag_label"),
-                min_value=0,
-                max_value=30,
-                value=flat.get("huggingface_papers_availability_lag_days", 2),
-                key="huggingface_papers_availability_lag_days",
-                help=t("huggingface_papers_availability_lag_help"),
-            )
-            st.number_input(
-                t("huggingface_papers_request_timeout_label"),
-                min_value=5,
-                max_value=600,
-                value=flat.get("huggingface_papers_request_timeout_seconds", 30),
-                key="huggingface_papers_request_timeout_seconds",
-            )
-        with hf_col2:
-            st.number_input(
-                t("huggingface_papers_lookback_grace_label"),
-                min_value=0,
-                max_value=30,
-                value=flat.get("huggingface_papers_lookback_grace_days", 2),
-                key="huggingface_papers_lookback_grace_days",
-                help=t("huggingface_papers_lookback_grace_help"),
-            )
-            st.number_input(
-                t("huggingface_papers_request_interval_label"),
-                min_value=0.0,
-                max_value=60.0,
-                step=0.05,
-                value=float(flat.get("huggingface_papers_request_interval_seconds", 0.25)),
-                key="huggingface_papers_request_interval_seconds",
-                help=t("huggingface_papers_request_interval_help"),
+        # 单一 arXiv 来源没有按来源拆分目录的必要；只有真正启用了额外
+        # 来源时才显示该选项。
+        if prl_enabled or parsed_extra:
+            st.toggle(
+                t("reports_by_source_toggle"),
+                value=flat.get("reports_by_source", True),
+                key="reports_by_source",
+                help=t("reports_by_source_help"),
             )
 
-    st.divider()
-
-    # ---- ArXiv Settings（目标分类 + 抓取参数放在一起）----
-    st.markdown(
-        f'<p class="section-title">🗂️ {t("arxiv_settings_title")}</p>', unsafe_allow_html=True
-    )
-    st.markdown(f'<p class="hint-text">{t("arxiv_domains_hint")}</p>', unsafe_allow_html=True)
-
-    current_domains = flat.get("domains", ["quant-ph"])
-    if not isinstance(current_domains, list):
-        current_domains = []
-
-    st.multiselect(
-        t("select_arxiv_cats"),
-        options=ARXIV_CATEGORIES,
-        default=[d for d in current_domains if d in ARXIV_CATEGORIES],
-        format_func=format_arxiv_category,
-        key="arxiv_domains",
-    )
-
-    col_ax1, col_ax2 = st.columns(2)
-    with col_ax1:
-        st.number_input(
-            t("arxiv_fetch_timeout_label"),
-            min_value=30,
-            max_value=1800,
-            value=flat.get("arxiv_fetch_timeout_seconds", 180),
-            key="arxiv_fetch_timeout_seconds",
-            help=t("arxiv_fetch_timeout_help"),
-        )
-    with col_ax2:
-        st.number_input(
-            t("arxiv_announcement_lookback_grace_label"),
-            min_value=0,
-            max_value=30,
-            value=flat.get("arxiv_announcement_lookback_grace_days", 2),
-            key="arxiv_announcement_lookback_grace_days",
-            help=t("arxiv_announcement_lookback_grace_help"),
-        )
+        extra_codes = {item["code"] for item in parsed_extra}
+        if "huggingface_papers" in extra_codes:
+            st.info(t("huggingface_papers_source_notice"))
+            hf_col1, hf_col2 = st.columns(2)
+            with hf_col1:
+                st.number_input(
+                    t("huggingface_papers_availability_lag_label"),
+                    min_value=0,
+                    max_value=30,
+                    value=flat.get("huggingface_papers_availability_lag_days", 2),
+                    key="huggingface_papers_availability_lag_days",
+                    help=t("huggingface_papers_availability_lag_help"),
+                )
+                st.number_input(
+                    t("huggingface_papers_request_timeout_label"),
+                    min_value=5,
+                    max_value=600,
+                    value=flat.get("huggingface_papers_request_timeout_seconds", 30),
+                    key="huggingface_papers_request_timeout_seconds",
+                )
+            with hf_col2:
+                st.number_input(
+                    t("huggingface_papers_lookback_grace_label"),
+                    min_value=0,
+                    max_value=30,
+                    value=flat.get("huggingface_papers_lookback_grace_days", 2),
+                    key="huggingface_papers_lookback_grace_days",
+                    help=t("huggingface_papers_lookback_grace_help"),
+                )
+                st.number_input(
+                    t("huggingface_papers_request_interval_label"),
+                    min_value=0.0,
+                    max_value=60.0,
+                    step=0.05,
+                    value=float(flat.get("huggingface_papers_request_interval_seconds", 0.25)),
+                    key="huggingface_papers_request_interval_seconds",
+                    help=t("huggingface_papers_request_interval_help"),
+                )
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:
@@ -273,11 +262,20 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
     configured_sources = flat.get("enabled_sources", [])
     if not isinstance(configured_sources, list):
         configured_sources = []
-    enabled = [
-        src
-        for src in CORE_DATA_SOURCES
-        if st.session_state.get(f"source_{src}", src in configured_sources)
-    ]
+    arxiv_enabled = bool(
+        st.session_state.get("source_arxiv", "arxiv" in configured_sources)
+    )
+    extra_enabled = bool(current("extra_sources_enabled", False))
+    prl_enabled = bool(
+        st.session_state.get("source_prl", "prl" in configured_sources)
+    )
+    enabled = []
+    if arxiv_enabled:
+        enabled.append("arxiv")
+    # PRL is presented as an extra data source in the UI. Turning that group
+    # off must therefore stop it as well as the declarative extra sources.
+    if extra_enabled and prl_enabled:
+        enabled.append("prl")
 
     configured_domains = flat.get("domains", ["quant-ph"])
     if not isinstance(configured_domains, list) or not configured_domains:
@@ -324,7 +322,7 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
 
     return {
         "enabled_sources": enabled,
-        "extra_sources_enabled": bool(current("extra_sources_enabled", False)),
+        "extra_sources_enabled": extra_enabled,
         "extra_source_definitions": extra_definitions,
         "reports_by_source": current("reports_by_source", True),
         "arxiv_fetch_timeout_seconds": current("arxiv_fetch_timeout_seconds", 180),
