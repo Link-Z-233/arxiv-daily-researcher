@@ -446,7 +446,7 @@ def _render_run_control() -> None:
     can_run = not trigger_pending and not is_running
     run_clicked = st.button(
         "▶ " + t("run_now_btn"), key="rm_run_now",
-        type="primary", use_container_width=True, disabled=not can_run,
+        type="primary", width="stretch", disabled=not can_run,
     )
 
     if run_clicked:
@@ -516,7 +516,7 @@ def _render_backfill_control(config_values: dict) -> None:
         "▶ " + t("rm_backfill_btn"),
         key="rm_backfill_run",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=not can_run or not valid_range,
     )
 
@@ -808,11 +808,11 @@ def _render_log_section() -> None:
         st.button(
             f"🔄 {t('rm_refresh_log_btn')}",
             key="rm_log_refresh",
-            use_container_width=True,
+            width="stretch",
             on_click=_refresh_latest_log,
         )
     with c_col:
-        if st.button(f"✖ {t('rm_close_log_btn')}", key="rm_log_close", use_container_width=True):
+        if st.button(f"✖ {t('rm_close_log_btn')}", key="rm_log_close", width="stretch"):
             st.session_state[_LOG_CLOSED] = True
             st.rerun()
 

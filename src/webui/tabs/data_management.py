@@ -57,7 +57,7 @@ def render(env_values: dict, config_values: dict):
                 data=zip_data,
                 file_name="arxiv_researcher_config.zip",
                 mime="application/zip",
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.warning(t("dm_export_no_files"))
@@ -113,13 +113,13 @@ def render(env_values: dict, config_values: dict):
         # 操作按钮（紧跟凭据后面）
         col_a, col_b, col_c = st.columns(3)
         with col_a:
-            if st.button(t("dm_webdav_test_btn"), use_container_width=True):
+            if st.button(t("dm_webdav_test_btn"), width="stretch"):
                 _do_test_connection(env_values)
         with col_b:
-            if st.button(t("dm_webdav_upload_btn"), use_container_width=True):
+            if st.button(t("dm_webdav_upload_btn"), width="stretch"):
                 _do_sync("upload", env_values)
         with col_c:
-            if st.button(t("dm_webdav_download_btn"), use_container_width=True):
+            if st.button(t("dm_webdav_download_btn"), width="stretch"):
                 _do_sync("download", env_values)
 
         st.divider()
@@ -248,14 +248,14 @@ def render(env_values: dict, config_values: dict):
     )
 
     if st.session_state.get("backup_enabled", flat.get("backup_enabled", True)):
-        if st.button(t("dm_backup_now_btn"), use_container_width=True):
+        if st.button(t("dm_backup_now_btn"), width="stretch"):
             _do_backup(env_values, flat)
 
     # 导入 / 导出：都是压缩包，导入端自动识别 zip / gzip / 原始 SQLite
     st.divider()
     col_export, col_import = st.columns(2)
     with col_export:
-        if st.button(t("dm_backup_export_btn"), key="dm_backup_export", use_container_width=True):
+        if st.button(t("dm_backup_export_btn"), key="dm_backup_export", width="stretch"):
             try:
                 with st.spinner(t("dm_backup_running")):
                     st.session_state["dm_export_bundle"] = export_backup_zip(
@@ -270,7 +270,7 @@ def render(env_values: dict, config_values: dict):
                 data=bundle[0],
                 file_name=bundle[1],
                 mime="application/zip",
-                use_container_width=True,
+                width="stretch",
             )
 
     with col_import:
@@ -280,7 +280,7 @@ def render(env_values: dict, config_values: dict):
             key="dm_backup_import_file",
         )
         if uploaded is not None and st.button(
-            t("dm_backup_import_btn"), key="dm_backup_import", use_container_width=True
+            t("dm_backup_import_btn"), key="dm_backup_import", width="stretch"
         ):
             try:
                 with st.spinner(t("dm_backup_running")):
@@ -369,7 +369,7 @@ def _render_legacy_import_section(config_values: dict) -> None:
     # 其他每日类任务运行时仍可排队，等工作器空闲后自动接手。
     if st.button(
         t("dm_legacy_import_btn"),
-        use_container_width=True,
+        width="stretch",
         disabled=legacy_pending,
         type="primary",
     ):

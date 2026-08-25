@@ -136,20 +136,20 @@ with st.sidebar:
     st.caption(t("sidebar_caption"))
     st.divider()
 
-    if st.button(t("save_btn"), type="primary", use_container_width=True, key="save_btn"):
+    if st.button(t("save_btn"), type="primary", width="stretch", key="save_btn"):
         try:
             do_save()
             st.success(t("save_success"))
         except Exception as e:
             st.error(t("save_failed") + str(e))
 
-    if st.button(t("reload_btn"), use_container_width=True, key="reload_btn"):
+    if st.button(t("reload_btn"), width="stretch", key="reload_btn"):
         st.cache_data.clear()
         st.rerun()
 
     # 重启主研究容器：写入共享卷标记，worker 的 trigger_watcher 收到后
     # 结束容器（restart: unless-stopped 会自动拉起，并按最新 config 重装 cron）。
-    if st.button(t("restart_worker_btn"), use_container_width=True, key="restart_worker_btn"):
+    if st.button(t("restart_worker_btn"), width="stretch", key="restart_worker_btn"):
         import datetime as _dt
 
         marker = _project_root / "data" / "run" / "webui_triggers" / "restart_worker.request"
@@ -176,7 +176,7 @@ with st.sidebar:
 
     # Language toggle
     lang_label = t("lang_toggle")
-    if st.button(lang_label, use_container_width=True, key="lang_btn"):
+    if st.button(lang_label, width="stretch", key="lang_btn"):
         st.session_state["lang"] = "en" if st.session_state["lang"] == "zh" else "zh"
         st.rerun()
 

@@ -235,7 +235,7 @@ def render(env_values: dict, _config_values: dict):
                 t("test_mineru_btn"),
                 key="test_mineru",
                 type="secondary",
-                use_container_width=True,
+                width="stretch",
             )
         with col_m2:
             st.caption(t("mineru_expire_note"))

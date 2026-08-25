@@ -164,7 +164,7 @@ def render(_env_values: dict, config_values: dict) -> None:
             t("trend_run_btn"),
             key="tr_run_btn",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             disabled=not can_run,
         )
 
@@ -323,7 +323,7 @@ def render(_env_values: dict, config_values: dict) -> None:
             t("trend_prompt_template_delete"),
             key="tr_prompt_template_delete",
             disabled=not can_delete,
-            use_container_width=True,
+            width="stretch",
         ):
             updated = {
                 name: text for name, text in templates.items() if name != selected_template

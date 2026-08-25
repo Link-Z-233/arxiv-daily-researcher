@@ -93,7 +93,7 @@ def render(env_values: dict, config_values: dict):
 
     if "ps_executed" not in st.session_state:
         st.session_state["ps_executed"] = False
-    if st.button(t("ps_search_btn"), type="primary", use_container_width=True):
+    if st.button(t("ps_search_btn"), type="primary", width="stretch"):
         st.session_state["ps_executed"] = True
         st.session_state["ps_page"] = 0
     if not st.session_state["ps_executed"]:
@@ -204,7 +204,7 @@ def _render_pagination(total: int, page: int):
         return
     col_prev, col_info, col_next = st.columns([1, 2, 1])
     if col_prev.button(
-        t("ps_prev_page"), disabled=(page <= 0), use_container_width=True
+        t("ps_prev_page"), disabled=(page <= 0), width="stretch"
     ):
         st.session_state["ps_page"] = max(0, page - 1)
         st.rerun()
@@ -212,7 +212,7 @@ def _render_pagination(total: int, page: int):
     if col_next.button(
         t("ps_next_page"),
         disabled=(page >= pages - 1),
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state["ps_page"] = page + 1
         st.rerun()

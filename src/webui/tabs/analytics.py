@@ -70,7 +70,7 @@ def _render_bounded_table(table: pd.DataFrame) -> None:
 
 def _render_bounded_dataframe(rows: list[dict]) -> None:
     """Render diagnostic rows without letting a large source list grow the page."""
-    kwargs = {"hide_index": True, "use_container_width": True}
+    kwargs = {"hide_index": True, "width": "stretch"}
     if len(rows) > _MAX_VISIBLE_TABLE_ROWS:
         with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
             st.dataframe(rows, **kwargs)

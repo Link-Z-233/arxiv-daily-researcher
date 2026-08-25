@@ -162,7 +162,7 @@ def render(_env_values: dict, config_values: dict):
                 if col_rm.button(
                     "✖",
                     key=f"extra_custom_rm_{index}",
-                    use_container_width=True,
+                    width="stretch",
                     help=t("extra_sources_removed"),
                 ):
                     st.session_state["extra_custom_definitions"].pop(index)

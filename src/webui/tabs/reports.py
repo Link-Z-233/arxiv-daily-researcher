@@ -284,7 +284,7 @@ def _render_group_selectbox(
         on_change=_make_on_change(key, by_display),
     )
     # Button to explicitly load this selectbox's current selection into preview
-    if st.button(t("reports_preview_btn"), key=f"btn_{key}", use_container_width=True):
+    if st.button(t("reports_preview_btn"), key=f"btn_{key}", width="stretch"):
         chosen = st.session_state.get(key)
         if chosen in by_display:
             st.session_state[_PREVIEW_KEY] = by_display[chosen]
@@ -496,7 +496,7 @@ def _render_preview(
                 if st.button(
                     t("report_prev_day"),
                     key="nav_prev",
-                    use_container_width=True,
+                    width="stretch",
                     type="secondary",
                 ):
                     st.session_state[_PREVIEW_KEY] = prev_report
@@ -506,7 +506,7 @@ def _render_preview(
                     t("report_prev_day"),
                     key="nav_prev",
                     disabled=True,
-                    use_container_width=True,
+                    width="stretch",
                     help=t("report_no_prev"),
                 )
         with nav_col2:
@@ -514,7 +514,7 @@ def _render_preview(
                 if st.button(
                     t("report_next_day"),
                     key="nav_next",
-                    use_container_width=True,
+                    width="stretch",
                     type="secondary",
                 ):
                     st.session_state[_PREVIEW_KEY] = next_report
@@ -524,7 +524,7 @@ def _render_preview(
                     t("report_next_day"),
                     key="nav_next",
                     disabled=True,
-                    use_container_width=True,
+                    width="stretch",
                     help=t("report_no_next"),
                 )
 
@@ -795,7 +795,7 @@ def render(env_values: dict, config_values: dict) -> None:
     # 工具栏：刷新 + 非ArXiv过滤开关
     col_refresh, col_filter, _ = st.columns([1, 2, 3])
     with col_refresh:
-        if st.button(t("reports_refresh"), use_container_width=True):
+        if st.button(t("reports_refresh"), width="stretch"):
             for k in list(st.session_state.keys()):
                 if k.startswith(_SEL_KEY) or k == _PREVIEW_KEY:
                     del st.session_state[k]
