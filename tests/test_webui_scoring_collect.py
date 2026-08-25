@@ -6,6 +6,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from webui.tabs import scoring  # noqa: E402
+from webui import i18n  # noqa: E402
 
 
 class _FakeSessionState(dict):
@@ -63,6 +64,27 @@ class ScoringCollectTests(unittest.TestCase):
 
         self.assertEqual(updates["passing_score_base"], 5.0)
         self.assertEqual(updates["passing_score_weight_coefficient"], 3.0)
+
+    def test_strategy_ids_keep_localized_labels_and_complete_policy_descriptions(self):
+        self.assertEqual(
+            scoring._STRATEGY_OPTIONS,
+            (
+                "core_relevance_v2",
+                "legacy_weighted_keyword_v1",
+                "learned_preference_v1",
+            ),
+        )
+        for strategy_id in scoring._STRATEGY_OPTIONS:
+            label_key = scoring._strategy_label_key(strategy_id)
+            description_key = scoring._strategy_description_key(strategy_id)
+            label = i18n._TRANSLATIONS[label_key]
+            description = i18n._TRANSLATIONS[description_key]
+            self.assertIn("zh", label)
+            self.assertIn("en", label)
+            self.assertIn("zh", description)
+            self.assertIn("en", description)
+            self.assertGreater(len(description["zh"]), 40)
+            self.assertGreater(len(description["en"]), 40)
 
 
 if __name__ == "__main__":

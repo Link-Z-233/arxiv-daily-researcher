@@ -6,6 +6,33 @@ from webui.i18n import t
 
 _MAX_VISIBLE_LIBRARY_ROWS = 10
 _LIBRARY_SCROLL_HEIGHT_PX = 320
+_STRATEGY_OPTIONS = (
+    "core_relevance_v2",
+    "legacy_weighted_keyword_v1",
+    "learned_preference_v1",
+)
+_STRATEGY_LABEL_KEYS = {
+    "core_relevance_v2": "score_strategy_core_relevance_v2_label",
+    "legacy_weighted_keyword_v1": "score_strategy_legacy_weighted_keyword_v1_label",
+    "learned_preference_v1": "score_strategy_learned_preference_v1_label",
+}
+_STRATEGY_DESCRIPTION_KEYS = {
+    "core_relevance_v2": "score_strategy_core_relevance_v2_description",
+    "legacy_weighted_keyword_v1": "score_strategy_legacy_weighted_keyword_v1_description",
+    "learned_preference_v1": "score_strategy_learned_preference_v1_description",
+}
+
+
+def _strategy_label_key(strategy_id: str) -> str:
+    """Keep stored policy IDs stable while localizing the visible selector text."""
+    return _STRATEGY_LABEL_KEYS.get(strategy_id, strategy_id)
+
+
+def _strategy_description_key(strategy_id: str) -> str:
+    """Return the one concise-but-complete policy explanation for this strategy."""
+    return _STRATEGY_DESCRIPTION_KEYS.get(
+        strategy_id, "score_strategy_legacy_weighted_keyword_v1_description"
+    )
 
 
 def render(_env_values: dict, config_values: dict):
@@ -17,11 +44,7 @@ def render(_env_values: dict, config_values: dict):
     st.markdown(f'<p class="section-title">🧮 {t("scoring_title")}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="hint-text">{t("scoring_hint")}</p>', unsafe_allow_html=True)
 
-    strategy_options = [
-        "core_relevance_v2",
-        "legacy_weighted_keyword_v1",
-        "learned_preference_v1",
-    ]
+    strategy_options = list(_STRATEGY_OPTIONS)
     strategy = st.selectbox(
         t("score_strategy_label"),
         options=strategy_options,
@@ -32,10 +55,14 @@ def render(_env_values: dict, config_values: dict):
         else 1,
         key="score_strategy",
         help=t("score_strategy_help"),
+        format_func=lambda strategy_id: t(_strategy_label_key(strategy_id)),
     )
+    # One policy card directly below the selector explains both the
+    # qualification decision and the later ranking signals.  IDs stay in
+    # session/config so language changes never alter saved behavior.
+    st.info(t(_strategy_description_key(strategy)))
 
     if strategy == "core_relevance_v2":
-        st.info(t("core_relevance_info"))
         col1, col2, col3 = st.columns(3)
         with col1:
             st.number_input(
@@ -68,7 +95,6 @@ def render(_env_values: dict, config_values: dict):
         if not flat.get("primary_keywords", []):
             st.warning(t("core_relevance_no_primary_warning"))
     elif strategy == "learned_preference_v1":
-        st.info(t("learned_strategy_info"))
         col_d1, col_d2 = st.columns(2)
         with col_d1:
             st.number_input(
@@ -91,8 +117,6 @@ def render(_env_values: dict, config_values: dict):
                 help=t("learned_term_weight_cap_help"),
             )
         _render_learned_library_summary(flat)
-    else:
-        st.warning(t("legacy_strategy_warning"))
 
     if strategy in ("legacy_weighted_keyword_v1", "learned_preference_v1"):
         col1, col2, col3 = st.columns(3)

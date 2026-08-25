@@ -634,13 +634,37 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── scoring.py ───────────────────────────────────────────────────────
     "scoring_title": {"zh": "评价策略", "en": "Evaluation Policy"},
     "scoring_hint": {
-        "zh": "V2 仅用内容相关性决定资格；参考词与作者偏好只影响合格论文的排序。",
-        "en": "V2 uses content relevance for qualification; reference terms and author preference only rank qualified papers.",
+        "zh": "选择论文如何获得资格，以及通过后如何排序。新配置建议使用核心相关性 V2。",
+        "en": "Choose how papers qualify and how qualified papers rank. Core relevance V2 is recommended for new configurations.",
     },
     "score_strategy_label": {"zh": "评分策略", "en": "Scoring Strategy"},
     "score_strategy_help": {
-        "zh": "V2 推荐用于新配置；旧策略仅用于兼容历史阈值和可逆迁移。",
-        "en": "Use V2 for new configurations; legacy mode preserves historical thresholds for reversible migration.",
+        "zh": "界面显示本地化名称；保存时仍写入稳定的策略 ID，不会因切换语言改变行为。",
+        "en": "The selector is localized, while saving keeps the stable strategy ID; changing language never changes behavior.",
+    },
+    "score_strategy_core_relevance_v2_label": {
+        "zh": "核心相关性 V2（推荐）",
+        "en": "Core relevance V2 (Recommended)",
+    },
+    "score_strategy_legacy_weighted_keyword_v1_label": {
+        "zh": "加权关键词 V1（兼容）",
+        "en": "Weighted keywords V1 (Compatibility)",
+    },
+    "score_strategy_learned_preference_v1_label": {
+        "zh": "偏好学习 V1（个性化）",
+        "en": "Learned preference V1 (Personalized)",
+    },
+    "score_strategy_core_relevance_v2_description": {
+        "zh": "先由模型为每个关键词给出内容相关度。资格只看主关键词：按主关键词权重计算平均相关度，并且至少一个主关键词达到“强匹配”门槛；两项都满足才通过。通过后，参考关键词和收藏作者只用于排序，不能让无关论文获得资格。",
+        "en": "The model scores content relevance for each keyword. Qualification uses primary keywords only: their weighted-average relevance must pass, and at least one primary keyword must reach the strong-match threshold. Both are required. After qualification, reference terms and preferred authors only affect ranking; they cannot qualify an unrelated paper.",
+    },
+    "score_strategy_legacy_weighted_keyword_v1_description": {
+        "zh": "将主关键词和参考关键词的得分按权重累加，再叠加专家作者加分；总分达到“基础分 + 权重系数 × 全部关键词总权重”即通过。参考词和作者加分同时影响资格与排序，适合复现旧报告或临时回退，但可能放大非核心信号。",
+        "en": "Scores from primary and reference keywords are summed by weight, then expert-author bonuses are added. A paper passes when the total reaches “base score + weight coefficient × total keyword weight.” Reference terms and author bonuses affect both qualification and ranking. Use it to reproduce old reports or temporarily roll back; non-core signals can carry more influence.",
+    },
+    "score_strategy_learned_preference_v1_description": {
+        "zh": "以加权关键词 V1 为基础，再加入从喜欢/不喜欢和历史通过记录学习到的关键词、作者偏好。每个学习项先限幅再衰减，且已直接配置的关键词不会重复计算；但学习项仍会改变总分，因此也可能改变资格。适合个人化筛选，不适合严格复现基准结果。",
+        "en": "Builds on weighted keywords V1 and adds keyword/author preferences learned from likes, dislikes, and past passing papers. Each learned term is capped then dampened, and directly configured keywords are not counted twice. The learned adjustment still changes the total and can therefore change qualification. Use it for personal curation, not strict benchmark reproduction.",
     },
     "core_relevance_info": {
         "zh": "V2 资格要求：主关键词的加权平均相关度达到门槛，且至少一个主关键词强匹配。参考关键词和专家作者仅用于合格论文排序，不能让无关论文通过。",
