@@ -407,6 +407,29 @@ class WebDAVSync:
         except (ImportError, ModuleNotFoundError):
             return self._project_root / "data"
 
+    @staticmethod
+    def _daily_research_database_path(data_dir: Path) -> Path:
+        """Return the authoritative SQLite history path for WebDAV sync.
+
+        ``data/history`` is v3.2 import input only.  Normal synchronization
+        must therefore use the configured SQLite ledger, including installs
+        that deliberately keep that database outside the default data tree.
+        The thin config-panel image has no worker settings module, so it falls
+        back to the conventional mounted location there.
+        """
+        try:
+            from config import settings
+
+            configured_data_dir = Path(settings.DATA_DIR)
+            # Helpers/tests may explicitly operate on an alternate data tree;
+            # never let that call unexpectedly snapshot or restore the live
+            # configured database merely because ``config`` is importable.
+            if Path(data_dir).resolve() == configured_data_dir.resolve():
+                return Path(settings.DAILY_RESEARCH_DB_PATH)
+        except (AttributeError, ImportError, ModuleNotFoundError):
+            pass
+        return Path(data_dir) / "daily_research" / "daily_research.db"
+
     def _remote(self, rel_path: str) -> str:
         """将相对路径拼接到 remote_root 下，返回完整远程路径。"""
         rel = normalize_webdav_remote_path(rel_path)
@@ -878,7 +901,7 @@ class WebDAVSync:
         """
         上传数据文件到 WebDAV。
 
-        上传: data/history/, data/keywords/
+        上传: 新 SQLite 历史、data/keywords/
         可选: data/reports/
 
         参数:
@@ -890,16 +913,11 @@ class WebDAVSync:
         results = {}
         data_dir = self._data_dir()
 
-        # 上传 history 目录。日报 SQLite 交付账本属于同一历史状态，
-        # 会通过 _upload_daily_research_snapshot 一起上传。
-        history_dir = data_dir / "history"
-        if include_history and history_dir.exists() and any(history_dir.iterdir()):
-            results["data/history/"] = self._upload_directory(
-                history_dir, self._remote("data/history") + "/"
-            )
-        elif include_history:
-            logger.info("data/history/ 为空或不存在，跳过")
-            results["data/history/"] = True  # 空目录不算失败
+        # ``data/history`` contains only v3.2 JSON import input.  It is never
+        # a runtime history authority after the SQLite migration, so WebDAV
+        # must not keep uploading it or restore it onto a new installation.
+        # The opt-in retained its old config key for compatibility, but now
+        # means the authoritative SQLite history below.
 
         # 上传 keywords 目录
         keywords_dir = data_dir / "keywords"
@@ -1009,8 +1027,6 @@ class WebDAVSync:
         data_dir = self._data_dir()
 
         dirs_to_download = []
-        if include_history:
-            dirs_to_download.append("history")
         if include_keywords:
             dirs_to_download.append("keywords")
         if include_reports:
@@ -1053,7 +1069,7 @@ class WebDAVSync:
             direction: "upload" 或 "download"
             include_reports: 是否包含报告
             include_configs: 是否同步 config.json
-            include_history: 是否同步历史和 daily_research SQLite 状态
+            include_history: 是否同步新的 SQLite 历史状态（兼容旧配置键名）
             include_keywords: 是否同步关键词数据
 
         返回:
@@ -1112,9 +1128,9 @@ class WebDAVSync:
         directly can produce an unusable restore, so SQLite's backup API writes
         a point-in-time standalone snapshot first.
         """
-        database_path = data_dir / "daily_research" / "daily_research.db"
+        database_path = self._daily_research_database_path(data_dir)
         if not database_path.exists():
-            logger.info("data/daily_research/daily_research.db 不存在，跳过")
+            logger.info("SQLite 新历史数据库不存在，跳过 WebDAV 同步: %s", database_path)
             return True
 
         temporary_path = None
@@ -1235,7 +1251,7 @@ class WebDAVSync:
         recovery cannot silently discard the newer local state.
         """
         remote_file = self._remote("data/daily_research/daily_research.db")
-        database_path = data_dir / "daily_research" / "daily_research.db"
+        database_path = self._daily_research_database_path(data_dir)
         backup_path = database_path.with_name(database_path.name + ".before_webdav_restore")
         temporary_path = None
         try:

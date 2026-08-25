@@ -291,7 +291,10 @@ class Settings(BaseSettings):
     WEBDAV_SYNC_MODE: str = "after_report"  # 同步模式: manual / scheduled / after_report
     WEBDAV_CRON_SCHEDULE: str = "0 23 * * *"  # 定时同步 cron 表达式
     WEBDAV_SYNC_CONFIGS: bool = True  # 是否同步配置文件
-    WEBDAV_SYNC_HISTORY: bool = True  # 是否同步历史记录
+    # Compatibility name: this now synchronizes only the authoritative SQLite
+    # history. v3.2 JSON files remain local legacy-import input and are never
+    # used by normal runtime/WebDAV sync.
+    WEBDAV_SYNC_HISTORY: bool = True
     WEBDAV_SYNC_KEYWORDS: bool = True  # 是否同步关键词数据
     WEBDAV_SYNC_REPORTS: bool = False  # 是否同步报告（体积较大）
 

@@ -304,6 +304,86 @@ class WebDAVReliabilityTests(unittest.TestCase):
             self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
             self.assertEqual(list(config_path.parent.glob("*.download")), [])
 
+    def test_history_scope_syncs_sqlite_only_and_leaves_legacy_json_local(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            legacy_history = data_dir / "history"
+            legacy_history.mkdir(parents=True)
+            (legacy_history / "arxiv_history.json").write_text("{}", encoding="utf-8")
+
+            sync = _sync_shell(root)
+            sync._data_dir = lambda: data_dir
+            uploads = []
+            sync._upload_daily_research_snapshot = lambda actual_data_dir: (
+                uploads.append(actual_data_dir) or True
+            )
+            sync._upload_directory = lambda *_args, **_kwargs: self.fail(
+                "normal SQLite history sync must not upload legacy data/history"
+            )
+
+            result = sync.upload_data(
+                include_history=True,
+                include_keywords=False,
+                include_reports=False,
+            )
+
+            self.assertEqual(
+                result,
+                {"data/daily_research/daily_research.db": True},
+            )
+            self.assertEqual(uploads, [data_dir])
+            self.assertTrue((legacy_history / "arxiv_history.json").exists())
+
+    def test_history_scope_download_restores_sqlite_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            sync = _sync_shell(root)
+            sync._data_dir = lambda: data_dir
+            sync._check_remote = lambda remote: self.fail(
+                f"legacy history directory must not be requested: {remote}"
+            )
+            restores = []
+            sync._download_daily_research_snapshot = lambda actual_data_dir: (
+                restores.append(actual_data_dir) or True
+            )
+
+            result = sync.download_data(
+                include_history=True,
+                include_keywords=False,
+                include_reports=False,
+            )
+
+            self.assertEqual(
+                result,
+                {"data/daily_research/daily_research.db": True},
+            )
+            self.assertEqual(restores, [data_dir])
+            self.assertFalse((data_dir / "history").exists())
+
+    def test_history_snapshot_uses_custom_configured_sqlite_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            custom_database = root / "state" / "research.sqlite"
+            sync = _sync_shell(root)
+
+            with patch(
+                "config.settings",
+                SimpleNamespace(
+                    DATA_DIR=data_dir,
+                    DAILY_RESEARCH_DB_PATH=custom_database,
+                ),
+            ):
+                self.assertEqual(
+                    sync._daily_research_database_path(data_dir), custom_database
+                )
+            self.assertEqual(
+                sync._daily_research_database_path(root / "other-data"),
+                root / "other-data" / "daily_research" / "daily_research.db",
+            )
+
     def test_unsafe_webdav_config_download_keeps_the_existing_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

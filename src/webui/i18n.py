@@ -1117,7 +1117,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "dm_webdav_scope_title": {"zh": "同步范围", "en": "Sync Scope"},
     "dm_webdav_sync_configs_label": {"zh": "配置文件 (config.json)", "en": "Config (config.json)"},
-    "dm_webdav_sync_history_label": {"zh": "历史记录 (history/)", "en": "History (history/)"},
+    "dm_webdav_sync_history_label": {"zh": "新历史数据（SQLite）", "en": "New History Data (SQLite)"},
     "dm_webdav_sync_keywords_label": {"zh": "关键词数据 (keywords/)", "en": "Keywords (keywords/)"},
     "dm_webdav_sync_reports_label": {"zh": "报告文件 (reports/)", "en": "Reports (reports/)"},
     "dm_webdav_test_btn": {"zh": "🔌 测试连接", "en": "🔌 Test Connection"},

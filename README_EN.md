@@ -126,7 +126,7 @@ Upgrading from v3.x: one click on **Read Legacy History** (Data Management) pars
 
 ### 🧩 Supplement Reports + Past-Date Dailies
 
-After Read Legacy History finishes, its backlog (missing data + missed papers) automatically reruns through the daily pipeline as one **supplement report** — same format, capped by the per-run limit. The Daily Push tab can also queue a **past-date range** and rebuild each day in date order; each filename timestamp is that past date plus the actual run time, so reports line up with genuine history under Reports → Daily Research.
+After Read Legacy History finishes, its backlog (missing data + missed papers) automatically reruns through the daily pipeline as capped **supplement reports in batches**. The Daily Push tab can also queue a **past-date range** and rebuild each day in date order, automatically continuing later batches for a capped day; each filename timestamp is that past date plus the actual run time, so reports line up with genuine history under Reports → Daily Research.
 
 </td>
 </tr>
@@ -803,7 +803,7 @@ Three modes (Data Management tab):
 | **Scheduled** | Cron expression (e.g. daily 23:00)       |
 | **After report** | Auto-upload after each daily report   |
 
-Scopes: config, history, keyword data, reports (config only by default). Typical setup: primary device "after report", secondary devices "manual".
+Scopes: config, **new SQLite history**, keyword data, reports (config only by default). Legacy `data/history` JSON is local v3.2-import input only; normal sync and runtime never use it. Typical setup: primary device "after report", secondary devices "manual".
 </details>
 
 ---
