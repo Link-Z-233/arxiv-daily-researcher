@@ -35,6 +35,8 @@ LLM_PROVIDERS = {
     "Custom": {"base_url": "", "cheap": "", "smart": ""},
 }
 
+MINERU_API_DASHBOARD_URL = "https://mineru.net/apiManage/apiKey"
+
 
 def _detect_provider(base_url: str) -> str:
     """从 base_url 推断 LLM Provider。"""
@@ -44,6 +46,12 @@ def _detect_provider(base_url: str) -> str:
         if info["base_url"] and info["base_url"] in base_url:
             return name
     return "Custom"
+
+
+def _mineru_parser_is_selected(config_values: dict) -> bool:
+    """Return the unsaved/current parser selection without changing it."""
+    configured_mode = (config_values or {}).get("pdf_parser_mode", "pymupdf")
+    return st.session_state.get("pdf_parser_mode", configured_mode) == "mineru"
 
 
 def render(env_values: dict, _config_values: dict):
@@ -186,43 +194,54 @@ def render(env_values: dict, _config_values: dict):
             st.error(msg)
 
     # ---- MinerU API ----
-    st.divider()
-    st.markdown(
-        f'<p class="section-title">📄 {t("mineru_section_title")}</p>', unsafe_allow_html=True
-    )
-    st.markdown(f'<p class="hint-text">{t("mineru_section_hint")}</p>', unsafe_allow_html=True)
-
-    mineru_key = render_secret_input(
-        st,
-        label=t("mineru_api_key_label"),
-        env_values=env_values,
-        env_key="MINERU_API_KEY",
-        field_key="mineru_key",
-        configured_hint=t("secret_configured_keep_blank"),
-        help=t("mineru_key_help"),
-    )
-
-    col_m1, col_m2 = st.columns([1, 3])
-    with col_m1:
-        test_mineru_btn = st.button(
-            t("test_mineru_btn"), key="test_mineru", type="secondary", use_container_width=True
+    # This service is relevant only when the parser selected on the Advanced
+    # page is MinerU.  Keeping it out of the page otherwise prevents stale
+    # cloud credentials/options from looking active for PyMuPDF users.
+    if _mineru_parser_is_selected(_config_values):
+        st.divider()
+        st.markdown(
+            f'<p class="section-title">📄 {t("mineru_section_title")}</p>',
+            unsafe_allow_html=True,
         )
-    with col_m2:
-        st.caption(t("mineru_expire_note"))
+        st.markdown(f'<p class="hint-text">{t("mineru_section_hint")}</p>', unsafe_allow_html=True)
 
-    if test_mineru_btn:
-        with st.spinner(t("testing_mineru")):
-            from utils.config_io import validate_mineru_connection
+        mineru_key = render_secret_input(
+            st,
+            label=t("mineru_api_key_label"),
+            env_values=env_values,
+            env_key="MINERU_API_KEY",
+            field_key="mineru_key",
+            configured_hint=t("secret_configured_keep_blank"),
+            help=t("mineru_key_help"),
+        )
 
-            ok, msg = validate_mineru_connection(
-                resolve_secret_value(env_values, "MINERU_API_KEY", "mineru_key", st.session_state)
+        col_m1, col_m2 = st.columns([1, 3])
+        with col_m1:
+            test_mineru_btn = st.button(
+                t("test_mineru_btn"),
+                key="test_mineru",
+                type="secondary",
+                use_container_width=True,
             )
-        if ok:
-            st.success(msg)
-        else:
-            st.warning(msg)
+        with col_m2:
+            st.caption(t("mineru_expire_note"))
 
-    # 展示当前 Token 过期状态提醒（仅当有 key 时）
+        # Keep the official dashboard immediately below the test action so a
+        # failed/expired token has an obvious, trustworthy renewal destination.
+        st.markdown(f"[{t('mineru_console_link')}]({MINERU_API_DASHBOARD_URL})")
+
+        if test_mineru_btn:
+            with st.spinner(t("testing_mineru")):
+                from utils.config_io import validate_mineru_connection
+
+                ok, msg = validate_mineru_connection(
+                    resolve_secret_value(env_values, "MINERU_API_KEY", "mineru_key", st.session_state)
+                )
+            if ok:
+                st.success(msg)
+            else:
+                st.warning(msg)
+
     st.divider()
 
     # ---- 其他第三方 API Keys ----

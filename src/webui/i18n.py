@@ -282,6 +282,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Get your API token from mineru.net",
     },
     "test_mineru_btn": {"zh": "测试 MinerU 连接", "en": "Test MinerU Connection"},
+    "mineru_console_link": {
+        "zh": "打开 MinerU API 控制台 ↗",
+        "en": "Open MinerU API Dashboard ↗",
+    },
     "testing_mineru": {"zh": "连接 MinerU 中...", "en": "Connecting to MinerU..."},
     "mineru_expire_note": {
         "zh": "点击测试可查看 Token 过期日期和剩余颟度",

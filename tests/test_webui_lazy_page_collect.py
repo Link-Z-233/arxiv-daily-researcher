@@ -153,6 +153,16 @@ class LazyPageCollectTests(unittest.TestCase):
             updates = run_manager.collect({}, {"daily_max_papers_per_run": 7})
         self.assertEqual(updates["daily_max_papers_per_run"], 3)
 
+    def test_mineru_panel_follows_the_current_pdf_parser_selection(self):
+        from webui.tabs import llm
+
+        with _patch_session(_FakeSessionState()):
+            self.assertFalse(llm._mineru_parser_is_selected({"pdf_parser_mode": "pymupdf"}))
+            self.assertTrue(llm._mineru_parser_is_selected({"pdf_parser_mode": "mineru"}))
+
+        with _patch_session(_FakeSessionState({"pdf_parser_mode": "mineru"})):
+            self.assertTrue(llm._mineru_parser_is_selected({"pdf_parser_mode": "pymupdf"}))
+
     def test_backup_now_uses_current_retention_value_including_zero(self):
         """An immediate backup must honor the unsaved value currently in the UI."""
         from webui.tabs import data_management

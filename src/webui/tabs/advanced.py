@@ -14,18 +14,19 @@ def render(env_values: dict, config_values: dict):
     st.markdown(f'<p class="section-title">📄 {t("pdf_parser_title")}</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="hint-text">{t("pdf_parser_hint")}</p>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        mode_options = ["pymupdf", "mineru"]
-        current_mode = flat.get("pdf_parser_mode", "pymupdf")
-        st.selectbox(
-            t("parser_mode_label"),
-            options=mode_options,
-            index=mode_options.index(current_mode) if current_mode in mode_options else 0,
-            key="pdf_parser_mode",
-            help=t("parser_mode_help"),
-        )
-    with col2:
+    mode_options = ["pymupdf", "mineru"]
+    current_mode = flat.get("pdf_parser_mode", "pymupdf")
+    selected_mode = st.selectbox(
+        t("parser_mode_label"),
+        options=mode_options,
+        index=mode_options.index(current_mode) if current_mode in mode_options else 0,
+        key="pdf_parser_mode",
+        help=t("parser_mode_help"),
+    )
+
+    # MinerU-specific options should never suggest that they affect the local
+    # PyMuPDF parser.  They reappear immediately after MinerU is selected.
+    if selected_mode == "mineru":
         version_options = ["pipeline", "vlm"]
         current_ver = flat.get("mineru_model_version", "pipeline")
         st.selectbox(
