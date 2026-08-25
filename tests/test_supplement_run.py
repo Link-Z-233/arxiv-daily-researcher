@@ -281,8 +281,8 @@ class SupplementRunTests(unittest.TestCase):
                 [paper.paper_id for paper in papers_by_source["arxiv"]], ["2602.4v1"]
             )
 
-    def test_failed_data_repair_retries_before_pending_scan_discoveries(self):
-        """A large range scan must not starve a failed legacy-data repair."""
+    def test_pending_scan_discovery_precedes_a_previously_failed_repair(self):
+        """One unfetchable retry cannot block fresh scan discoveries forever."""
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "db.sqlite")
             store.record_supplement_backlog([
@@ -303,8 +303,51 @@ class SupplementRunTests(unittest.TestCase):
 
             self.assertEqual(
                 [(row["canonical_id"], row["reason"]) for row in rows],
-                [("2602.40", "missing_translation")],
+                [("2602.41", "missed_scan")],
             )
+
+    def test_unfetchable_repair_does_not_consume_the_supplement_report_cap(self):
+        """A retry failure stays visible but a later missed scan can still run."""
+        from modes.daily_research import _load_supplement_candidates
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = DailyResearchStore(root / "db.sqlite")
+            store.record_supplement_backlog([
+                {
+                    "source": "arxiv", "canonical_id": "2602.50", "version": 1,
+                    "paper_id": "2602.50v1", "reason": "missing_data",
+                },
+                {
+                    "source": "arxiv", "canonical_id": "2602.51", "version": 1,
+                    "paper_id": "2602.51v1", "reason": "missed_scan",
+                    "paper_json": _paper("2602.51v1").to_dict(),
+                },
+            ])
+            with patch("modes.daily_research.settings") as fake_settings, patch(
+                "sources.arxiv_source.ArxivSource.fetch_papers_by_ids",
+                return_value={},
+            ):
+                fake_settings.DAILY_MAX_PAPERS_PER_RUN = 1
+                fake_settings.HISTORY_DIR = root
+                fake_settings.get_proxy_dict.return_value = None
+                papers_by_source, selected, failures = _load_supplement_candidates(
+                    store, store.start_run(0)
+                )
+
+            self.assertEqual(failures, 1)
+            self.assertEqual(selected, [("arxiv", "2602.51", 1)])
+            self.assertEqual(
+                [paper.paper_id for paper in papers_by_source["arxiv"]], ["2602.51v1"]
+            )
+            with store._connect() as conn:
+                statuses = dict(
+                    conn.execute(
+                        "SELECT canonical_id, status FROM supplement_backlog"
+                    ).fetchall()
+                )
+            self.assertEqual(statuses["2602.50"], "failed")
+            self.assertEqual(statuses["2602.51"], "pending")
 
     def test_unlimited_supplement_claim_uses_zero_like_daily_limit(self):
         with tempfile.TemporaryDirectory() as temp_dir:

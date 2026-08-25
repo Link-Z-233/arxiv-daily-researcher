@@ -1465,10 +1465,12 @@ class DailyResearchStore:
     def claim_supplement_backlog(self, limit: int = 0) -> list[Dict[str, Any]]:
         """Select the next backlog papers for one supplement run.
 
-        Pending data-repair entries (from the legacy import) are drained
+        Pending data-repair entries (from the legacy import) are selected
         before pending missed-scan discoveries, oldest first.  Failed rows
-        retry only after all fresh pending work: an unavailable paper must not
-        consume every capped batch and starve the remainder of the import.
+        retry after fresh work so one currently-unfetchable legacy paper
+        cannot consume every capped batch and starve the rest of the import.
+        The loader also continues past a failed *pending* repair to fill the
+        cap with later deliverable rows in the same supplement report.
         Returned rows carry the persisted paper metadata when the import
         already reconstructed it.  ``limit=0`` means all rows, matching
         ``daily_research.max_papers_per_run`` semantics.

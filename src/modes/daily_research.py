@@ -621,63 +621,80 @@ def _load_supplement_candidates(
     抓不到或其他来源无法补抓的行记为 failed 留待再次重试。
     """
     limit = int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0) or 0)
-    # ``0`` is the documented unlimited setting for every daily-style run;
-    # do not quietly introduce a different 10,000-paper ceiling here.
-    rows = store.claim_supplement_backlog(limit)
-
-    need_fetch_ids: List[str] = []
-    for row in rows:
-        if row["source"] == "arxiv" and not row.get("paper_json"):
-            paper_id = str(row.get("paper_id") or "").strip()
-            if paper_id:
-                need_fetch_ids.append(paper_id)
-
-    fetched: Dict[str, PaperMetadata] = {}
-    if need_fetch_ids:
-        try:
-            from sources.arxiv_source import ArxivSource
-
-            arxiv_source = ArxivSource(
-                history_dir=settings.HISTORY_DIR,
-                proxy_dict=settings.get_proxy_dict("arxiv"),
-                load_legacy_history=False,
-            )
-            fetched = arxiv_source.fetch_papers_by_ids(need_fetch_ids)
-            logger.info("补充积压按 ID 补抓元数据: 请求 %s，成功 %s", len(need_fetch_ids), len(fetched))
-        except Exception as exc:
-            logger.warning("补充积压元数据补抓失败（本次跳过这些论文）: %s", exc)
-
+    # ``0`` is the documented unlimited setting for every daily-style run.
+    # Read the ordered backlog without applying the report cap here: a broken
+    # legacy row must be recorded as retryable *and then skipped* so a later,
+    # usable row can still fill this capped supplement report.
+    rows = store.claim_supplement_backlog(0)
     papers_by_source: Dict[str, List[PaperMetadata]] = {}
     selected: List[Tuple[str, str, int]] = []
     failed: List[Tuple[str, str, int]] = []
-    for row in rows:
-        source = row["source"]
-        canonical_id = row["canonical_id"]
-        version = int(row.get("version") or 0)
-        identity = (source, canonical_id, version)
+    arxiv_source = None
+    # ArXiv's ID API is intentionally requested in small chunks.  Besides
+    # matching its client-side batch behavior, this lets a failed old repair
+    # yield to a later persisted scan result without fetching an unbounded
+    # legacy backlog merely to satisfy one report's cap.
+    fetch_chunk_size = 50
+    for offset in range(0, len(rows), fetch_chunk_size):
+        if limit and len(selected) >= limit:
+            break
+        batch = rows[offset : offset + fetch_chunk_size]
+        need_fetch_ids = [
+            str(row.get("paper_id") or "").strip()
+            for row in batch
+            if row["source"] == "arxiv" and not row.get("paper_json")
+            and str(row.get("paper_id") or "").strip()
+        ]
+        fetched: Dict[str, PaperMetadata] = {}
+        if need_fetch_ids:
+            try:
+                if arxiv_source is None:
+                    from sources.arxiv_source import ArxivSource
 
-        paper = None
-        if row.get("paper_json"):
-            paper = _paper_metadata_from_backlog_payload(row["paper_json"], source)
-        if paper is None and source == "arxiv":
-            paper = fetched.get(canonical_id)
-        if paper is None:
-            failed.append(identity)
-            logger.warning(
-                "补充积压论文无法获取元数据，记为失败待重试: %s:%sv%s",
-                source, canonical_id, version,
-            )
-            continue
+                    arxiv_source = ArxivSource(
+                        history_dir=settings.HISTORY_DIR,
+                        proxy_dict=settings.get_proxy_dict("arxiv"),
+                        load_legacy_history=False,
+                    )
+                fetched = arxiv_source.fetch_papers_by_ids(need_fetch_ids)
+                logger.info(
+                    "补充积压按 ID 补抓元数据: 请求 %s，成功 %s",
+                    len(need_fetch_ids),
+                    len(fetched),
+                )
+            except Exception as exc:
+                logger.warning("补充积压元数据补抓失败（本次跳过这些论文）: %s", exc)
 
-        if store.is_paper_delivered_strict(source, paper.paper_id):
-            # 导入之后已被其他运行交付：直接销账，避免重复推送。
-            store.resolve_supplement_backlog(
-                run_id, [identity], status="delivered", detail="已由其他运行交付"
-            )
-            continue
+        for row in batch:
+            if limit and len(selected) >= limit:
+                break
+            source = row["source"]
+            canonical_id = row["canonical_id"]
+            version = int(row.get("version") or 0)
+            identity = (source, canonical_id, version)
 
-        papers_by_source.setdefault(source, []).append(paper)
-        selected.append(identity)
+            paper = None
+            if row.get("paper_json"):
+                paper = _paper_metadata_from_backlog_payload(row["paper_json"], source)
+            if paper is None and source == "arxiv":
+                paper = fetched.get(canonical_id)
+            if paper is None:
+                failed.append(identity)
+                logger.warning(
+                    "补充积压论文无法获取元数据，记为失败待重试: %s:%sv%s",
+                    source, canonical_id, version,
+                )
+                continue
+
+            if store.is_paper_delivered_strict(source, paper.paper_id):
+                # 导入之后已被其他运行交付：直接销账，避免重复推送。
+                store.resolve_supplement_backlog(
+                    run_id, [identity], status="delivered", detail="已由其他运行交付"
+                )
+                continue
+
+            papers_by_source.setdefault(source, []).append(paper)
+            selected.append(identity)
 
     if failed:
         store.resolve_supplement_backlog(
