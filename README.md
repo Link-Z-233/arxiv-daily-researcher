@@ -854,8 +854,8 @@ WebDAV 同步支持三种模式（在 WebUI「数据管理」Tab 配置）：
 | API                  | 合规措施                                                                |
 | :------------------- | :---------------------------------------------------------------------- |
 | **ArXiv**            | 使用官方 `arxiv` Python 库，内置 6 秒请求延迟、限流指数退避与 Retry-After 遵从 |
-| **OpenAlex**         | 请求头包含联系方式，建议配置 `OPENALEX_EMAIL` 进入礼貌池（Polite Pool） |
-| **Semantic Scholar** | 请求头含 User-Agent，支持配置 API Key 获取更高速率                      |
+| **OpenAlex**         | 基础查询可匿名使用；免费 `OPENALEX_API_KEY` 将每日额度从 $0.10 提高到 $1，并可在 [用量控制台](https://openalex.org/settings/api) 查看/轮换 Key |
+| **Semantic Scholar** | 大多数端点可匿名调用但共享额度可能被限流；建议申请 API Key（官方 [申请页](https://www.semanticscholar.org/product/api#api-key-form)）以提升稳定性 |
 | **MinerU**           | 遵守每日 2000 页优先级额度限制，超出后自动降至普通优先级                |
 
 > [!NOTE]

@@ -36,6 +36,10 @@ LLM_PROVIDERS = {
 }
 
 MINERU_API_DASHBOARD_URL = "https://mineru.net/apiManage/apiKey"
+OPENALEX_API_DASHBOARD_URL = "https://openalex.org/settings/api"
+SEMANTIC_SCHOLAR_API_DASHBOARD_URL = (
+    "https://www.semanticscholar.org/product/api#api-key-form"
+)
 
 
 def _detect_provider(base_url: str) -> str:
@@ -250,30 +254,87 @@ def render(env_values: dict, _config_values: dict):
     )
     st.markdown(f'<p class="hint-text">{t("third_party_keys_hint")}</p>', unsafe_allow_html=True)
 
-    col9, col10 = st.columns(2)
-    with col9:
-        st.text_input(
-            t("openalex_email_label"),
-            value=env_values.get("OPENALEX_EMAIL", ""),
-            key="openalex_email",
-        )
-        render_secret_input(
-            st,
-            label=t("s2_api_key_label"),
-            env_values=env_values,
-            env_key="SEMANTIC_SCHOLAR_API_KEY",
-            field_key="semantic_scholar_key",
-            configured_hint=t("secret_configured_keep_blank"),
-        )
-    with col10:
-        render_secret_input(
-            st,
-            label=t("openalex_api_key_label"),
-            env_values=env_values,
-            env_key="OPENALEX_API_KEY",
-            field_key="openalex_key",
-            configured_hint=t("secret_configured_keep_blank"),
-        )
+    # ---- OpenAlex ----
+    st.markdown(
+        f'<p class="subsection-title">📚 {t("openalex_section_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(f'<p class="hint-text">{t("openalex_section_hint")}</p>', unsafe_allow_html=True)
+    st.text_input(
+        t("openalex_email_label"),
+        value=env_values.get("OPENALEX_EMAIL", ""),
+        key="openalex_email",
+    )
+    render_secret_input(
+        st,
+        label=t("openalex_api_key_label"),
+        env_values=env_values,
+        env_key="OPENALEX_API_KEY",
+        field_key="openalex_key",
+        configured_hint=t("secret_configured_keep_blank"),
+    )
+    test_openalex_btn = st.button(
+        t("test_openalex_btn"),
+        key="test_openalex",
+        type="secondary",
+    )
+    st.markdown(f"[{t('openalex_console_link')}]({OPENALEX_API_DASHBOARD_URL})")
+    if test_openalex_btn:
+        with st.spinner(t("testing_openalex")):
+            from utils.config_io import validate_openalex_connection
+
+            ok, msg = validate_openalex_connection(
+                resolve_secret_value(env_values, "OPENALEX_API_KEY", "openalex_key", st.session_state),
+                st.session_state.get("openalex_email", env_values.get("OPENALEX_EMAIL", "")),
+            )
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
+
+    st.divider()
+
+    # ---- Semantic Scholar ----
+    st.markdown(
+        f'<p class="subsection-title">🧠 {t("semantic_scholar_section_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<p class="hint-text">{t("semantic_scholar_section_hint")}</p>',
+        unsafe_allow_html=True,
+    )
+    render_secret_input(
+        st,
+        label=t("s2_api_key_label"),
+        env_values=env_values,
+        env_key="SEMANTIC_SCHOLAR_API_KEY",
+        field_key="semantic_scholar_key",
+        configured_hint=t("secret_configured_keep_blank"),
+    )
+    test_semantic_scholar_btn = st.button(
+        t("test_semantic_scholar_btn"),
+        key="test_semantic_scholar",
+        type="secondary",
+    )
+    st.markdown(
+        f"[{t('semantic_scholar_console_link')}]({SEMANTIC_SCHOLAR_API_DASHBOARD_URL})"
+    )
+    if test_semantic_scholar_btn:
+        with st.spinner(t("testing_semantic_scholar")):
+            from utils.config_io import validate_semantic_scholar_connection
+
+            ok, msg = validate_semantic_scholar_connection(
+                resolve_secret_value(
+                    env_values,
+                    "SEMANTIC_SCHOLAR_API_KEY",
+                    "semantic_scholar_key",
+                    st.session_state,
+                )
+            )
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
 
 
 def collect(env_values: dict, _config_values: dict) -> dict:

@@ -1445,3 +1445,91 @@ def validate_mineru_connection(api_key: str) -> Tuple[bool, str]:
 
     except Exception as e:
         return False, f"⚠️ 无法连接 MinerU API: {e}"
+
+
+def validate_openalex_connection(api_key: str, email: str = "") -> Tuple[bool, str]:
+    """Test OpenAlex with one inexpensive, read-only API request.
+
+    OpenAlex officially accepts either an ``Authorization: Bearer`` header or
+    an ``api_key`` query parameter.  Use the header here so a diagnostic
+    request never puts the credential in a URL that a proxy/logger could
+    retain.  The normal source still follows the provider's documented query
+    parameter form.
+    """
+    import urllib.error as urlerr
+    import urllib.parse as urlparse
+    import urllib.request as urlreq
+
+    clean_key = (api_key or "").strip()
+    clean_email = (email or "").strip()
+    params = {"per-page": "1", "select": "id"}
+    if not clean_key and clean_email:
+        # Retain the user's contact information on anonymous diagnostics,
+        # matching the source's normal request behavior.
+        params["mailto"] = clean_email
+
+    request = urlreq.Request(
+        "https://api.openalex.org/works?" + urlparse.urlencode(params),
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "ArxivDailyResearcher/2.0",
+            **({"Authorization": f"Bearer {clean_key}"} if clean_key else {}),
+        },
+    )
+    try:
+        with urlreq.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+                return False, "OpenAlex 返回了无法识别的响应，未确认连接。"
+            remaining = response.headers.get("X-RateLimit-Remaining")
+            if clean_key:
+                suffix = f"，当前日额度剩余 {remaining}" if remaining else ""
+                return True, f"✅ OpenAlex API Key 有效，连接正常{suffix}。"
+            return True, "✅ OpenAlex API 可访问（当前未配置 API Key，使用匿名额度）。"
+    except urlerr.HTTPError as exc:
+        if exc.code in (401, 403):
+            return False, "❌ OpenAlex API Key 无效、已撤销或无权访问。"
+        if exc.code == 429:
+            return False, "⚠️ OpenAlex 已达到请求速率或今日额度，请稍后再试或检查 API Key 配额。"
+        return False, f"❌ OpenAlex API 返回 HTTP {exc.code}。"
+    except urlerr.URLError as exc:
+        return False, f"⚠️ 无法连接 OpenAlex API: {getattr(exc, 'reason', exc)}"
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return False, f"⚠️ OpenAlex 连接测试失败: {exc}"
+
+
+def validate_semantic_scholar_connection(api_key: str) -> Tuple[bool, str]:
+    """Test Semantic Scholar with a single known-paper metadata request."""
+    import urllib.error as urlerr
+    import urllib.request as urlreq
+
+    clean_key = (api_key or "").strip()
+    request = urlreq.Request(
+        "https://api.semanticscholar.org/graph/v1/paper/ARXIV:1706.03762?fields=title",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "ArxivDailyResearcher/2.0",
+            **({"x-api-key": clean_key} if clean_key else {}),
+        },
+    )
+    try:
+        with urlreq.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("title"), str):
+                return False, "Semantic Scholar 返回了无法识别的响应，未确认连接。"
+            if clean_key:
+                return True, "✅ Semantic Scholar API Key 有效，连接正常。"
+            return True, "✅ Semantic Scholar API 可访问（当前未配置 API Key，使用共享匿名额度）。"
+    except urlerr.HTTPError as exc:
+        if exc.code in (401, 403):
+            return False, "❌ Semantic Scholar API Key 无效、已撤销或无权访问。"
+        if exc.code == 429:
+            return False, (
+                "⚠️ Semantic Scholar 当前被限流。无 Key 时这是共享匿名额度；"
+                "有 Key 时请等待后重试或检查该 Key 的配额。"
+            )
+        return False, f"❌ Semantic Scholar API 返回 HTTP {exc.code}。"
+    except urlerr.URLError as exc:
+        return False, f"⚠️ 无法连接 Semantic Scholar API: {getattr(exc, 'reason', exc)}"
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return False, f"⚠️ Semantic Scholar 连接测试失败: {exc}"

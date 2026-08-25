@@ -254,8 +254,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Optional API keys for enhanced features.",
     },
     "openalex_email_label": {
-        "zh": "OpenAlex Email（提升速率限制）",
-        "en": "OpenAlex Email (improves rate limit)",
+        "zh": "OpenAlex 联系邮箱（可选）",
+        "en": "OpenAlex contact email (optional)",
     },
     "s2_api_key_label": {
         "zh": "Semantic Scholar API Key",
@@ -264,6 +264,37 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "openalex_api_key_label": {
         "zh": "OpenAlex API Key",
         "en": "OpenAlex API Key",
+    },
+    "openalex_section_title": {"zh": "OpenAlex", "en": "OpenAlex"},
+    "openalex_section_hint": {
+        "zh": "免费 API Key 可将每日 API 额度提高到匿名使用的 10 倍，并可查看用量。",
+        "en": "A free API key gives 10× the anonymous daily API budget and usage visibility.",
+    },
+    "test_openalex_btn": {"zh": "测试 OpenAlex 连接", "en": "Test OpenAlex Connection"},
+    "testing_openalex": {"zh": "连接 OpenAlex 中...", "en": "Connecting to OpenAlex..."},
+    "openalex_console_link": {
+        "zh": "打开 OpenAlex API 控制台 ↗",
+        "en": "Open OpenAlex API Dashboard ↗",
+    },
+    "semantic_scholar_section_title": {
+        "zh": "Semantic Scholar",
+        "en": "Semantic Scholar",
+    },
+    "semantic_scholar_section_hint": {
+        "zh": "用于可选 TL;DR 增强；API Key 可避免共享匿名额度并提高稳定性。",
+        "en": "Used for optional TL;DR enrichment; an API key avoids shared anonymous limits.",
+    },
+    "test_semantic_scholar_btn": {
+        "zh": "测试 Semantic Scholar 连接",
+        "en": "Test Semantic Scholar Connection",
+    },
+    "testing_semantic_scholar": {
+        "zh": "连接 Semantic Scholar 中...",
+        "en": "Connecting to Semantic Scholar...",
+    },
+    "semantic_scholar_console_link": {
+        "zh": "打开 Semantic Scholar API 申请页 ↗",
+        "en": "Open Semantic Scholar API Key Page ↗",
     },
     "mineru_api_key_label": {
         "zh": "MinerU API Key",

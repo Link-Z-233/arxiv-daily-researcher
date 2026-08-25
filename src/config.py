@@ -120,8 +120,8 @@ class Settings(BaseSettings):
     HISTORY_DIR: Path = DATA_DIR / "history"  # 历史记录目录
 
     # OpenAlex 配置
-    OPENALEX_EMAIL: str = ""  # OpenAlex 礼貌池邮箱（可选，提高速率限制）
-    OPENALEX_API_KEY: str = ""  # OpenAlex API Key（可选，2026年2月后必需）
+    OPENALEX_EMAIL: str = ""  # OpenAlex 联系邮箱（可选）
+    OPENALEX_API_KEY: str = ""  # 免费 Key 提高每日 API 额度并便于查看用量
 
     # ArXiv 抓取配置
     ARXIV_FETCH_TIMEOUT_SECONDS: int = 180  # 单次抓取硬超时，避免无限阻塞
