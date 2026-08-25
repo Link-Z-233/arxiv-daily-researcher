@@ -6,6 +6,8 @@ v4 的 SQLite 账本是唯一每日研究历史，升级后并不会迁移旧数
 1. ``data/history/*_history.json`` — 只有「论文标识 → 交付时间」；
 2. ``data/reports/daily_research/html/**/*.html`` — 日报卡片里保存着
    标题/作者/摘要/评分/翻译/深度分析等完整数据。
+3. ``data/keywords/keywords.db`` — v3.2 的逐论文关键词、标准化词和
+   别名映射，HTML 报告只能恢复其中一部分。
 
 导入规则：
 - 同一论文出现多份卡片时，最新报告覆盖旧数据；
@@ -525,6 +527,7 @@ def import_legacy_history(
     history_dir: Path,
     reports_html_dir: Path,
     delivery_run_id: str,
+    legacy_keywords_db_path: Optional[Path] = None,
     progress_logger: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """把旧 JSON 历史与 HTML 日报卡片合并进 SQLite，返回汇总。"""
@@ -542,6 +545,7 @@ def import_legacy_history(
         "missing_translation": 0,
         "missing_analysis": 0,
         "backlog_queued": 0,
+        "legacy_keywords": {},
         "errors": [],
     }
 
@@ -549,6 +553,32 @@ def import_legacy_history(
     summary["history_files"] = {
         source: len(entries) for source, entries in histories.items()
     }
+
+    keyword_db_path = (
+        Path(legacy_keywords_db_path)
+        if legacy_keywords_db_path is not None
+        else Path(history_dir).parent / "keywords" / "keywords.db"
+    )
+    if not keyword_db_path.is_file():
+        summary["legacy_keywords"] = {"state": "not_found", "records_imported": 0}
+        log.info("[LegacyKeywordImport] 未找到旧 keywords.db，跳过关键词库迁移")
+    else:
+        try:
+            from keyword_tracker.database import KeywordDatabase
+
+            keyword_summary = KeywordDatabase(store.db_path).import_legacy_database(
+                keyword_db_path, progress_logger=log
+            )
+            summary["legacy_keywords"] = keyword_summary
+            if keyword_summary.get("state") in {"failed", "unreadable", "unsupported_schema"}:
+                summary["errors"].append(
+                    "旧 keywords.db 迁移未完成: "
+                    + str(keyword_summary.get("error") or keyword_summary["state"])
+                )
+        except Exception as exc:  # 历史关键词不能阻断 HTML / JSON 主迁移
+            log.warning("[LegacyImport] 旧 keywords.db 迁移初始化失败: %s", exc)
+            summary["legacy_keywords"] = {"state": "failed", "error": str(exc)}
+            summary["errors"].append(f"旧 keywords.db 迁移初始化失败: {exc}")
 
     cards = parse_legacy_report_cards(reports_html_dir)
     summary["cards_found"] = len(cards)

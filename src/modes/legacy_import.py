@@ -94,6 +94,7 @@ def run_import() -> tuple[int, str, dict]:
             history_dir=settings.HISTORY_DIR,
             reports_html_dir=settings.REPORTS_DIR / "daily_research" / "html",
             delivery_run_id=run_id,
+            legacy_keywords_db_path=settings.KEYWORD_DB_PATH,
             progress_logger=logger,
         )
         store.record_run_phase(run_id, "legacy_scan")

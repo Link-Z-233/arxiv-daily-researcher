@@ -1285,8 +1285,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # 旧版本（v3.2）历史导入
     "dm_legacy_title": {"zh": "旧版本历史导入（v3.2）", "en": "Legacy History Import (v3.2)"},
     "dm_legacy_hint": {
-        "zh": "一键读取 v3.2 的 JSON 历史与全部 HTML 日报，把完整数据写入 SQLite：重复分析以最新报告为准；数据缺失或时间段扫描发现的遗漏论文会自动按每份报告上限分批生成补充报告。暂时无法处理的数据会保留，后续读取旧历史时重试。本流程会等待每日研究、趋势分析及其他相关任务空闲后运行。",
-        "en": "Read the v3.2 JSON history and all HTML reports into SQLite in one click: duplicated analyses resolve to the newest report; incomplete and range-scan-missed papers automatically produce capped supplement reports in batches. Temporarily unavailable data remains retryable on a later legacy import. The workflow waits for daily, trend, and related work to become idle.",
+        "zh": "一键读取 v3.2 的 JSON 历史、全部 HTML 日报和旧关键词库，把完整数据写入 SQLite：重复分析以最新报告为准；数据缺失或时间段扫描发现的遗漏论文会自动按每份报告上限分批生成补充报告。暂时无法处理的数据会保留，后续读取旧历史时重试。本流程会等待每日研究、趋势分析及其他相关任务空闲后运行。",
+        "en": "Read the v3.2 JSON history, HTML reports, and keyword database into SQLite in one click: duplicated analyses resolve to the newest report; incomplete and range-scan-missed papers automatically produce capped supplement reports in batches. Temporarily unavailable data remains retryable on a later legacy import. The workflow waits for daily, trend, and related work to become idle.",
     },
     "dm_legacy_import_btn": {"zh": "📜 读取旧历史", "en": "📜 Read Legacy History"},
     "dm_supplement_btn": {"zh": "🧾 生成补充报告", "en": "🧾 Build Supplement Report"},
@@ -1320,6 +1320,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "自动补充报告：{state} · 本次处理 {processed} 篇 · 剩余积压 {pending} 条",
         "en": "Automatic supplement: {state} · processed {processed} papers · backlog remaining {pending}",
     },
+    "dm_legacy_keywords_line": {
+        "zh": "旧关键词库：{state} · 扫描 {scanned} 条 · 新增 {imported} 条 · 规范词 {terms} 个 · 别名 {aliases} 个 · 保留现有别名 {preserved} 个",
+        "en": "Legacy keyword database: {state} · scanned {scanned} · imported {imported} · canonical terms {terms} · aliases {aliases} · existing aliases retained {preserved}",
+    },
+    "dm_legacy_keywords_state_not_found": {"zh": "未找到", "en": "not found"},
+    "dm_legacy_keywords_state_imported": {"zh": "已迁移", "en": "imported"},
+    "dm_legacy_keywords_state_same_database": {"zh": "目标库相同，已跳过", "en": "same database; skipped"},
+    "dm_legacy_keywords_state_unreadable": {"zh": "无法读取", "en": "unreadable"},
+    "dm_legacy_keywords_state_unsupported_schema": {"zh": "格式不受支持", "en": "unsupported schema"},
+    "dm_legacy_keywords_state_failed": {"zh": "迁移失败", "en": "failed"},
     "dm_legacy_backlog_title": {"zh": "补充运行积压", "en": "Supplement backlog"},
     "dm_legacy_backlog_line": {
         "zh": "待处理 {pending} 条（缺数据 {missing} · 遗漏 {missed}）；下次读取旧历史会自动继续重试",

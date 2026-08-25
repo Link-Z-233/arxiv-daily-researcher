@@ -1,16 +1,18 @@
-"""
-SQLite 数据库操作模块（寄宿于每日研究状态库 daily_research.db）。
+"""SQLite keyword tracking hosted by the daily-research database.
 
-原始关键词不再单独收集：每篇已完成论文的评分记录里已经带有
-``extracted_keywords``（daily_papers.score_json），本模块直接从那里读取。
-同一个数据库文件里只保存派生的标准化表：规范关键词、别名映射与每日统计。
+The normal source of raw terms is each completed paper's
+``daily_papers.score_json.extracted_keywords``. v3.2 stored those records in
+its own ``keywords.db`` though, so an import keeps its original per-paper
+dates in ``legacy_keyword_records``. That preservation matters for historical
+trend charts and for normalized aliases which cannot be reconstructed from an
+HTML report alone.
 """
 
 import sqlite3
 import logging
 from pathlib import Path
 from datetime import date, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -33,8 +35,9 @@ class KeywordTrendData:
     daily_counts: Dict[date, int]
 
 
-# 论文库中的原始关键词视图：每篇已完成论文 × 其提取关键词。
-# json_type 守卫 score_json 缺失/损坏/字段不是数组的情况。
+# 论文库中的原始关键词视图。普通 v4 数据来自每篇已完成论文的评分 JSON；
+# 已迁移的 v3.2 论文改用旧库原始记录，保留它当时的提取日期并避免同一论文
+# 的 HTML 关键词与 keywords.db 关键词重复计数。
 _PAPER_KEYWORDS_SQL = """
 SELECT LOWER(je.value) AS keyword,
        dp.source AS source,
@@ -46,6 +49,19 @@ WHERE dp.completed_at IS NOT NULL
   AND json_valid(dp.score_json)
   AND json_type(dp.score_json, '$.extracted_keywords') = 'array'
   AND je.type = 'text'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM legacy_keyword_records legacy
+      WHERE legacy.source = dp.source
+        AND legacy.paper_id = dp.paper_id
+  )
+UNION ALL
+SELECT LOWER(legacy.keyword) AS keyword,
+       legacy.source AS source,
+       legacy.paper_id AS paper_id,
+       legacy.extracted_date AS day
+FROM legacy_keyword_records legacy
+WHERE legacy.keyword != ''
 """
 
 
@@ -55,6 +71,7 @@ class KeywordDatabase:
 
     用于查询论文库关键词和管理标准化结果，支持：
     - 从论文评分记录读取原始关键词
+    - 从 v3.2 ``keywords.db`` 幂等迁移原始关键词与标准化映射
     - 标准化关键词管理
     - 别名映射
     - 趋势统计
@@ -111,12 +128,223 @@ class KeywordDatabase:
                     UNIQUE(normalized_keyword_id, count_date)
                 );
 
+                -- v3.2 的独立 keywords.db 原始记录。当前版本的原始词仍然
+                -- 留在 daily_papers.score_json；本表只保存无法由 HTML 完整
+                -- 恢复的历史记录及其原始提取日期。
+                CREATE TABLE IF NOT EXISTS legacy_keyword_records (
+                    source TEXT NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    keyword TEXT NOT NULL,
+                    extracted_date DATE NOT NULL,
+                    imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (source, paper_id, keyword)
+                );
+
                 -- 索引
                 CREATE INDEX IF NOT EXISTS idx_daily_counts_date ON keyword_daily_counts(count_date);
                 CREATE INDEX IF NOT EXISTS idx_aliases_raw ON keyword_aliases(raw_keyword);
+                CREATE INDEX IF NOT EXISTS idx_legacy_keyword_records_date
+                    ON legacy_keyword_records(extracted_date);
                 """
             )
             conn.commit()
+
+    @staticmethod
+    def _source_table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+        """Return one fixed source table's columns for schema validation."""
+        return {
+            str(row[1])
+            for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+        }
+
+    @staticmethod
+    def _normalize_legacy_date(value: Any) -> Optional[str]:
+        """Accept v3.2 DATE/TIMESTAMP forms and return one ISO calendar day."""
+        text = str(value or "").strip()
+        if len(text) < 10:
+            return None
+        try:
+            return date.fromisoformat(text[:10]).isoformat()
+        except ValueError:
+            return None
+
+    def import_legacy_database(
+        self,
+        legacy_db_path: Path,
+        *,
+        progress_logger: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Merge a v3.2 ``keywords.db`` into the v4 daily SQLite database.
+
+        The source opens read-only. Existing v4 alias choices win, while the
+        source's raw per-paper records, original dates, canonical terms and
+        aliases are merged idempotently. Daily counts are rebuilt from the
+        merged records rather than copying the old derived cache.
+        """
+        log = progress_logger or logger
+        source_path = Path(legacy_db_path)
+        summary: Dict[str, Any] = {
+            "state": "not_found",
+            "records_scanned": 0,
+            "records_imported": 0,
+            "records_invalid": 0,
+            "normalized_terms_imported": 0,
+            "aliases_imported": 0,
+            "aliases_preserved": 0,
+        }
+        if not source_path.is_file():
+            log.info("[LegacyKeywordImport] 未找到旧 keywords.db，跳过关键词库迁移")
+            return summary
+
+        try:
+            if source_path.resolve() == self.db_path.resolve():
+                summary["state"] = "same_database"
+                log.warning("[LegacyKeywordImport] 旧关键词库与目标 SQLite 相同，已跳过")
+                return summary
+        except OSError:
+            # Let the read-only open below report the concrete filesystem
+            # failure. This also keeps network-mounted paths best-effort.
+            pass
+
+        try:
+            source = sqlite3.connect(
+                f"{source_path.resolve().as_uri()}?mode=ro", uri=True
+            )
+            source.row_factory = sqlite3.Row
+        except (OSError, sqlite3.Error) as exc:
+            summary.update({"state": "unreadable", "error": str(exc)})
+            log.warning("[LegacyKeywordImport] 无法读取旧 keywords.db: %s", exc)
+            return summary
+
+        try:
+            source_tables = {
+                str(row[0])
+                for row in source.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            keyword_columns = (
+                self._source_table_columns(source, "keywords")
+                if "keywords" in source_tables
+                else set()
+            )
+            normalized_columns = (
+                self._source_table_columns(source, "normalized_keywords")
+                if "normalized_keywords" in source_tables
+                else set()
+            )
+            alias_columns = (
+                self._source_table_columns(source, "keyword_aliases")
+                if "keyword_aliases" in source_tables
+                else set()
+            )
+            required_keyword_columns = {"keyword", "paper_id", "source", "extracted_date"}
+            if (
+                not required_keyword_columns.issubset(keyword_columns)
+                and not {"id", "canonical_keyword"}.issubset(normalized_columns)
+            ):
+                summary["state"] = "unsupported_schema"
+                log.warning("[LegacyKeywordImport] 旧 keywords.db 缺少 v3.2 关键词表，已跳过")
+                return summary
+
+            log.info("[LegacyKeywordImport] 开始迁移旧 keywords.db")
+            normalized_id_map: Dict[int, int] = {}
+            with self._get_connection() as target:
+                if {"id", "canonical_keyword"}.issubset(normalized_columns):
+                    category_expr = "category" if "category" in normalized_columns else "NULL"
+                    rows = source.execute(
+                        "SELECT id, canonical_keyword, " + category_expr + " AS category "
+                        "FROM normalized_keywords ORDER BY rowid"
+                    )
+                    for row in rows:
+                        canonical = str(row["canonical_keyword"] or "").strip().lower()
+                        if not canonical:
+                            continue
+                        existing = target.execute(
+                            "SELECT id FROM normalized_keywords WHERE canonical_keyword = ?",
+                            (canonical,),
+                        ).fetchone()
+                        if existing is None:
+                            target.execute(
+                                "INSERT INTO normalized_keywords (canonical_keyword, category) VALUES (?, ?)",
+                                (canonical, row["category"]),
+                            )
+                            existing = target.execute(
+                                "SELECT id FROM normalized_keywords WHERE canonical_keyword = ?",
+                                (canonical,),
+                            ).fetchone()
+                            summary["normalized_terms_imported"] += 1
+                        normalized_id_map[int(row["id"])] = int(existing["id"])
+
+                if {"raw_keyword", "normalized_keyword_id"}.issubset(alias_columns):
+                    confidence_expr = "confidence" if "confidence" in alias_columns else "1.0"
+                    rows = source.execute(
+                        "SELECT raw_keyword, normalized_keyword_id, " + confidence_expr
+                        + " AS confidence FROM keyword_aliases ORDER BY rowid"
+                    )
+                    for row in rows:
+                        raw_keyword = str(row["raw_keyword"] or "").strip().lower()
+                        target_id = normalized_id_map.get(int(row["normalized_keyword_id"] or 0))
+                        if not raw_keyword or target_id is None:
+                            continue
+                        existing = target.execute(
+                            "SELECT normalized_keyword_id FROM keyword_aliases WHERE raw_keyword = ?",
+                            (raw_keyword,),
+                        ).fetchone()
+                        if existing is not None:
+                            summary["aliases_preserved"] += 1
+                            continue
+                        try:
+                            confidence = float(row["confidence"] or 1.0)
+                        except (TypeError, ValueError):
+                            confidence = 1.0
+                        target.execute(
+                            "INSERT INTO keyword_aliases (raw_keyword, normalized_keyword_id, confidence) "
+                            "VALUES (?, ?, ?)",
+                            (raw_keyword, target_id, confidence),
+                        )
+                        summary["aliases_imported"] += 1
+
+                if required_keyword_columns.issubset(keyword_columns):
+                    rows = source.execute(
+                        "SELECT keyword, paper_id, source, extracted_date FROM keywords ORDER BY rowid"
+                    )
+                    for row in rows:
+                        summary["records_scanned"] += 1
+                        keyword = str(row["keyword"] or "").strip().lower()
+                        paper_id = str(row["paper_id"] or "").strip()
+                        source_name = str(row["source"] or "").strip().lower()
+                        extracted_date = self._normalize_legacy_date(row["extracted_date"])
+                        if not keyword or not paper_id or not source_name or not extracted_date:
+                            summary["records_invalid"] += 1
+                            continue
+                        cursor = target.execute(
+                            "INSERT OR IGNORE INTO legacy_keyword_records "
+                            "(source, paper_id, keyword, extracted_date) VALUES (?, ?, ?, ?)",
+                            (source_name, paper_id, keyword, extracted_date),
+                        )
+                        if cursor.rowcount:
+                            summary["records_imported"] += 1
+
+            self.update_daily_counts()
+            summary["state"] = "imported"
+            log.info(
+                "[LegacyKeywordImport] 迁移完成：扫描 %s 条，新增 %s 条，"
+                "规范词 %s 个，别名 %s 个，保留现有别名 %s 个，无效 %s 条",
+                summary["records_scanned"],
+                summary["records_imported"],
+                summary["normalized_terms_imported"],
+                summary["aliases_imported"],
+                summary["aliases_preserved"],
+                summary["records_invalid"],
+            )
+            return summary
+        except (OSError, sqlite3.Error) as exc:
+            summary.update({"state": "failed", "error": str(exc)})
+            log.warning("[LegacyKeywordImport] 旧关键词库迁移失败: %s", exc)
+            return summary
+        finally:
+            source.close()
 
     def get_unique_unnormalized_keywords(self, limit: int = 100) -> List[str]:
         """

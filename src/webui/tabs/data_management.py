@@ -417,6 +417,28 @@ def _render_legacy_import_section(config_values: dict) -> None:
                         ),
                     )
                 )
+            legacy_keywords = summary.get("legacy_keywords")
+            if isinstance(legacy_keywords, dict):
+                state = str(legacy_keywords.get("state") or "not_found")
+                state_key = {
+                    "not_found": "dm_legacy_keywords_state_not_found",
+                    "imported": "dm_legacy_keywords_state_imported",
+                    "same_database": "dm_legacy_keywords_state_same_database",
+                    "unreadable": "dm_legacy_keywords_state_unreadable",
+                    "unsupported_schema": "dm_legacy_keywords_state_unsupported_schema",
+                    "failed": "dm_legacy_keywords_state_failed",
+                }.get(state)
+                state_label = t(state_key) if state_key else state
+                st.caption(
+                    t("dm_legacy_keywords_line").format(
+                        state=state_label,
+                        scanned=legacy_keywords.get("records_scanned", 0),
+                        imported=legacy_keywords.get("records_imported", 0),
+                        terms=legacy_keywords.get("normalized_terms_imported", 0),
+                        aliases=legacy_keywords.get("aliases_imported", 0),
+                        preserved=legacy_keywords.get("aliases_preserved", 0),
+                    )
+                )
     else:
         st.caption(t("dm_legacy_none"))
 

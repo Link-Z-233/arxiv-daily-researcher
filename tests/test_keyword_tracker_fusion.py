@@ -42,6 +42,58 @@ def _insert_completed_paper(
     conn.close()
 
 
+def _create_v32_keyword_database(path: Path) -> None:
+    """Create the relevant v3.2 keyword-store schema and representative rows."""
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE keywords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL,
+            paper_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            extracted_date DATE NOT NULL,
+            normalized_keyword_id INTEGER
+        );
+        CREATE TABLE normalized_keywords (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            canonical_keyword TEXT NOT NULL UNIQUE,
+            category TEXT
+        );
+        CREATE TABLE keyword_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_keyword TEXT NOT NULL UNIQUE,
+            normalized_keyword_id INTEGER NOT NULL,
+            confidence REAL DEFAULT 1.0
+        );
+        CREATE TABLE keyword_daily_counts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            normalized_keyword_id INTEGER NOT NULL,
+            count_date DATE NOT NULL,
+            paper_count INTEGER DEFAULT 0
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO normalized_keywords (id, canonical_keyword, category) VALUES (1, ?, ?)",
+        ("quantum error correction", "quantum"),
+    )
+    conn.executemany(
+        "INSERT INTO keyword_aliases (raw_keyword, normalized_keyword_id, confidence) VALUES (?, 1, ?)",
+        [("qec", 0.9), ("entanglement", 0.8)],
+    )
+    conn.executemany(
+        "INSERT INTO keywords (keyword, paper_id, source, extracted_date) VALUES (?, ?, ?, ?)",
+        [
+            ("QEC", "2401.00001", "arxiv", "2026-08-20"),
+            ("Entanglement", "2401.00002", "arxiv", "2026-08-21"),
+            ("", "broken", "arxiv", "2026-08-21"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
 class KeywordFusionTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -125,6 +177,57 @@ class KeywordFusionTests(unittest.TestCase):
 
         self.assertEqual(db.get_top_keywords(days=30), [])
         self.assertEqual(db.get_top_keywords(days=60)[0][1], 1)
+
+    def test_v32_keywords_database_merges_raw_records_and_aliases_idempotently(self):
+        legacy_path = Path(self._tmp.name) / "keywords.db"
+        _create_v32_keyword_database(legacy_path)
+        db = KeywordDatabase(self.db_path)
+
+        # A v4 decision made after upgrade is authoritative over an old alias.
+        current_id = db.get_or_create_normalized_keyword("current qec preference")
+        db.add_keyword_alias("qec", current_id)
+
+        first = db.import_legacy_database(legacy_path)
+
+        self.assertEqual(first["state"], "imported")
+        self.assertEqual(first["records_scanned"], 3)
+        self.assertEqual(first["records_imported"], 2)
+        self.assertEqual(first["records_invalid"], 1)
+        self.assertEqual(first["normalized_terms_imported"], 1)
+        self.assertEqual(first["aliases_imported"], 1)
+        self.assertEqual(first["aliases_preserved"], 1)
+        self.assertEqual(db.get_unique_unnormalized_keywords(), [])
+
+        conn = sqlite3.connect(self.db_path)
+        records = conn.execute(
+            "SELECT source, paper_id, keyword, extracted_date "
+            "FROM legacy_keyword_records ORDER BY paper_id"
+        ).fetchall()
+        qec_alias = conn.execute(
+            "SELECT normalized_keyword_id FROM keyword_aliases WHERE raw_keyword = 'qec'"
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(
+            records,
+            [
+                ("arxiv", "2401.00001", "qec", "2026-08-20"),
+                ("arxiv", "2401.00002", "entanglement", "2026-08-21"),
+            ],
+        )
+        self.assertEqual(qec_alias, current_id)
+        self.assertEqual(db.count_papers_with_keyword("qec"), 1)
+
+        second = db.import_legacy_database(legacy_path)
+        self.assertEqual(second["state"], "imported")
+        self.assertEqual(second["records_imported"], 0)
+
+    def test_missing_v32_keywords_database_is_an_explicit_non_error(self):
+        db = KeywordDatabase(self.db_path)
+
+        summary = db.import_legacy_database(Path(self._tmp.name) / "missing.db")
+
+        self.assertEqual(summary["state"], "not_found")
+        self.assertEqual(summary["records_imported"], 0)
 
 
 if __name__ == "__main__":
