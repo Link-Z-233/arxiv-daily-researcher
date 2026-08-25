@@ -529,7 +529,7 @@ Every phase transition writes a heartbeat; the Daily Push tab shows the current 
 
 ### 🧩 Backfill & Legacy Migration
 
-- **Legacy history import + automatic supplement** (`--mode legacy_import`, one click in Data Management): parses the v3.2 history JSON and all HTML reports into SQLite, then re-scans the covered date range on arXiv for missed papers. Missing and missed papers automatically continue into one capped supplement report within that same workflow; delivered entries settle out, and failures retry on the next Read Legacy History.
+- **Legacy history import + automatic supplement** (`--mode legacy_import`, one click in Data Management): parses the v3.2 history JSON and all HTML reports into SQLite, then re-scans the covered date range on arXiv for missed papers. Missing and missed papers automatically continue into capped supplement reports in the same workflow until all currently processable backlog is settled; temporary failures remain retryable on the next Read Legacy History.
 - **Past-date daily report** (`--mode backfill_run --date-from YYYY-MM-DD --date-to YYYY-MM-DD`): persists every selected date in a durable queue and runs them in date order, each with full scoring/translation/analysis. A failed day remains recorded without blocking later days; the report filename timestamp is the past date plus actual run time.
 - These workflows are idle-time jobs: they wait for daily, trend, and maintenance work, do not collide, and are resumable/idempotent.
 

@@ -818,11 +818,14 @@ def _build_daily_run_result(
     scored_papers_by_source: Dict[str, List[Dict[str, Any]]],
     analyses_by_source: Dict[str, List[Dict[str, Any]]],
     report_paths: Dict[str, Path],
+    *,
+    deferred_paper_count: int = 0,
 ) -> RunResult:
     """Build the immutable report-delivery notification payload before committing it."""
     run_result = RunResult(
         run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         total_papers_fetched=total_papers_count,
+        deferred_paper_count=max(0, int(deferred_paper_count or 0)),
         top_papers=_select_top_papers(scored_papers_by_source, settings.NOTIFICATION_TOP_N),
     )
     for source, scored_papers in scored_papers_by_source.items():
@@ -1023,38 +1026,56 @@ class DailyResearchPipeline:
                     len(papers_by_source),
                 )
             elif run_kind == "backfill":
-                # 过去日期补跑：当天提交的 arXiv 论文走与每日运行相同的
-                # 过滤/登记路径；已交付版本由账本排除，不会重复推送。
-                # 只处理当天扫描到的论文，不消费日常待处理队列。
-                papers_by_source = _fetch_backfill_papers(store, run_id, target_date)
-                papers_by_source = _exclude_sqlite_delivered_papers(store, papers_by_source)
-                papers_by_source = _exclude_cross_source_arxiv_mirrors(
-                    store, papers_by_source
-                )
-                registered_candidate_count = store.register_paper_candidates(
-                    run_id, papers_by_source, queue_scope="backfill"
-                )
+                # A capped report may have persisted more candidates than it
+                # could deliver.  Continue those durable, date-scoped rows
+                # first; this avoids a second network fetch and means one
+                # temporary arXiv outage cannot strand the remainder of an
+                # otherwise successful historical day.
                 limit = int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0) or 0)
-                selected_by_source: Dict[str, List[PaperMetadata]] = {}
-                selected_count = 0
-                for source, papers in papers_by_source.items():
-                    remaining = (
-                        limit - selected_count if limit > 0 else len(papers)
+                papers_by_source, pending_paper_count = store.select_pending_papers(
+                    ["arxiv"],
+                    limit,
+                    queue_scope="backfill",
+                    backfill_target_date=target_date,
+                )
+                registered_candidate_count = 0
+                if pending_paper_count:
+                    logger.info(
+                        "过去日报（%s）续跑已登记队列：待处理 %s 篇",
+                        target_date.isoformat(),
+                        pending_paper_count,
                     )
-                    take = papers[: max(0, remaining)]
-                    if take:
-                        selected_by_source[source] = take
-                        selected_count += len(take)
-                    if limit > 0 and selected_count >= limit:
-                        break
-                papers_by_source = selected_by_source
-                total_papers_count = selected_count
-                pending_paper_count = registered_candidate_count
+                else:
+                    # First batch for this date: scan once, register every
+                    # candidate, then select the capped subset from SQLite.
+                    fetched_by_source = _fetch_backfill_papers(store, run_id, target_date)
+                    fetched_by_source = _exclude_sqlite_delivered_papers(
+                        store, fetched_by_source
+                    )
+                    fetched_by_source = _exclude_cross_source_arxiv_mirrors(
+                        store, fetched_by_source
+                    )
+                    registered_candidate_count = store.register_paper_candidates(
+                        run_id,
+                        fetched_by_source,
+                        queue_scope="backfill",
+                        backfill_target_date=target_date,
+                    )
+                    papers_by_source, pending_paper_count = store.select_pending_papers(
+                        ["arxiv"],
+                        limit,
+                        queue_scope="backfill",
+                        backfill_target_date=target_date,
+                    )
+                total_papers_count = sum(
+                    len(papers) for papers in papers_by_source.values()
+                )
                 deferred_paper_count = pending_paper_count - total_papers_count
                 logger.info(
-                    "过去日报（%s）：当天候选 %s 篇，本次处理 %s 篇，留待后续 %s 篇",
+                    "过去日报（%s）：本轮新登记 %s 篇，当前待处理 %s 篇，本次处理 %s 篇，留待后续 %s 篇",
                     target_date.isoformat(),
                     registered_candidate_count,
+                    pending_paper_count,
                     total_papers_count,
                     deferred_paper_count,
                 )
@@ -1240,7 +1261,9 @@ class DailyResearchPipeline:
                     logger.info("未找到新的或待恢复的论文。")
                     print("\n未找到新的或待恢复的论文，程序退出。")
                 no_papers_result = RunResult(
-                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), success=True
+                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    success=True,
+                    deferred_paper_count=deferred_paper_count,
                 )
                 if store and run_id:
                     store.complete_run(run_id, {})
@@ -1646,8 +1669,24 @@ class DailyResearchPipeline:
                 reportable_papers_by_source,
                 analyses_by_source,
                 report_paths,
+                deferred_paper_count=deferred_paper_count,
             )
             if store and run_id:
+                delivered_papers_by_source = _delivered_papers_for_finalization(
+                    reportable_papers_by_source, analyses_by_source
+                )
+                if run_kind == "backfill":
+                    # ``pending_paper_count`` was captured while this workflow
+                    # gate was held.  Only the exact delivered set leaves the
+                    # date-scoped queue, so this also retains stage failures
+                    # for the next automatic batch.
+                    delivered_count = sum(
+                        len(papers)
+                        for papers in delivered_papers_by_source.values()
+                    )
+                    run_result.deferred_paper_count = max(
+                        0, pending_paper_count - delivered_count
+                    )
                 notification_entries = []
                 if settings.ENABLE_NOTIFICATIONS:
                     try:
@@ -1659,9 +1698,6 @@ class DailyResearchPipeline:
                         # delivery failure still has its per-channel outbox row.
                         logger.error("无法建立通知 outbox 条目，日报仍将完成: %s", exc)
                 maintenance_entry = after_report_sync_maintenance_entry(run_id)
-                delivered_papers_by_source = _delivered_papers_for_finalization(
-                    reportable_papers_by_source, analyses_by_source
-                )
                 store.finalize_report_delivery(
                     run_id,
                     report_paths,

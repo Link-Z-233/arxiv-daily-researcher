@@ -22,7 +22,7 @@ def _no_lock(*_args, **_kwargs):
 
 
 class LegacyImportWorkflowTests(unittest.TestCase):
-    def test_successful_import_automatically_runs_one_supplement_batch(self):
+    def test_successful_import_automatically_runs_a_supplement_batch(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             db_path = root / "daily.db"
@@ -51,6 +51,11 @@ class LegacyImportWorkflowTests(unittest.TestCase):
             class _Pipeline:
                 def run(self, *, run_kind):
                     pipeline_calls.append(run_kind)
+                    DailyResearchStore(db_path).resolve_supplement_backlog(
+                        "fake-supplement",
+                        [("arxiv", "2608.1", 1)],
+                        status="delivered",
+                    )
                     return RunResult(
                         success=True,
                         total_papers_fetched=1,
@@ -80,6 +85,112 @@ class LegacyImportWorkflowTests(unittest.TestCase):
             self.assertEqual(summary["supplement"]["state"], "completed")
             self.assertEqual(summary["supplement"]["processed"], 1)
             self.assertEqual(summary["supplement"]["pending_before"], 1)
+
+    def test_successful_import_drains_multiple_capped_supplement_batches(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "daily.db"
+            pipeline_calls = []
+
+            def fake_import(store, **_kwargs):
+                store.record_supplement_backlog(
+                    [
+                        {
+                            "source": "arxiv",
+                            "canonical_id": f"2608.{index}",
+                            "version": 1,
+                            "paper_id": f"2608.{index}v1",
+                            "reason": "missed_scan",
+                        }
+                        for index in range(1, 4)
+                    ]
+                )
+                return {"finished_at": "2026-08-24T12:00:00"}
+
+            class _CappedPipeline:
+                def run(self, *, run_kind):
+                    pipeline_calls.append(run_kind)
+                    store = DailyResearchStore(db_path)
+                    row = store.claim_supplement_backlog(1)[0]
+                    store.resolve_supplement_backlog(
+                        "fake-supplement",
+                        [(row["source"], row["canonical_id"], row["version"])],
+                        status="delivered",
+                    )
+                    return RunResult(success=True, total_papers_fetched=1)
+
+            with (
+                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
+                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
+                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
+                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
+                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
+                patch.object(
+                    legacy_import,
+                    "legacy_import_activity_gate",
+                    side_effect=_no_lock,
+                ),
+                patch("modes.daily_research.DailyResearchPipeline", _CappedPipeline),
+            ):
+                self.assertEqual(legacy_import.main(), 0)
+
+            self.assertEqual(pipeline_calls, ["supplement", "supplement", "supplement"])
+            store = DailyResearchStore(db_path)
+            self.assertEqual(store.supplement_backlog_summary()["pending"], 0)
+            summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
+            self.assertEqual(summary["supplement"]["state"], "completed")
+            self.assertEqual(summary["supplement"]["processed"], 3)
+            self.assertEqual(len(summary["supplement"]["batches"]), 3)
+
+    def test_unfetchable_batch_remains_retryable_without_looping_forever(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "daily.db"
+            pipeline_calls = []
+
+            def fake_import(store, **_kwargs):
+                store.record_supplement_backlog(
+                    [
+                        {
+                            "source": "arxiv",
+                            "canonical_id": "2608.99",
+                            "version": 1,
+                            "paper_id": "2608.99v1",
+                            "reason": "missing_data",
+                        }
+                    ]
+                )
+                return {"finished_at": "2026-08-24T12:00:00"}
+
+            class _NoProgressPipeline:
+                def run(self, *, run_kind):
+                    pipeline_calls.append(run_kind)
+                    return RunResult(success=True)
+
+            with (
+                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
+                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
+                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
+                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
+                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
+                patch.object(
+                    legacy_import,
+                    "legacy_import_activity_gate",
+                    side_effect=_no_lock,
+                ),
+                patch("modes.daily_research.DailyResearchPipeline", _NoProgressPipeline),
+            ):
+                self.assertEqual(legacy_import.main(), 0)
+
+            self.assertEqual(pipeline_calls, ["supplement"])
+            store = DailyResearchStore(db_path)
+            self.assertEqual(store.supplement_backlog_summary()["pending"], 1)
+            summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
+            self.assertEqual(summary["supplement"]["state"], "retry_pending")
 
     def test_complete_import_skips_the_unneeded_supplement_phase(self):
         with tempfile.TemporaryDirectory() as temp_dir:

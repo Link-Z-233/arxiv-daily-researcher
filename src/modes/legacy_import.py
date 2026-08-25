@@ -143,12 +143,13 @@ def run_import() -> int:
 
 
 def _run_automatic_supplement() -> int:
-    """Continue a successful import with one capped supplement-report run.
+    """Drain import backlog into capped supplement reports until it stalls.
 
-    The import itself first owns the exclusive legacy gate. It must release
-    that gate before entering the normal daily-style pipeline, otherwise the
-    shared side of the gate would deadlock itself. The result remains part of
-    the same WebUI-triggered workflow and is written back to its summary.
+    Every report still observes ``daily_research.max_papers_per_run``.  A
+    single user click, however, must not silently abandon the second and later
+    batches.  Failed/unfetchable rows deliberately stop the loop once a batch
+    makes no progress, so they stay retryable on a later import instead of
+    causing an infinite LLM/API retry loop.
     """
     store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
     summary = _load_summary(store)
@@ -166,10 +167,14 @@ def _run_automatic_supplement() -> int:
         logger.info("旧历史导入后没有缺失/遗漏论文，无需生成补充报告")
         return 0
 
-    supplement["state"] = "running"
+    supplement.update({
+        "state": "running",
+        "processed": 0,
+        "batches": [],
+    })
     _save_summary(store, summary)
     logger.info(
-        "旧历史导入完成，自动开始补充报告：积压 %s 篇；本次上限由每日研究配置控制",
+        "旧历史导入完成，自动开始补充报告：积压 %s 篇；每份报告上限由每日研究配置控制",
         pending_before,
     )
 
@@ -177,12 +182,10 @@ def _run_automatic_supplement() -> int:
         from modes.daily_research import DailyResearchPipeline
 
         # The outer legacy-import mode lock remains held for this second phase
-        # (see ``main``).  Acquire the daily gate first (the same order used
-        # by normal daily-style work), then take the import gate exclusively.
-        # This makes the automatic follow-up part of the same idle-time
-        # workflow too: trend/WebDAV/keyword-maintenance work cannot write the
-        # shared SQLite state while this supplement is selecting and settling
-        # backlog entries.
+        # (see ``main``).  Acquire both gates once for every capped batch, in
+        # the same order as normal daily work.  This preserves the importer as
+        # one idle-time workflow and avoids another task claiming rows between
+        # batches.
         with daily_workflow_gate(
             logger=logger, wait_note="自动补充报告等待每日研究/过去日报完成"
         ):
@@ -191,7 +194,76 @@ def _run_automatic_supplement() -> int:
                 logger=logger,
                 wait_note="自动补充报告等待其他任务空闲",
             ):
-                result = DailyResearchPipeline().run(run_kind="supplement")
+                while True:
+                    batch_pending_before = int(
+                        store.supplement_backlog_summary().get("pending", 0)
+                    )
+                    if batch_pending_before <= 0:
+                        supplement.update({
+                            "state": "completed",
+                            "pending_after": 0,
+                        })
+                        break
+
+                    result = DailyResearchPipeline().run(run_kind="supplement")
+                    batch = {
+                        "pending_before": batch_pending_before,
+                        "processed": int(
+                            getattr(result, "total_papers_fetched", 0) or 0
+                        ),
+                        "report_paths": dict(
+                            getattr(result, "report_paths", {}) or {}
+                        ),
+                    }
+                    supplement["batches"].append(batch)
+                    supplement["processed"] += batch["processed"]
+
+                    if getattr(result, "interrupted", False):
+                        supplement.update(
+                            {
+                                "state": "interrupted",
+                                "error": "补充报告被中断；积压论文会在下次读取旧历史时重试",
+                            }
+                        )
+                        _save_summary(store, summary)
+                        return 130
+                    if getattr(result, "success", None) is not True:
+                        supplement.update(
+                            {
+                                "state": "failed",
+                                "error": str(
+                                    getattr(result, "error_message", "补充报告未成功完成")
+                                )[:4000],
+                            }
+                        )
+                        _save_summary(store, summary)
+                        logger.error("自动补充报告未成功完成；积压仍保留供下次重试")
+                        return 1
+
+                    batch_pending_after = int(
+                        store.supplement_backlog_summary().get("pending", 0)
+                    )
+                    batch["pending_after"] = batch_pending_after
+                    supplement["pending_after"] = batch_pending_after
+                    _save_summary(store, summary)
+
+                    if batch_pending_after >= batch_pending_before:
+                        # Most commonly a missing-data row could not be fetched
+                        # this time.  It remains in failed/pending state and the
+                        # next legacy-import click retries it without starving
+                        # other batches or spinning forever.
+                        supplement.update(
+                            {
+                                "state": "retry_pending",
+                                "error": "本批没有完成可交付论文；剩余积压已保留，后续读取旧历史会重试",
+                            }
+                        )
+                        _save_summary(store, summary)
+                        logger.warning(
+                            "自动补充报告本批未推进积压，停止本轮续跑；剩余 %s 篇可重试",
+                            batch_pending_after,
+                        )
+                        break
     except KeyboardInterrupt:
         supplement.update(
             {
@@ -216,36 +288,14 @@ def _run_automatic_supplement() -> int:
         pending_after = int(store.supplement_backlog_summary().get("pending", 0))
     except Exception:
         pending_after = pending_before
-    supplement.update(
-        {
-            "state": (
-                "completed"
-                if getattr(result, "success", None) is True
-                else "failed"
-            ),
-            "pending_after": pending_after,
-            "processed": int(getattr(result, "total_papers_fetched", 0) or 0),
-            "report_paths": dict(getattr(result, "report_paths", {}) or {}),
-        }
-    )
-    if getattr(result, "interrupted", False):
-        supplement["state"] = "interrupted"
-        supplement["error"] = "补充报告被中断；积压论文会在下次读取旧历史时重试"
-        _save_summary(store, summary)
-        return 130
-    if getattr(result, "success", None) is not True:
-        supplement["error"] = str(
-            getattr(result, "error_message", "补充报告未成功完成")
-        )[:4000]
-        _save_summary(store, summary)
-        logger.error("自动补充报告未成功完成；积压仍保留供下次重试")
-        return 1
-
+    supplement.setdefault("pending_after", pending_after)
     _save_summary(store, summary)
     logger.info(
-        "自动补充报告完成：本次处理 %s 篇，剩余积压 %s 篇",
+        "自动补充报告收尾：共处理 %s 篇，生成 %s 份补充报告，剩余积压 %s 篇（%s）",
         supplement["processed"],
+        len(supplement.get("batches") or []),
         pending_after,
+        supplement.get("state"),
     )
     return 0
 

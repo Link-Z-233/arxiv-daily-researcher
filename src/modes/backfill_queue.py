@@ -82,6 +82,20 @@ def drain_backfill_queue(
             logger.warning("过去日报 %s 被中断，已回退队列", target_date)
             return 130
         if _result_success(result):
+            remaining = max(
+                0, int(getattr(result, "deferred_paper_count", 0) or 0)
+            )
+            if remaining:
+                store.requeue_backfill_job(
+                    job["backfill_id"],
+                    f"当日仍有 {remaining} 篇论文，已自动续跑下一批",
+                )
+                logger.info(
+                    "过去日报 %s 本批完成，仍有 %s 篇待处理；已自动续跑同一天",
+                    target_date,
+                    remaining,
+                )
+                continue
             store.complete_backfill_job(job["backfill_id"])
             logger.info("过去日报 %s 已完成", target_date)
             continue

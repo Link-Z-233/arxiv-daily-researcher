@@ -1182,8 +1182,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # 旧版本（v3.2）历史导入
     "dm_legacy_title": {"zh": "旧版本历史导入（v3.2）", "en": "Legacy History Import (v3.2)"},
     "dm_legacy_hint": {
-        "zh": "一键读取 v3.2 的 JSON 历史与全部 HTML 日报，把完整数据写入 SQLite：重复分析以最新报告为准；数据缺失或时间段扫描发现的遗漏论文会汇总后自动衔接一次补充报告。本流程会等待每日研究、趋势分析及其他相关任务空闲后运行。",
-        "en": "Read the v3.2 JSON history and all HTML reports into SQLite in one click: duplicated analyses resolve to the newest report; incomplete and range-scan-missed papers are collected and automatically followed by one capped supplement report. The workflow waits for daily, trend, and related work to become idle.",
+        "zh": "一键读取 v3.2 的 JSON 历史与全部 HTML 日报，把完整数据写入 SQLite：重复分析以最新报告为准；数据缺失或时间段扫描发现的遗漏论文会自动按每份报告上限分批生成补充报告。暂时无法处理的数据会保留，后续读取旧历史时重试。本流程会等待每日研究、趋势分析及其他相关任务空闲后运行。",
+        "en": "Read the v3.2 JSON history and all HTML reports into SQLite in one click: duplicated analyses resolve to the newest report; incomplete and range-scan-missed papers automatically produce capped supplement reports in batches. Temporarily unavailable data remains retryable on a later legacy import. The workflow waits for daily, trend, and related work to become idle.",
     },
     "dm_legacy_import_btn": {"zh": "📜 读取旧历史", "en": "📜 Read Legacy History"},
     "dm_supplement_btn": {"zh": "🧾 生成补充报告", "en": "🧾 Build Supplement Report"},
@@ -1196,8 +1196,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Queued: the worker will build the supplement report when idle.",
     },
     "dm_legacy_queued": {
-        "zh": "已加入触发队列：worker 空闲时自动读取旧历史，并在需要时继续生成补充报告。",
-        "en": "Queued: the worker will import legacy history when idle and continue with a supplement report when needed.",
+        "zh": "已加入触发队列：worker 空闲时自动读取旧历史，并在需要时分批生成补充报告。",
+        "en": "Queued: the worker will import legacy history when idle and generate supplement reports in batches when needed.",
     },
     "dm_legacy_running_hint": {
         "zh": "旧历史导入流程正在排队或运行中，请在“每日推送 → 运行状态/运行日志”查看实时进度。",

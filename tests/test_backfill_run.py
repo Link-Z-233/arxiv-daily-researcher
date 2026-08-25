@@ -178,7 +178,7 @@ class BackfillPipelineTests(unittest.TestCase):
                         return_value=None,
                     )
                 )
-                stack.enter_context(
+                fetch_between = stack.enter_context(
                     patch(
                         "sources.arxiv_source.ArxivSource.fetch_domain_papers_between",
                         return_value=scanned,
@@ -187,31 +187,42 @@ class BackfillPipelineTests(unittest.TestCase):
                 result = DailyResearchPipeline().run(
                     run_kind="backfill", target_date=target
                 )
+                second_result = DailyResearchPipeline().run(
+                    run_kind="backfill", target_date=target
+                )
 
             self.assertTrue(result.success)
             # 上限 1：只交付当天 1 篇，另一篇留在候选状态。
             self.assertEqual(result.total_papers_fetched, 1)
-            self.assertEqual(len(reporter_calls), 1)
-            stamp_date = reporter_calls[0]["report_timestamp"].date()
-            self.assertEqual(stamp_date, target)
-            self.assertEqual(reporter_calls[0]["report_kind"], "daily")
+            self.assertEqual(result.deferred_paper_count, 1)
+            self.assertTrue(second_result.success)
+            self.assertEqual(second_result.total_papers_fetched, 1)
+            self.assertEqual(second_result.deferred_paper_count, 0)
+            self.assertEqual(fetch_between.call_count, 1)
+            self.assertEqual(len(reporter_calls), 2)
+            for reporter_call in reporter_calls:
+                self.assertEqual(reporter_call["report_timestamp"].date(), target)
+                self.assertEqual(reporter_call["report_kind"], "daily")
 
             store = DailyResearchStore(db_path)
             self.assertTrue(store.is_paper_delivered_strict("arxiv", "2601.1v1"))
-            self.assertFalse(store.is_paper_delivered_strict("arxiv", "2601.2v1"))
-            # Deferred past-date work remains durable, but an ordinary daily
-            # run must not pick it up and place it in today's report.
+            self.assertTrue(store.is_paper_delivered_strict("arxiv", "2601.2v1"))
+            # Backfill rows stay isolated from the ordinary daily queue during
+            # the automatic continuation, so today's report cannot consume
+            # old papers between batches.
             ordinary_pending, ordinary_count = store.select_pending_papers(
                 ["arxiv"], limit=0
             )
             self.assertEqual(ordinary_pending, {})
             self.assertEqual(ordinary_count, 0)
-            with store._connect() as conn:
-                deferred_scope = conn.execute(
-                    "SELECT queue_scope FROM daily_papers "
-                    "WHERE source = 'arxiv' AND paper_id = '2601.2v1'"
-                ).fetchone()[0]
-            self.assertEqual(deferred_scope, "backfill")
+            backfill_pending, backfill_count = store.select_pending_papers(
+                ["arxiv"],
+                limit=0,
+                queue_scope="backfill",
+                backfill_target_date=target,
+            )
+            self.assertEqual(backfill_pending, {})
+            self.assertEqual(backfill_count, 0)
             # 补跑不推进扫描水位线。
             self.assertIsNone(store.get_scan_watermark("arxiv"))
             with store._connect() as conn:

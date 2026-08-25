@@ -401,6 +401,21 @@ class SupplementBacklogStoreTests(unittest.TestCase):
         rows = self.store.claim_supplement_backlog(1)
         self.assertEqual(rows[0]["canonical_id"], "2603.2")
 
+    def test_failed_repair_does_not_starve_pending_missed_scan_rows(self):
+        self.store.record_supplement_backlog([
+            {"source": "arxiv", "canonical_id": "2603.1", "version": 1,
+             "paper_id": "2603.1v1", "reason": "missing_data"},
+            {"source": "arxiv", "canonical_id": "2603.2", "version": 1,
+             "paper_id": "2603.2v1", "reason": "missed_scan"},
+        ])
+        self.store.resolve_supplement_backlog(
+            "run_x", [("arxiv", "2603.1", 1)], status="failed"
+        )
+
+        rows = self.store.claim_supplement_backlog(1)
+
+        self.assertEqual(rows[0]["canonical_id"], "2603.2")
+
     def test_app_state_round_trip(self):
         self.assertIsNone(self.store.get_app_state("k"))
         self.store.set_app_state("k", "v1")

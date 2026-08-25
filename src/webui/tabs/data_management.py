@@ -365,7 +365,7 @@ def _render_legacy_import_section(config_values: dict) -> None:
     legacy_pending = _legacy_import_already_queued(queue_dir)
 
     # 补充报告是读取旧历史后的自动第二阶段，不再暴露一个会让用户误以为
-    # 必须单独点击的按钮。一个导入请求覆盖导入、时间段扫描和一批补充报告；
+    # 必须单独点击的按钮。一个导入请求覆盖导入、时间段扫描和受上限控制的补充报告分批续跑；
     # 其他每日类任务运行时仍可排队，等工作器空闲后自动接手。
     if st.button(
         t("dm_legacy_import_btn"),

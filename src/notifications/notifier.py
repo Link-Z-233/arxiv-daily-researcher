@@ -123,6 +123,11 @@ class RunResult:
 
     run_timestamp: str = ""
     total_papers_fetched: int = 0
+    # A successful past-date report may still leave papers for the same date
+    # in the durable queue because the per-report cap was reached or an
+    # individual paper needs a stage retry.  The queue runner uses this value
+    # to continue that date rather than incorrectly marking it complete.
+    deferred_paper_count: int = 0
     papers_by_source: Dict[str, int] = field(default_factory=dict)
     qualified_by_source: Dict[str, int] = field(default_factory=dict)
     analyzed_by_source: Dict[str, int] = field(default_factory=dict)

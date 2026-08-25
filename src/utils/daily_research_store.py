@@ -173,6 +173,7 @@ class DailyResearchStore:
                     completed_at TEXT,
                     last_error TEXT,
                     queue_scope TEXT NOT NULL DEFAULT 'daily',
+                    backfill_target_date TEXT,
                     PRIMARY KEY (source, paper_id)
                 )
                 """
@@ -301,6 +302,11 @@ class DailyResearchStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_scan_receipts_run "
                 "ON daily_scan_receipts(run_id, receipt_id)"
+            )
+            self._migrate_backfill_target_dates(conn)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_daily_papers_backfill_pending "
+                "ON daily_papers(queue_scope, backfill_target_date, completed_at)"
             )
             # Small key/value scratch state for cross-run decisions such as
             # "this remote version was already announced". Values are opaque
@@ -539,6 +545,55 @@ class DailyResearchStore:
               )
             """
         )
+
+    @staticmethod
+    def _migrate_backfill_target_dates(conn):
+        """Add and backfill the historical date that owns queued papers.
+
+        A queue row represents one calendar day.  Before this column existed,
+        a capped backfill could leave its remaining papers in the generic
+        ``backfill`` scope with no way to know which queue day must resume
+        them.  Existing rows can be recovered from their arXiv scan receipt,
+        whose immutable payload already records ``backfill_date``.
+        """
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        if "backfill_target_date" not in columns:
+            conn.execute(
+                "ALTER TABLE daily_papers ADD COLUMN backfill_target_date TEXT"
+            )
+
+        rows = conn.execute(
+            """
+            SELECT papers.source, papers.paper_id, receipts.receipt_json
+            FROM daily_papers AS papers
+            JOIN daily_scan_receipts AS receipts
+              ON receipts.run_id = papers.run_id
+             AND receipts.source = 'arxiv'
+            WHERE papers.queue_scope = 'backfill'
+              AND papers.backfill_target_date IS NULL
+            """
+        ).fetchall()
+        updates = []
+        for row in rows:
+            try:
+                payload = json.loads(row["receipt_json"] or "{}")
+                target = date.fromisoformat(str(payload.get("backfill_date") or ""))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            updates.append((target.isoformat(), row["source"], row["paper_id"]))
+        if updates:
+            conn.executemany(
+                """
+                UPDATE daily_papers
+                SET backfill_target_date = ?
+                WHERE source = ? AND paper_id = ?
+                  AND backfill_target_date IS NULL
+                """,
+                updates,
+            )
 
     @staticmethod
     def _migrate_stage_state(conn):
@@ -1410,11 +1465,10 @@ class DailyResearchStore:
     def claim_supplement_backlog(self, limit: int = 0) -> list[Dict[str, Any]]:
         """Select the next backlog papers for one supplement run.
 
-        Data-repair entries (from the legacy import) are drained before
-        missed-scan discoveries, oldest first.  Failed fetches retry after
-        pending *data-repair* rows, but still before a potentially large
-        backlog of scan-only discoveries: an import defect must not be
-        starved just because its date-range scan found many more papers.
+        Pending data-repair entries (from the legacy import) are drained
+        before pending missed-scan discoveries, oldest first.  Failed rows
+        retry only after all fresh pending work: an unavailable paper must not
+        consume every capped batch and starve the remainder of the import.
         Returned rows carry the persisted paper metadata when the import
         already reconstructed it.  ``limit=0`` means all rows, matching
         ``daily_research.max_papers_per_run`` semantics.
@@ -1427,8 +1481,8 @@ class DailyResearchStore:
                        detail, paper_json
                 FROM supplement_backlog
                 WHERE status IN ('pending', 'failed')
-                ORDER BY CASE reason WHEN 'missed_scan' THEN 1 ELSE 0 END,
-                         CASE status WHEN 'pending' THEN 0 ELSE 1 END,
+                ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
+                         CASE reason WHEN 'missed_scan' THEN 1 ELSE 0 END,
                          created_at ASC,
                          backlog_id ASC
                 """
@@ -3134,6 +3188,7 @@ class DailyResearchStore:
         papers_by_source: Dict[str, list["PaperMetadata"]],
         *,
         queue_scope: str = "daily",
+        backfill_target_date: Optional[date | str] = None,
     ) -> int:
         """Durably register every newly discovered candidate before limiting work.
 
@@ -3147,6 +3202,15 @@ class DailyResearchStore:
         normalized_scope = str(queue_scope or "").strip().lower()
         if normalized_scope not in {"daily", "backfill"}:
             raise ValueError("candidate queue scope must be 'daily' or 'backfill'")
+        target_date_text = None
+        if normalized_scope == "backfill":
+            if backfill_target_date is None:
+                raise ValueError("backfill candidates require a target date")
+            target_date_text = self._normalize_backfill_date(
+                backfill_target_date
+            ).isoformat()
+        elif backfill_target_date is not None:
+            raise ValueError("daily candidates cannot have a backfill target date")
         registered = 0
         seen_identities = set()
         candidates = []
@@ -3191,9 +3255,10 @@ class DailyResearchStore:
                     """
                     INSERT INTO daily_papers(
                         source, paper_id, canonical_id, version,
-                        first_seen_at, last_seen_at, run_id, queue_scope, paper_json
+                        first_seen_at, last_seen_at, run_id, queue_scope,
+                        backfill_target_date, paper_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source, paper_id) DO UPDATE SET
                         canonical_id = excluded.canonical_id,
                         version = excluded.version,
@@ -3201,6 +3266,14 @@ class DailyResearchStore:
                         queue_scope = CASE
                             WHEN excluded.queue_scope = 'backfill' THEN 'backfill'
                             ELSE daily_papers.queue_scope
+                        END,
+                        backfill_target_date = CASE
+                            WHEN excluded.queue_scope = 'backfill'
+                                THEN COALESCE(
+                                    daily_papers.backfill_target_date,
+                                    excluded.backfill_target_date
+                                )
+                            ELSE daily_papers.backfill_target_date
                         END,
                         paper_json = excluded.paper_json
                     """,
@@ -3213,6 +3286,7 @@ class DailyResearchStore:
                         candidate_seen_at,
                         run_id,
                         normalized_scope,
+                        target_date_text,
                         json.dumps(paper.to_dict(), ensure_ascii=False),
                     ),
                 )
@@ -3242,7 +3316,12 @@ class DailyResearchStore:
         )
 
     def select_pending_papers(
-        self, enabled_sources: list[str], limit: int = 0, *, queue_scope: str = "daily"
+        self,
+        enabled_sources: list[str],
+        limit: int = 0,
+        *,
+        queue_scope: str = "daily",
+        backfill_target_date: Optional[date | str] = None,
     ) -> tuple[Dict[str, list["PaperMetadata"]], int]:
         """Return the deterministic pending queue and its total size.
 
@@ -3258,15 +3337,21 @@ class DailyResearchStore:
         normalized_scope = str(queue_scope or "").strip().lower()
         if normalized_scope not in {"daily", "backfill"}:
             raise ValueError("pending queue scope must be 'daily' or 'backfill'")
+        target_date_text = None
+        if backfill_target_date is not None:
+            if normalized_scope != "backfill":
+                raise ValueError("only backfill queues can filter by target date")
+            target_date_text = self._normalize_backfill_date(
+                backfill_target_date
+            ).isoformat()
         sources = sorted(
             {str(source).strip().lower() for source in enabled_sources if str(source).strip()}
         )
         if not sources:
             return {}, 0
         placeholders = ", ".join("?" for _ in sources)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
+        query = (
+            """
                 SELECT daily_papers.*
                 FROM daily_papers
                 WHERE daily_papers.source IN ("""
@@ -3280,9 +3365,14 @@ class DailyResearchStore:
                         AND paper_deliveries.canonical_id = daily_papers.canonical_id
                         AND paper_deliveries.version = daily_papers.version
                   )
-                """,
-                [*sources, normalized_scope],
-            ).fetchall()
+                """
+        )
+        params: list[Any] = [*sources, normalized_scope]
+        if target_date_text is not None:
+            query += " AND daily_papers.backfill_target_date = ?"
+            params.append(target_date_text)
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
 
         pending = []
         identities = set()

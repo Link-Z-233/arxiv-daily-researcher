@@ -93,6 +93,29 @@ class BackfillQueueTests(unittest.TestCase):
         )
         self.assertEqual(self.store.backfill_queue_summary()["completed"], 1)
 
+    def test_capped_day_is_requeued_until_its_remaining_papers_finish(self):
+        self.store.enqueue_backfill_range(self.start, self.start)
+        calls = []
+
+        class _CappedPipeline:
+            def run(self, *, run_kind, target_date):
+                calls.append((run_kind, target_date))
+                if len(calls) == 1:
+                    return RunResult(success=True, deferred_paper_count=2)
+                return RunResult(success=True)
+
+        self.assertEqual(
+            drain_backfill_queue(self.store, pipeline_factory=_CappedPipeline),
+            0,
+        )
+        self.assertEqual(
+            calls,
+            [("backfill", self.start), ("backfill", self.start)],
+        )
+        summary = self.store.backfill_queue_summary()
+        self.assertEqual(summary["completed"], 1)
+        self.assertEqual(summary["pending"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
