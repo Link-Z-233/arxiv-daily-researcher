@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     HISTORY_DIR: Path = DATA_DIR / "history"  # 历史记录目录
 
     # OpenAlex 配置
+    ENABLE_OPENALEX: bool = True  # 是否启用 OpenAlex 期刊来源
     OPENALEX_API_KEY: str = ""  # 免费 Key 提高每日 API 额度并便于查看用量
 
     # ArXiv 抓取配置

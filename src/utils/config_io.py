@@ -184,7 +184,9 @@ ENV_FIELDS = [
     ("SMART_LLM__MODEL_NAME", "High-perf LLM Model", False, "gpt-4o"),
     ("SMART_LLM__TEMPERATURE", "High-perf LLM Temperature", False, "0.3"),
     # Third-party APIs
+    ("ENABLE_OPENALEX", "Enable OpenAlex", False, "true"),
     ("OPENALEX_API_KEY", "OpenAlex API Key", True, ""),
+    ("ENABLE_SEMANTIC_SCHOLAR_TLDR", "Enable Semantic Scholar TLDR", False, "true"),
     ("SEMANTIC_SCHOLAR_API_KEY", "Semantic Scholar API Key", True, ""),
     ("MINERU_API_KEY", "MinerU API Key", True, ""),
     # SMTP

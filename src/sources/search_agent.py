@@ -25,6 +25,15 @@ from .semantic_scholar_enricher import SemanticScholarEnricher
 logger = logging.getLogger(__name__)
 
 
+def _as_bool(value: Any, default: bool = True) -> bool:
+    """Parse settings and compatibility callers without truthy-string traps."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 class SourceScanReceiptError(RuntimeError):
     """Raised when a non-arXiv source cannot persist its terminal scan receipt."""
 
@@ -48,6 +57,7 @@ class SearchAgent:
         journals: List[str] = None,
         max_results: Optional[int] = None,
         max_results_per_source: Dict[str, int] = None,
+        enable_openalex: bool = True,
         openalex_api_key: str = None,
         enable_semantic_scholar: bool = True,
         semantic_scholar_api_key: str = None,
@@ -67,6 +77,7 @@ class SearchAgent:
             max_results: 旧配置兼容字段。日报扫描不按数量截断，始终处理
                 时间窗口内的全部论文。
             max_results_per_source: 旧配置兼容字段；不作为日报抓取预算。
+            enable_openalex: 是否启用 OpenAlex 期刊来源
             openalex_api_key: OpenAlex API Key
             enable_semantic_scholar: 是否启用 Semantic Scholar TLDR
             semantic_scholar_api_key: Semantic Scholar API Key
@@ -88,6 +99,7 @@ class SearchAgent:
         # configured time window instead of treating them as an item budget.
         self.max_results = max_results
         self.max_results_per_source = max_results_per_source or {}
+        self.enable_openalex = _as_bool(enable_openalex)
         self.openalex_api_key = openalex_api_key
         self.use_legacy_history_filter = bool(use_legacy_history_filter)
         self.extra_source_definitions = validate_source_definitions(extra_source_definitions or [])
@@ -248,7 +260,7 @@ class SearchAgent:
             if journal not in journal_codes:
                 journal_codes.append(journal)
 
-        if journal_codes:
+        if journal_codes and self.enable_openalex:
             openalex_kwargs = {
                 "history_dir": self.history_dir,
                 "journals": journal_codes,
@@ -267,8 +279,17 @@ class SearchAgent:
             for journal_code in journal_codes:
                 self._source_backends[journal_code] = "openalex"
             logger.info(f"[SearchAgent] 已启用 OpenAlex 数据源，期刊: {journal_codes}")
+        elif journal_codes:
+            self._journal_codes = []
+            logger.info(
+                "[SearchAgent] OpenAlex 已关闭，跳过已配置期刊来源: %s",
+                journal_codes,
+            )
         else:
             self._journal_codes = []
+
+        if not self.sources:
+            raise ValueError("OpenAlex 已关闭，且没有其他启用的数据源")
 
         # 注入代理到 Semantic Scholar
         if self.semantic_scholar_enricher:

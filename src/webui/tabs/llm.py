@@ -58,6 +58,16 @@ def _mineru_parser_is_selected(config_values: dict) -> bool:
     return st.session_state.get("pdf_parser_mode", configured_mode) == "mineru"
 
 
+def _env_toggle(env_values: dict, key: str, default: bool) -> bool:
+    """Read a boolean from `.env` without treating arbitrary text as true."""
+    value = env_values.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def render(env_values: dict, _config_values: dict):
     """渲染 API 配置 Tab。"""
 
@@ -259,32 +269,41 @@ def render(env_values: dict, _config_values: dict):
         f'<p class="subsection-title">📚 {t("openalex_section_title")}</p>',
         unsafe_allow_html=True,
     )
-    st.markdown(f'<p class="hint-text">{t("openalex_section_hint")}</p>', unsafe_allow_html=True)
-    render_secret_input(
-        st,
-        label=t("openalex_api_key_label"),
-        env_values=env_values,
-        env_key="OPENALEX_API_KEY",
-        field_key="openalex_key",
-        configured_hint=t("secret_configured_keep_blank"),
+    openalex_enabled = st.toggle(
+        t("openalex_enabled_label"),
+        value=_env_toggle(env_values, "ENABLE_OPENALEX", True),
+        key="openalex_enabled",
+        help=t("openalex_enabled_help"),
     )
-    test_openalex_btn = st.button(
-        t("test_openalex_btn"),
-        key="test_openalex",
-        type="secondary",
-    )
-    st.markdown(f"[{t('openalex_console_link')}]({OPENALEX_API_DASHBOARD_URL})")
-    if test_openalex_btn:
-        with st.spinner(t("testing_openalex")):
-            from utils.config_io import validate_openalex_connection
+    if openalex_enabled:
+        st.markdown(f'<p class="hint-text">{t("openalex_section_hint")}</p>', unsafe_allow_html=True)
+        render_secret_input(
+            st,
+            label=t("openalex_api_key_label"),
+            env_values=env_values,
+            env_key="OPENALEX_API_KEY",
+            field_key="openalex_key",
+            configured_hint=t("secret_configured_keep_blank"),
+        )
+        test_openalex_btn = st.button(
+            t("test_openalex_btn"),
+            key="test_openalex",
+            type="secondary",
+        )
+        st.markdown(f"[{t('openalex_console_link')}]({OPENALEX_API_DASHBOARD_URL})")
+        if test_openalex_btn:
+            with st.spinner(t("testing_openalex")):
+                from utils.config_io import validate_openalex_connection
 
-            ok, msg = validate_openalex_connection(
-                resolve_secret_value(env_values, "OPENALEX_API_KEY", "openalex_key", st.session_state),
-            )
-        if ok:
-            st.success(msg)
-        else:
-            st.error(msg)
+                ok, msg = validate_openalex_connection(
+                    resolve_secret_value(
+                        env_values, "OPENALEX_API_KEY", "openalex_key", st.session_state
+                    ),
+                )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
     st.divider()
 
@@ -293,42 +312,49 @@ def render(env_values: dict, _config_values: dict):
         f'<p class="subsection-title">🧠 {t("semantic_scholar_section_title")}</p>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        f'<p class="hint-text">{t("semantic_scholar_section_hint")}</p>',
-        unsafe_allow_html=True,
+    semantic_scholar_enabled = st.toggle(
+        t("semantic_scholar_enabled_label"),
+        value=_env_toggle(env_values, "ENABLE_SEMANTIC_SCHOLAR_TLDR", True),
+        key="semantic_scholar_enabled",
+        help=t("semantic_scholar_enabled_help"),
     )
-    render_secret_input(
-        st,
-        label=t("s2_api_key_label"),
-        env_values=env_values,
-        env_key="SEMANTIC_SCHOLAR_API_KEY",
-        field_key="semantic_scholar_key",
-        configured_hint=t("secret_configured_keep_blank"),
-    )
-    test_semantic_scholar_btn = st.button(
-        t("test_semantic_scholar_btn"),
-        key="test_semantic_scholar",
-        type="secondary",
-    )
-    st.markdown(
-        f"[{t('semantic_scholar_console_link')}]({SEMANTIC_SCHOLAR_API_DASHBOARD_URL})"
-    )
-    if test_semantic_scholar_btn:
-        with st.spinner(t("testing_semantic_scholar")):
-            from utils.config_io import validate_semantic_scholar_connection
+    if semantic_scholar_enabled:
+        st.markdown(
+            f'<p class="hint-text">{t("semantic_scholar_section_hint")}</p>',
+            unsafe_allow_html=True,
+        )
+        render_secret_input(
+            st,
+            label=t("s2_api_key_label"),
+            env_values=env_values,
+            env_key="SEMANTIC_SCHOLAR_API_KEY",
+            field_key="semantic_scholar_key",
+            configured_hint=t("secret_configured_keep_blank"),
+        )
+        test_semantic_scholar_btn = st.button(
+            t("test_semantic_scholar_btn"),
+            key="test_semantic_scholar",
+            type="secondary",
+        )
+        st.markdown(
+            f"[{t('semantic_scholar_console_link')}]({SEMANTIC_SCHOLAR_API_DASHBOARD_URL})"
+        )
+        if test_semantic_scholar_btn:
+            with st.spinner(t("testing_semantic_scholar")):
+                from utils.config_io import validate_semantic_scholar_connection
 
-            ok, msg = validate_semantic_scholar_connection(
-                resolve_secret_value(
-                    env_values,
-                    "SEMANTIC_SCHOLAR_API_KEY",
-                    "semantic_scholar_key",
-                    st.session_state,
+                ok, msg = validate_semantic_scholar_connection(
+                    resolve_secret_value(
+                        env_values,
+                        "SEMANTIC_SCHOLAR_API_KEY",
+                        "semantic_scholar_key",
+                        st.session_state,
+                    )
                 )
-            )
-        if ok:
-            st.success(msg)
-        else:
-            st.error(msg)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
 
 def collect(env_values: dict, _config_values: dict) -> dict:
@@ -342,6 +368,13 @@ def collect(env_values: dict, _config_values: dict) -> dict:
             return st.session_state[session_key]
         value = env_values.get(env_key)
         return value if value not in (None, "") else default
+
+    def current_toggle(session_key: str, env_key: str, default: bool) -> str:
+        value = st.session_state.get(session_key, _env_toggle(env_values, env_key, default))
+        # Streamlit returns booleans.  Parse a stale/manual string as well so
+        # an old browser session containing ``\"false\"`` cannot be saved as on.
+        enabled = _env_toggle({env_key: value}, env_key, default)
+        return "true" if enabled else "false"
 
     return {
         "CHEAP_LLM__API_KEY": resolve_secret_value(
@@ -360,8 +393,12 @@ def collect(env_values: dict, _config_values: dict) -> dict:
         "SMART_LLM__TEMPERATURE": current_env(
             "smart_temperature", "SMART_LLM__TEMPERATURE", "0.3"
         ),
+        "ENABLE_OPENALEX": current_toggle("openalex_enabled", "ENABLE_OPENALEX", True),
         "OPENALEX_API_KEY": resolve_secret_value(
             env_values, "OPENALEX_API_KEY", "openalex_key", st.session_state
+        ),
+        "ENABLE_SEMANTIC_SCHOLAR_TLDR": current_toggle(
+            "semantic_scholar_enabled", "ENABLE_SEMANTIC_SCHOLAR_TLDR", True
         ),
         "SEMANTIC_SCHOLAR_API_KEY": resolve_secret_value(
             env_values,

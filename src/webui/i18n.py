@@ -250,8 +250,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Third-Party API Keys",
     },
     "third_party_keys_hint": {
-        "zh": "可选的 API 密钥，用于增强功能。",
-        "en": "Optional API keys for enhanced features.",
+        "zh": "开启来源后才会调用对应服务；关闭时会隐藏其配置，已保存的密钥不会被清除。",
+        "en": "A service is called only when enabled. Disabled service settings are hidden and saved keys are retained.",
     },
     "s2_api_key_label": {
         "zh": "Semantic Scholar API Key",
@@ -266,6 +266,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "免费 API Key 可将每日 API 额度提高到匿名使用的 10 倍，并可查看用量。",
         "en": "A free API key gives 10× the anonymous daily API budget and usage visibility.",
     },
+    "openalex_enabled_label": {
+        "zh": "启用 OpenAlex 来源",
+        "en": "Enable OpenAlex source",
+    },
+    "openalex_enabled_help": {
+        "zh": "关闭后不会请求 OpenAlex。开启后，还需在「数据源 → 额外数据源」中选择期刊来源。",
+        "en": "When off, OpenAlex is never queried. When on, select journal sources under Data Sources → Extra Sources as well.",
+    },
     "test_openalex_btn": {"zh": "测试 OpenAlex 连接", "en": "Test OpenAlex Connection"},
     "testing_openalex": {"zh": "连接 OpenAlex 中...", "en": "Connecting to OpenAlex..."},
     "openalex_console_link": {
@@ -279,6 +287,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "semantic_scholar_section_hint": {
         "zh": "用于可选 TL;DR 增强。匿名额度由所有用户共享；API Key 初始限额为每秒 1 次，应用会自动按此节奏请求。",
         "en": "Used for optional TL;DR enrichment. Anonymous traffic uses a shared pool; API keys start at 1 request/second, which the app paces automatically.",
+    },
+    "semantic_scholar_enabled_label": {
+        "zh": "启用 Semantic Scholar TL;DR 增强",
+        "en": "Enable Semantic Scholar TL;DR enrichment",
+    },
+    "semantic_scholar_enabled_help": {
+        "zh": "关闭后不会请求 Semantic Scholar，也不会把其 TL;DR 用于后续处理。",
+        "en": "When off, Semantic Scholar is never queried and its TL;DR is not used for subsequent processing.",
     },
     "test_semantic_scholar_btn": {
         "zh": "测试 Semantic Scholar 连接",

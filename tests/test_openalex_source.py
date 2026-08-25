@@ -286,6 +286,42 @@ class OpenAlexFetchTests(unittest.TestCase):
                 ["1234-567X"],
             )
 
+    def test_search_agent_openalex_switch_prevents_all_journal_requests(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "sources.search_agent.OpenAlexSource"
+        ) as openalex_source:
+            agent = SearchAgent(
+                Path(temp_dir),
+                enabled_sources=["arxiv", "prl"],
+                enable_openalex=False,
+                enable_semantic_scholar=False,
+            )
+
+        openalex_source.assert_not_called()
+        self.assertEqual(agent.get_enabled_sources(), ["arxiv"])
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "sources.search_agent.OpenAlexSource"
+        ) as openalex_source:
+            agent = SearchAgent(
+                Path(temp_dir),
+                enabled_sources=["arxiv", "prl"],
+                enable_openalex="false",
+                enable_semantic_scholar=False,
+            )
+
+        openalex_source.assert_not_called()
+        self.assertEqual(agent.get_enabled_sources(), ["arxiv"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "OpenAlex 已关闭"):
+                SearchAgent(
+                    Path(temp_dir),
+                    enabled_sources=["prl"],
+                    enable_openalex=False,
+                    enable_semantic_scholar=False,
+                )
+
     def test_pipeline_returns_failed_result_and_keeps_openalex_watermark_on_fetch_error(self):
         class _SearchAgent:
             def __init__(self, **_kwargs):

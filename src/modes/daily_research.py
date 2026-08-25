@@ -1102,6 +1102,7 @@ class DailyResearchPipeline:
                     enabled_sources=settings.ENABLED_SOURCES,
                     arxiv_domains=settings.TARGET_DOMAINS,
                     journals=settings.TARGET_JOURNALS,
+                    enable_openalex=getattr(settings, "ENABLE_OPENALEX", True),
                     openalex_api_key=settings.OPENALEX_API_KEY,
                     enable_semantic_scholar=settings.ENABLE_SEMANTIC_SCHOLAR_TLDR,
                     semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,

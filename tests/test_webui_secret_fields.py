@@ -116,6 +116,41 @@ class WebUISecretFieldTests(unittest.TestCase):
         self.assertEqual(notification_updates["TELEGRAM_BOT_TOKEN"], "telegram-saved")
         self.assertEqual(data_updates["WEBDAV_PASSWORD"], "webdav-saved")
 
+    def test_third_party_enable_toggles_round_trip_without_exposing_secrets(self):
+        env_values = {
+            "ENABLE_OPENALEX": "true",
+            "ENABLE_SEMANTIC_SCHOLAR_TLDR": "false",
+            "OPENALEX_API_KEY": "openalex-saved",
+            "SEMANTIC_SCHOLAR_API_KEY": "s2-saved",
+        }
+        state = {
+            "openalex_enabled": False,
+            "semantic_scholar_enabled": True,
+        }
+        fake_st = SimpleNamespace(session_state=state)
+
+        with patch.object(llm, "st", fake_st):
+            updates = llm.collect(env_values, {})
+
+        self.assertEqual(updates["ENABLE_OPENALEX"], "false")
+        self.assertEqual(updates["ENABLE_SEMANTIC_SCHOLAR_TLDR"], "true")
+        self.assertEqual(updates["OPENALEX_API_KEY"], "openalex-saved")
+        self.assertEqual(updates["SEMANTIC_SCHOLAR_API_KEY"], "s2-saved")
+
+    def test_third_party_toggle_parses_stale_false_string_as_disabled(self):
+        fake_st = SimpleNamespace(
+            session_state={
+                "openalex_enabled": "false",
+                "semantic_scholar_enabled": "0",
+            }
+        )
+
+        with patch.object(llm, "st", fake_st):
+            updates = llm.collect({}, {})
+
+        self.assertEqual(updates["ENABLE_OPENALEX"], "false")
+        self.assertEqual(updates["ENABLE_SEMANTIC_SCHOLAR_TLDR"], "false")
+
     def test_collectors_honor_legacy_clear_flags_are_ignored(self):
         env_values = {
             "CHEAP_LLM__API_KEY": "cheap-saved",
