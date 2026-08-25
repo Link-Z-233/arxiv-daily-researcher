@@ -531,7 +531,7 @@ def _render_preview(
     # ── 正文：日报保持原始 HTML 报告样式，收藏按钮内联注入；其余类型同样 HTML 预览 ──
     if report.report_type == "daily":
         if not _render_daily_report(report, config_values):
-            # 库里没有对应记录的旧日报：直接 HTML 原文预览（无标记按钮）
+            # 无法识别卡片身份的异构/损坏报告：保留原始只读预览。
             _render_html_iframe(report)
     else:
         _render_html_iframe(report)
@@ -551,6 +551,67 @@ def _apply_report_mark(store: DailyResearchStore, paper: dict, preference: str) 
         authors=paper.get("authors"),
         categories=paper.get("categories"),
     )
+
+
+def _papers_from_saved_report(report: ReportFile) -> list[dict]:
+    """Reconstruct exact cards from one archived daily HTML report.
+
+    A legacy paper's ``completed_at`` is its original delivery timestamp,
+    which may differ from the report filename date. Matching only by day made
+    old reports fall back to a raw iframe without 👍/👎 controls. Reading the
+    report's own cards provides the stable identity/title pair needed for the
+    controls and works for reports with several batches on the same day too.
+    """
+    try:
+        from utils.legacy_history import parse_legacy_report_file
+
+        cards = parse_legacy_report_file(report.path, source=report.source)
+    except Exception:
+        return []
+
+    papers: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for card in cards:
+        source = str(card.get("source") or report.source or "").strip().lower()
+        paper_id = str(card.get("paper_id") or "").strip()
+        title = str(card.get("title") or "").strip()
+        if not source or not paper_id or not title:
+            continue
+        identity = (source, paper_id)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        papers.append(
+            {
+                "source": source,
+                "paper_id": paper_id,
+                "canonical_id": card.get("canonical_id"),
+                "version": card.get("version"),
+                "title": title,
+                "authors": list(card.get("authors") or []),
+                "categories": [],
+            }
+        )
+    return papers
+
+
+def _fallback_papers_for_report(
+    store: DailyResearchStore, report: ReportFile
+) -> list[dict]:
+    """Keep database-backed marks for nonstandard report layouts."""
+    if not report.date_key:
+        return []
+    try:
+        result = store.search_papers(
+            query="",
+            source=report.source,
+            completed_from=report.date_key,
+            completed_to=report.date_key,
+            limit=200,
+        )
+    except Exception:
+        return []
+    return list(result.get("items") or [])
 
 
 # ─── HTML 报告内联收藏（保留报告原样式，注入标记按钮）──────────────────────
@@ -717,28 +778,15 @@ def _render_report_component(report_html: str, states: dict, key: str):
 
 
 def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
-    """日报以原始 HTML 报告呈现，收藏按钮内联注入卡片；无库记录时返回 False。"""
+    """Render a daily report with in-card marks, including upgraded archives."""
     from webui.tabs.run_manager import _daily_db_path_from_config
-
-    if not report.date_key:
-        return False
 
     db_path = _daily_db_path_from_config(config_values or {})
     if not db_path.exists():
         return False
     try:
         store = DailyResearchStore(db_path)
-        result = store.search_papers(
-            query="",
-            source=report.source,
-            completed_from=report.date_key,
-            completed_to=report.date_key,
-            limit=200,
-        )
     except Exception:
-        return False
-
-    if result["total"] == 0:
         return False
 
     try:
@@ -748,15 +796,27 @@ def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
     except OSError:
         return False
 
-    enriched = _inject_mark_controls(html_content, result["items"])
-    if enriched is html_content:
+    # Prefer the saved report's card identities. This prevents an imported
+    # report from losing controls when its original delivery day differs from
+    # its filename date or when several report batches share a calendar day.
+    papers = _papers_from_saved_report(report)
+    if not papers:
+        papers = _fallback_papers_for_report(store, report)
+    if not papers:
+        return False
+
+    enriched = _inject_mark_controls(html_content, papers)
+    if enriched == html_content:
         # 报告里没有可配对的论文卡片（旧版/异构报告），退回纯 HTML 预览。
         return False
 
+    preference_map = store.get_preference_map(papers)
     states = {
-        str(item["paper_id"]): (item.get("preference") or "none")
-        for item in result["items"]
-        if item.get("paper_id")
+        str(item["paper_id"]): preference_map.get(
+            (str(item.get("source") or ""), str(item["paper_id"])), "none"
+        )
+        for item in papers
+        if item.get("paper_id") and item.get("source")
     }
     key = f"rv_{report.source}_{report.path.name}"
     value = _render_report_component(enriched, states, key)
@@ -767,7 +827,7 @@ def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
             paper = next(
                 (
                     item
-                    for item in result["items"]
+                    for item in papers
                     if item.get("paper_id") == value.get("paper_id")
                 ),
                 None,

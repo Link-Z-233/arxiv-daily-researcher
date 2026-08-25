@@ -38,6 +38,7 @@ _HISTORY_FILE_RE = re.compile(r"^(?P<source>.+)_history\.json$", re.IGNORECASE)
 _REPORT_TS_RE = re.compile(
     r"(?P<date>\d{4}-\d{2}-\d{2})_(?P<time>\d{2}-\d{2}-\d{2})(?:_(?P<micro>\d+))?"
 )
+_ARXIV_VERSION_RE = re.compile(r"^(?P<canonical>.+?)(?:v(?P<version>[0-9]+))$")
 
 _CARD_SPLIT_RE = re.compile(r'<div class="card (?:pass|fail)">')
 _TITLE_ANCHOR_RE = re.compile(
@@ -149,10 +150,22 @@ def _source_from_path(path: Path, html_root: Path) -> Optional[str]:
     return match.group("source").strip().lower() if match else None
 
 
-def _arxiv_pdf_url(paper_id: str) -> Optional[str]:
-    from sources.base_source import split_arxiv_version
+def _split_arxiv_version(paper_id: str) -> Tuple[str, Optional[int]]:
+    """Keep report-card parsing usable in the slim WebUI image.
 
-    canonical, _ = split_arxiv_version(paper_id)
+    The worker's ``sources.base_source`` exports the same compatibility split,
+    but importing that package from the WebUI would pull in network clients
+    which deliberately are not shipped there.
+    """
+    value = str(paper_id or "").strip()
+    match = _ARXIV_VERSION_RE.match(value)
+    if not match:
+        return value, None
+    return match.group("canonical"), int(match.group("version"))
+
+
+def _arxiv_pdf_url(paper_id: str) -> Optional[str]:
+    canonical, _ = _split_arxiv_version(paper_id)
     return f"https://arxiv.org/pdf/{canonical}.pdf"
 
 
@@ -160,10 +173,8 @@ def _identity_from_url(url: str) -> Optional[Dict[str, Any]]:
     """Best-effort identity from a card link (arXiv abs page or DOI)."""
     arxiv_match = re.search(r"arxiv\.org/abs/([^/?#]+)", url or "", re.IGNORECASE)
     if arxiv_match:
-        from sources.base_source import split_arxiv_version
-
         paper_id = arxiv_match.group(1)
-        canonical, version = split_arxiv_version(paper_id)
+        canonical, version = _split_arxiv_version(paper_id)
         return {
             "kind": "arxiv",
             "paper_id": paper_id,
@@ -191,8 +202,6 @@ def normalize_doi_key(value: str) -> str:
 
 def _parse_history_key(source: str, key: str) -> Optional[Tuple[str, int]]:
     """历史键 → (canonical, version)。arXiv 兼容 id vN 与 canonical@vN 两种。"""
-    from sources.base_source import split_arxiv_version
-
     text = str(key or "").strip()
     if not text:
         return None
@@ -204,7 +213,7 @@ def _parse_history_key(source: str, key: str) -> Optional[Tuple[str, int]]:
                     return canonical, int(version)
                 except ValueError:
                     return canonical, 0
-        canonical, version = split_arxiv_version(text)
+        canonical, version = _split_arxiv_version(text)
         return canonical, version if version is not None else 0
     return normalize_doi_key(text), 0
 
@@ -354,16 +363,51 @@ def parse_legacy_report_cards(html_root: Path) -> List[Dict[str, Any]]:
 
     cards: List[Dict[str, Any]] = []
     for stamp, path, source in files:
-        try:
-            html_text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            logger.warning("[LegacyImport] 读取报告失败 %s: %s", path, exc)
-            continue
-        for chunk in _CARD_SPLIT_RE.split(html_text)[1:]:
-            card = _parse_card(chunk, source, stamp, path)
-            if card is not None:
-                cards.append(card)
+        cards.extend(_parse_report_file(path, source, stamp))
     return cards
+
+
+def _parse_report_file(path: Path, source: str, stamp: datetime) -> List[Dict[str, Any]]:
+    """Read one report and reconstruct its cards without changing the archive."""
+    try:
+        html_text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        logger.warning("[LegacyImport] 读取报告失败 %s: %s", path, exc)
+        return []
+    cards: List[Dict[str, Any]] = []
+    for chunk in _CARD_SPLIT_RE.split(html_text)[1:]:
+        card = _parse_card(chunk, source, stamp, path)
+        if card is not None:
+            cards.append(card)
+    return cards
+
+
+def parse_legacy_report_file(
+    path: Path,
+    *,
+    source: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Parse one saved daily report for display-time card actions.
+
+    This lightweight helper is shared by the WebUI and the full import. It
+    deliberately does not need the worker's source clients, so the thin WebUI
+    image can restore 👍/👎 controls for historical reports after an upgrade.
+    """
+    report_path = Path(path)
+    source_name = str(source or "").strip().lower()
+    if not source_name:
+        match = re.match(r"(?P<source>.+?)_Report_", report_path.stem, re.IGNORECASE)
+        source_name = match.group("source").strip().lower() if match else ""
+    if not source_name:
+        return []
+    stamp = _report_timestamp(report_path)
+    if stamp is None:
+        try:
+            stamp = datetime.fromtimestamp(report_path.stat().st_mtime)
+        except OSError as exc:
+            logger.warning("[LegacyImport] 无法读取报告时间 %s: %s", report_path, exc)
+            return []
+    return _parse_report_file(report_path, source_name, stamp)
 
 
 def _parse_card(chunk: str, source: str, stamp: datetime, path: Path) -> Optional[Dict[str, Any]]:
