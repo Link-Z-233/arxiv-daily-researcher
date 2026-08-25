@@ -107,7 +107,7 @@ class SearchAgent:
                 logger.info("[SearchAgent] 已启用 Semantic Scholar TLDR 增强（使用 API Key）")
             else:
                 logger.info(
-                    "[SearchAgent] 已启用 Semantic Scholar TLDR 增强（公共 API，限速 100次/5分钟）"
+                    "[SearchAgent] 已启用 Semantic Scholar TLDR 增强（公共 API，共享匿名额度；繁忙时可能限流）"
                 )
 
         # 初始化数据源

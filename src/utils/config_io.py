@@ -1526,7 +1526,7 @@ def validate_semantic_scholar_connection(api_key: str) -> Tuple[bool, str]:
         if exc.code == 429:
             return False, (
                 "⚠️ Semantic Scholar 当前被限流。无 Key 时这是共享匿名额度；"
-                "有 Key 时请等待后重试或检查该 Key 的配额。"
+                "有 Key 时初始配额为每秒 1 次；应用会自动限速，请稍后重试或检查 Key 状态。"
             )
         return False, f"❌ Semantic Scholar API 返回 HTTP {exc.code}。"
     except urlerr.URLError as exc:

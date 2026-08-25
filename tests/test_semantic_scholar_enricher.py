@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -38,6 +39,31 @@ def _journal_paper() -> PaperMetadata:
 
 
 class SemanticScholarBoundaryTests(unittest.TestCase):
+    def test_request_pacing_honors_key_policy_and_serializes_slots(self):
+        authenticated = SemanticScholarEnricher(api_key="test-key")
+        anonymous = SemanticScholarEnricher()
+        self.addCleanup(authenticated.close)
+        self.addCleanup(anonymous.close)
+
+        self.assertEqual(authenticated.request_interval_seconds, 1.0)
+        self.assertEqual(anonymous.request_interval_seconds, 0.1)
+
+        # First request reserves [100, 101); a second request at 100.2 must
+        # wait until the reserved slot.  ``monotonic`` is deliberately mocked
+        # so this test never actually sleeps.
+        with (
+            patch(
+                "sources.semantic_scholar_enricher.time.monotonic",
+                side_effect=[100.0, 100.2, 101.0],
+            ),
+            patch("sources.semantic_scholar_enricher.time.sleep") as sleep,
+        ):
+            authenticated._wait_for_request_slot()
+            authenticated._wait_for_request_slot()
+
+        sleep.assert_called_once()
+        self.assertAlmostEqual(sleep.call_args.args[0], 0.8)
+
     def test_arxiv_identifier_validation_accepts_real_ids_only(self):
         self.assertEqual(normalize_arxiv_identifier(" 2501.12345v2 "), "2501.12345v2")
         self.assertEqual(normalize_arxiv_identifier("hep-th/9901001v3"), "hep-th/9901001v3")

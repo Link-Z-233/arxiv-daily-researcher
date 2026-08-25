@@ -5,6 +5,8 @@ Semantic Scholar 数据增强器
 """
 
 import logging
+import threading
+import time
 import requests
 from typing import Optional, Dict
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
@@ -24,6 +26,12 @@ class SemanticScholarEnricher:
     """
 
     API_BASE_URL = "https://api.semanticscholar.org/graph/v1"
+    # Semantic Scholar documents an introductory API-key allowance of one
+    # request per second.  Keep a small, courteous pace for anonymous traffic
+    # too: its quota is shared by all anonymous users and can be throttled
+    # during busy periods.
+    AUTHENTICATED_MIN_REQUEST_INTERVAL_SECONDS = 1.0
+    ANONYMOUS_MIN_REQUEST_INTERVAL_SECONDS = 0.1
 
     def __init__(self, api_key: Optional[str] = None):
         """
@@ -34,6 +42,13 @@ class SemanticScholarEnricher:
         """
         self.api_key = api_key
         self.session = requests.Session()
+        self._request_slot_lock = threading.Lock()
+        self._next_request_at = 0.0
+        self.request_interval_seconds = (
+            self.AUTHENTICATED_MIN_REQUEST_INTERVAL_SECONDS
+            if api_key
+            else self.ANONYMOUS_MIN_REQUEST_INTERVAL_SECONDS
+        )
         self.session.headers.update({
             "User-Agent": "ArxivDailyResearcher/2.0 (https://github.com/yzr278892/arxiv-daily-researcher; yzr278892@gmail.com)"
         })
@@ -57,6 +72,22 @@ class SemanticScholarEnricher:
             self.session.close()
             logger.debug("SemanticScholar Session已关闭")
 
+    def _wait_for_request_slot(self) -> None:
+        """Serialize provider calls at the configured minimum interval.
+
+        A single ``SearchAgent`` normally enriches papers serially, but the
+        lock also makes the provider guarantee hold if a future caller uses an
+        enricher from multiple threads.  Reserve the slot before issuing the
+        request so retries follow the same rate policy.
+        """
+        with self._request_slot_lock:
+            now = time.monotonic()
+            wait_seconds = self._next_request_at - now
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+                now = time.monotonic()
+            self._next_request_at = now + self.request_interval_seconds
+
     def _api_get(self, url: str, params: dict, timeout: int = 10) -> requests.Response:
         """发送 Semantic Scholar API GET 请求，带自动重试（跳过 404/429）。"""
         from config import settings as _settings
@@ -68,6 +99,7 @@ class SemanticScholarEnricher:
             reraise=True,
         )
         def _do_get():
+            self._wait_for_request_slot()
             resp = self.session.get(url, params=params, timeout=timeout)
             # 404 和 429 不重试，直接返回
             if resp.status_code in (404, 429):

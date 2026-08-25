@@ -836,7 +836,7 @@ Scopes: config, **new SQLite history**, keyword data, reports (config only by de
 | :------------------- | :------------------------------------------------------------------------ |
 | **ArXiv**            | Official `arxiv` library, built-in 6s delay, rate-limit backoff, Retry-After honored |
 | **OpenAlex**         | Basic queries work anonymously; a free `OPENALEX_API_KEY` raises the daily budget from $0.10 to $1 and can be managed in the [usage dashboard](https://openalex.org/settings/api) |
-| **Semantic Scholar** | Most endpoints work anonymously but shared limits can throttle requests; use an API key from the official [request page](https://www.semanticscholar.org/product/api#api-key-form) for better reliability |
+| **Semantic Scholar** | Most endpoints work anonymously, but the shared pool can throttle during busy periods. API keys start at 1 request/second; the project paces calls automatically. Get a key from the official [request page](https://www.semanticscholar.org/product/api#api-key-form) |
 | **MinerU**           | Respects the 2000-page daily priority quota                               |
 
 > [!NOTE]

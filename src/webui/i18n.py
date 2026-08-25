@@ -281,8 +281,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Semantic Scholar",
     },
     "semantic_scholar_section_hint": {
-        "zh": "用于可选 TL;DR 增强；API Key 可避免共享匿名额度并提高稳定性。",
-        "en": "Used for optional TL;DR enrichment; an API key avoids shared anonymous limits.",
+        "zh": "用于可选 TL;DR 增强。匿名额度由所有用户共享；API Key 初始限额为每秒 1 次，应用会自动按此节奏请求。",
+        "en": "Used for optional TL;DR enrichment. Anonymous traffic uses a shared pool; API keys start at 1 request/second, which the app paces automatically.",
     },
     "test_semantic_scholar_btn": {
         "zh": "测试 Semantic Scholar 连接",
