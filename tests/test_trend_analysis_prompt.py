@@ -4,6 +4,7 @@ import sys
 import unittest
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -62,3 +63,30 @@ class TrendAgentPromptOverrideTests(unittest.TestCase):
         self.assertEqual(results, {"comprehensive_analysis": "分析结果"})
         self.assertEqual(captured[0]["instruction"], "自定义指令")
         self.assertEqual(captured[0]["label"], "综合趋势分析")
+
+
+class TrendResearchHistoryIsolationTests(unittest.TestCase):
+    def test_trend_search_never_uses_legacy_json_history(self):
+        """v3.2 JSON is reserved for the explicit legacy-import workflow."""
+        from modes.trend_research import TrendResearchPipeline
+
+        pipeline = TrendResearchPipeline(
+            settings=SimpleNamespace(HISTORY_DIR=Path("/tmp/legacy-history")),
+            keywords=["quantum"],
+            date_from=date(2026, 1, 1),
+            date_to=date(2026, 1, 2),
+            max_results=5,
+        )
+        with (
+            patch(
+                "modes.trend_research.settings",
+                SimpleNamespace(TOKEN_TRACKING_ENABLED=False),
+            ),
+            patch("modes.trend_research.ArxivSource") as source_class,
+            patch.object(pipeline, "_send_result_notification"),
+        ):
+            source_class.return_value.search_by_keywords.return_value = []
+            result = pipeline.run()
+
+        self.assertTrue(result.success)
+        self.assertFalse(source_class.call_args.kwargs["load_legacy_history"])

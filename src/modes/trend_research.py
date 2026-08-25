@@ -87,6 +87,9 @@ class TrendResearchPipeline:
             arxiv_source = ArxivSource(
                 history_dir=self.settings.HISTORY_DIR,
                 max_results=self.max_results,
+                # v3.2 JSON files are import-only input.  Trend runs must use
+                # the same SQLite-only history semantics as daily research.
+                load_legacy_history=False,
             )
 
             papers = arxiv_source.search_by_keywords(
