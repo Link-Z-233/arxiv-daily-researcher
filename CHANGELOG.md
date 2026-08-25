@@ -76,12 +76,14 @@
 7. **被动 LLM 健康面板** — 「数据分析」新增 CHEAP_LLM / SMART_LLM 健康卡，仅记录真实调用重试后的终态，不发探针、不额外消耗 token；展示最近结果、连续失败、近 20 次成功率、最近成功和脱敏错误说明。
 8. **Streamlit 兼容升级** — 全部 `use_container_width` 调用切换为当前 `width="stretch"` API，消除弃用警告；运行日志查看区固定为 800px 并原生滚动。
 9. **更新检查边界明确** — Docker 环境只检查 GitHub Release 并发送一次性新版本通知，不会自动拉取、重建镜像或重启容器。
+10. **发布链路生产化** — GitHub Actions 的每日/趋势工作流迁移到 v4.0 依赖与 SQLite 状态缓存，移除废弃的搜索天数输入并串行化共享状态；新增主分支完整回归，以及匹配 `VERSION` 的 `v<版本>` tag 才会在回归成功后发布 AMD64/ARM64 双架构 GHCR worker 和 WebUI 镜像。
 
 ### 📚 文档与验证
 
 1. **README 重写** — 中英文 README 以 v4.0 当前运行模型重组，覆盖 SQLite 生命周期、旧历史导入/补充/过去日报、通知、备份、评分、部署与复杂故障排查。
 2. **最新脱敏 WebUI 截图** — 更新每日推送、数据分析、评分、备份和旧历史导入界面截图，不包含 API Key、密码、Webhook、邮箱、内网地址或本机路径。
 3. **回归验证** — 完整测试套件通过：`469 passed, 4 warnings, 64 subtests passed`；worker 与 WebUI Compose 容器均通过健康检查。
+4. **托管镜像部署说明** — Compose 支持通过 `ADR_WORKER_IMAGE` 与 `ADR_WEBUI_IMAGE` 显式固定 GHCR 镜像版本，同时保留默认的本地源码构建方式。
 
 ---
 

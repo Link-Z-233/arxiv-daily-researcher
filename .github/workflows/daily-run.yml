@@ -8,13 +8,14 @@ on:
   #   # 每天 UTC 00:00 运行 (= 北京时间 08:00)
   #   - cron: '0 0 * * *'
 
-  # 支持手动触发
+  # 支持手动触发。v4.0 固定回看最近 3 天；更早日期请使用过去日报队列。
   workflow_dispatch:
-    inputs:
-      search_days:
-        description: '搜索最近 N 天的论文 (Search recent N days)'
-        required: false
-        default: '7'
+
+# GitHub Actions 的 SQLite 状态缓存是同一个逻辑数据源；日常与趋势任务不能
+# 并发恢复和保存它，否则可能各自基于不同快照运行。
+concurrency:
+  group: research-state
+  cancel-in-progress: false
 
 jobs:
   research:
@@ -32,9 +33,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: requirements-core.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python -m pip install -r requirements-core.txt
 
       - name: Create .env from secrets
         run: |
@@ -67,15 +69,14 @@ jobs:
           ENVEOF
 
       - name: Restore previous data
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
-            data/history/
             data/keywords/
             data/daily_research/
-          key: research-data-${{ github.run_number }}
+          key: research-state-${{ github.run_id }}
           restore-keys: |
-            research-data-
+            research-state-
 
       - name: Create data directories
         run: |
@@ -85,7 +86,7 @@ jobs:
                    data/reports/trend_research/html \
                    data/reports/keyword_trend/markdown \
                    data/reports/keyword_trend/html \
-                   data/history data/keywords data/daily_research data/run \
+                   data/keywords data/daily_research data/run \
                    data/reference_pdfs data/downloaded_pdfs logs
 
       - name: Run research pipeline
@@ -108,7 +109,6 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            data/history/
             data/keywords/
             data/daily_research/
-          key: research-data-${{ github.run_number }}
+          key: research-state-${{ github.run_id }}

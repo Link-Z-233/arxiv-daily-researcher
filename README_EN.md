@@ -237,7 +237,20 @@ docker compose ps
 
 The worker uses `network_mode: host`, so on Linux/NAS it can usually reach a host-local compatible LLM at `http://127.0.0.1:<port>/v1`. The WebUI and worker must share `data/`, `logs/`, `configs/`, and `.env`; do not point one service at a different data root.
 
-This repository currently builds local Compose images. GHCR hosting is deliberately deferred until the v4.0 feature set is stable and formally released; do not assume a remote `latest` tag is a released image yet.
+### GHCR hosted images
+
+Formal releases publish both x86_64 and ARM64 (NAS) images to GitHub Container Registry. Pin a production deployment to a version tag; `latest` is not an unattended-update mechanism:
+
+```bash
+export ADR_WORKER_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher:4.0
+export ADR_WEBUI_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher-config-panel:4.0
+
+docker compose pull
+docker compose up -d --no-build --force-recreate
+docker compose ps
+```
+
+Without these variables, Compose keeps the original source-build behavior. Every `v<version>` Git tag runs the complete regression suite before publishing both multi-architecture images; the tag must match `VERSION`. Before upgrading, read the Release/CHANGELOG, back up SQLite, and explicitly select a validated version tag.
 
 ### Common CLI commands
 

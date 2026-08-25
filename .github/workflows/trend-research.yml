@@ -34,6 +34,11 @@ on:
         required: false
         default: ''
 
+# 与 daily-run.yml 共享 SQLite 缓存，不允许两个云端任务并发读写不同快照。
+concurrency:
+  group: research-state
+  cancel-in-progress: false
+
 jobs:
   trend-research:
     runs-on: ubuntu-latest
@@ -48,9 +53,10 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: requirements-core.txt
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python -m pip install -r requirements-core.txt
 
       - name: Create .env from secrets
         run: |
@@ -82,20 +88,30 @@ jobs:
           GENERIC_WEBHOOK_URL=${{ secrets.GENERIC_WEBHOOK_URL }}
           ENVEOF
 
+      - name: Restore persisted SQLite state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/keywords/
+            data/daily_research/
+          key: research-state-${{ github.run_id }}
+          restore-keys: |
+            research-state-
+
       - name: Create data directories
         run: |
           mkdir -p data/reports/trend_research/markdown \
                    data/reports/trend_research/html \
-                   data/history data/keywords data/run logs
+                   data/keywords data/daily_research data/run logs
 
       - name: Run trend research
         run: |
           python - << 'PYEOF'
-          import subprocess, sys, shlex
+          import os, subprocess, sys, shlex
 
           # 使用 shlex.split 正确处理含空格的引号关键词
           # 例：输入 '"reduction map" entanglement' → ['reduction map', 'entanglement']
-          keywords = shlex.split("""${{ github.event.inputs.keywords }}""")
+          keywords = shlex.split(os.environ["INPUT_KEYWORDS"])
           if not keywords:
               print("错误: 关键词不能为空")
               sys.exit(1)
@@ -103,11 +119,11 @@ jobs:
           cmd = [sys.executable, "main.py", "--mode", "trend_research",
                  "--keywords"] + keywords
 
-          date_from   = "${{ github.event.inputs.date_from }}".strip()
-          date_to     = "${{ github.event.inputs.date_to }}".strip()
-          categories  = shlex.split("${{ github.event.inputs.categories }}")
-          sort_order  = "${{ github.event.inputs.sort_order }}".strip()
-          max_results = "${{ github.event.inputs.max_results }}".strip()
+          date_from   = os.environ["INPUT_DATE_FROM"].strip()
+          date_to     = os.environ["INPUT_DATE_TO"].strip()
+          categories  = shlex.split(os.environ["INPUT_CATEGORIES"])
+          sort_order  = os.environ["INPUT_SORT_ORDER"].strip()
+          max_results = os.environ["INPUT_MAX_RESULTS"].strip()
 
           if date_from:   cmd += ["--date-from", date_from]
           if date_to:     cmd += ["--date-to", date_to]
@@ -120,6 +136,12 @@ jobs:
           PYEOF
         env:
           PYTHONUNBUFFERED: "1"
+          INPUT_KEYWORDS: ${{ inputs.keywords }}
+          INPUT_DATE_FROM: ${{ inputs.date_from }}
+          INPUT_DATE_TO: ${{ inputs.date_to }}
+          INPUT_CATEGORIES: ${{ inputs.categories }}
+          INPUT_SORT_ORDER: ${{ inputs.sort_order }}
+          INPUT_MAX_RESULTS: ${{ inputs.max_results }}
 
       - name: Upload reports as artifacts
         if: always()
@@ -130,3 +152,12 @@ jobs:
             data/reports/trend_research/
             logs/
           retention-days: 30
+
+      - name: Save persisted SQLite state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/keywords/
+            data/daily_research/
+          key: research-state-${{ github.run_id }}

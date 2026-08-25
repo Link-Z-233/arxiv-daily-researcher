@@ -237,7 +237,20 @@ docker compose ps
 
 worker 使用 `network_mode: host`，因此在 Linux/NAS 上访问宿主机本地 LLM 时，`.env` 中通常可直接填写 `http://127.0.0.1:<port>/v1`。WebUI 通过共享的 `data/`、`logs/`、`configs/` 和 `.env` 与 worker 协作；不要把其中一个容器指向不同的数据目录。
 
-当前仓库提供本地 Compose 构建。GHCR 托管镜像会在 v4.0 功能稳定并正式发布后再启用；在此之前，不应把 `latest` 当作已发布的远端镜像标签。
+### GHCR 托管镜像
+
+正式版本会同时发布 x86_64 和 ARM64（NAS）镜像到 GitHub Container Registry。生产部署请固定版本标签，不要把 `latest` 当作无感自动更新机制：
+
+```bash
+export ADR_WORKER_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher:4.0
+export ADR_WEBUI_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher-config-panel:4.0
+
+docker compose pull
+docker compose up -d --no-build --force-recreate
+docker compose ps
+```
+
+未设置这两个环境变量时，Compose 仍按原方式从当前源码本地构建。每个 `v<版本号>` Git tag 都会先运行完整回归，再发布两个多架构镜像；tag 必须与 `VERSION` 文件一致。升级时先阅读 Release/CHANGELOG、备份 SQLite，然后显式改为已验证的版本标签。
 
 ### 常用 CLI
 

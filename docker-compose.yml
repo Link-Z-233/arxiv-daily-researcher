@@ -4,7 +4,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: worker
-    image: arxiv-daily-researcher:latest
+    # 默认使用本地构建镜像；部署者可通过 ADR_WORKER_IMAGE 覆盖为固定的
+    # GHCR 版本标签。保留 build 以支持源码部署和本地开发。
+    image: ${ADR_WORKER_IMAGE:-arxiv-daily-researcher:latest}
     container_name: arxiv-daily-researcher
     restart: unless-stopped
 
@@ -55,7 +57,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: webui
-    image: arxiv-daily-researcher-config-panel:latest
+    # 与 worker 保持相同的版本来源，避免 WebUI 与后端协议错配。
+    image: ${ADR_WEBUI_IMAGE:-arxiv-daily-researcher-config-panel:latest}
     container_name: arxiv-daily-researcher-config-panel
     restart: unless-stopped
 
