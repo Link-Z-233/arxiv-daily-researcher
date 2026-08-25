@@ -323,7 +323,7 @@ The panel shares `.env` and `configs/config.json` with the worker; changes take 
 |   9   | **Notifications**      | Global toggle, success/failure/attachment control, six channels, SMTP test                                                                                    |
 |  10   | **Data Management**    | Config export (zip), **WebDAV sync** (manual / scheduled / after-report), **DB backup** (gzip; configurable local full-backup retention, 7 days by default; enter `0` to keep forever; incremental WebDAV mirror, run now) + **legacy history import** (read legacy history + range scan + supplement report, idle-time)                               |
 |  11   | **API**                | CHEAP_LLM / SMART_LLM / MinerU with connectivity tests                                                                                                        |
-|  12   | **Advanced**           | PDF parser (pymupdf default), concurrency, token tracking, update checks, keyword tracking, retries, log rotation, stale-lock recovery, **proxy**              |
+|  12   | **Advanced**           | PDF parser (pymupdf default), concurrency, token tracking, release checks and notifications, keyword tracking, retries, log rotation, stale-lock recovery, **proxy**              |
 
 ### 🖼️ WebUI Screenshots
 
@@ -418,6 +418,27 @@ docker exec -it arxiv-daily-researcher python main.py --mode trend_research \
 docker exec arxiv-daily-researcher python -m modes.keyword_maintenance
 
 docker compose down
+```
+
+#### Release checks and manual updates
+
+With **Check for updates & notify** enabled in Advanced, the worker checks once after container startup and again independently every day at `09:17` (container timezone). It therefore detects a new GitHub Release even on days when daily research does not run. A release newer than the image's packaged `VERSION` is sent once through enabled notification channels.
+
+This feature **only checks and notifies**. It never runs `git pull`, rebuilds an image, or restarts a live container, so it cannot overwrite local changes or replace a process mid-task. If every notification channel is unavailable, that release is not marked as notified and a later check retries it.
+
+For source-built Docker deployments:
+
+```bash
+git pull
+docker compose build
+docker compose up -d
+```
+
+For a future hosted-image deployment:
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 #### WebUI run-now mechanism

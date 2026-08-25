@@ -64,6 +64,7 @@ find /app/logs -name "keyword_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>
 find /app/logs -name "legacy_import_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "supplement_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "backfill_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
+find /app/logs -name "update_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 
 # ==================== Interactive Setup Wizard ====================
 # Run setup wizard on first deployment (no .env file) or when SETUP_WIZARD=true
@@ -81,6 +82,19 @@ elif [ "$SETUP_WIZARD" = "auto" ] && [ ! -f /app/.env ]; then
     cd /app && python src/utils/setup_wizard.py
     echo "Setup wizard complete."
     echo ""
+fi
+
+# ==================== Release Update Availability ====================
+# A container must not replace its own image.  Check GitHub Releases after a
+# normal worker start, then the dedicated cron task below checks daily even if
+# daily research is not run.  The Python entry point observes the WebUI toggle
+# and sends a notification only when a newer release is available.
+if [ "$MODE" != "run-once" ] && [ "$RUN_ON_STARTUP" != "true" ]; then
+    UPDATE_CHECK_LOG="/app/logs/update_$(date +%Y%m%d).log"
+    echo "Checking published release availability in background..."
+    (
+        cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m utils.updater
+    ) >> "$UPDATE_CHECK_LOG" 2>&1 &
 fi
 
 # ==================== Single Execution Mode ====================
@@ -117,6 +131,8 @@ WEBDAV_CRON_CMD="cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m utils.w
 # 关键词标准化/趋势报告：每天 0 点静默执行，与日报主流程解耦。
 KEYWORD_CRON_LOG="/app/logs/keyword_\$(date +\%Y\%m\%d).log"
 KEYWORD_CRON_CMD="cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m modes.keyword_maintenance >> $KEYWORD_CRON_LOG 2>&1"
+UPDATE_CRON_LOG="/app/logs/update_\$(date +\%Y\%m\%d).log"
+UPDATE_CRON_CMD="cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m utils.updater >> $UPDATE_CRON_LOG 2>&1"
 {
     echo "$CRON_SCHEDULE $CRON_CMD"
     # This lightweight tick only performs a transfer when config.json selects
@@ -124,6 +140,9 @@ KEYWORD_CRON_CMD="cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m modes.
     # the established cron/watcher/tail container lifecycle unchanged.
     echo "* * * * * $WEBDAV_CRON_CMD"
     echo "0 0 * * * $KEYWORD_CRON_CMD"
+    # Independent from daily research: update availability remains observable
+    # when the research task is disabled, queued, or otherwise not run.
+    echo "17 9 * * * $UPDATE_CRON_CMD"
 } > /etc/cron.d/arxiv-daily
 chmod 0644 /etc/cron.d/arxiv-daily
 crontab /etc/cron.d/arxiv-daily

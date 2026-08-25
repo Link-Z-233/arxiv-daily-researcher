@@ -28,10 +28,12 @@
     </table>
 </td></tr>
 <tr><td style="padding:0 32px 16px;">
-    <h3 style="margin:0 0 8px;font-size:14px;color:#1a1f36;">更新方式</h3>
+    <h3 style="margin:0 0 8px;font-size:14px;color:#1a1f36;">需要手动更新</h3>
     <p style="margin:0;font-size:13px;color:#4b5563;">
-        Docker: <code>docker compose pull &amp;&amp; docker compose up -d</code><br>
-        本地: <code>git pull</code>
+        源码构建的 Docker: <code>git pull &amp;&amp; docker compose build &amp;&amp; docker compose up -d</code><br>
+        已使用托管镜像的 Docker: <code>docker compose pull &amp;&amp; docker compose up -d</code><br>
+        本地 Python: <code>git pull</code> 后按你的方式重启服务<br><br>
+        此提醒只负责检测，不会自行拉取代码、重建镜像或重启容器。
     </p>
 </td></tr>
 <tr><td style="padding:16px 32px 0;">

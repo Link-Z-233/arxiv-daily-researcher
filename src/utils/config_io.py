@@ -223,7 +223,7 @@ SECTION_COMMENTS = {
     "concurrency": "Concurrency Configuration",
     "pdf_parser": "PDF Parser Configuration",
     "report_settings": "Report Configuration",
-    "auto_update": "Auto-update Configuration",
+    "auto_update": "Release Update Notification Configuration",
     "token_tracking": "Token Tracking Configuration",
     "proxy": "Network Proxy Configuration",
     "webdav": "WebDAV Sync Configuration",

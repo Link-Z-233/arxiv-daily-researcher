@@ -324,7 +324,7 @@ docker compose up -d config-panel
 |   9   | **通知**         | 全局开关、成功 / 失败 / 附件控制、六大渠道配置、SMTP 测试                                                                                                    |
 |  10   | **数据管理**     | 一键导出配置文件（config.json + .env）为 zip；**WebDAV 同步**（手动 / 定时 / 报告后自动）；**数据库备份**（gzip 压缩；本地当天保留全部副本、昨天及更早每天仅留最新一份，再按可配置保留天数清理，默认 7 天，填 0 不按天数过期；WebDAV 增量上传远端永不删除 + 立即备份）；**旧历史导入**（读取旧历史 + 时间段扫描 + 生成补充报告，空闲时自动执行）         |
 |  11   | **API**          | 配置 CHEAP_LLM / SMART_LLM / MinerU，支持连接测试                                                                                                            |
-|  12   | **高级设置**     | PDF 解析模式（默认 pymupdf）、并发、Token 追踪、自动更新检查、关键词趋势追踪、重试、日志轮转与运行锁超龄回收、**网络代理**                                    |
+|  12   | **高级设置**     | PDF 解析模式（默认 pymupdf）、并发、Token 追踪、新版本检测与通知、关键词趋势追踪、重试、日志轮转与运行锁超龄回收、**网络代理**                                    |
 
 ### 🖼️ WebUI 界面预览
 
@@ -426,6 +426,27 @@ docker exec arxiv-daily-researcher python -m modes.keyword_maintenance
 
 # 停止主服务
 docker compose down
+```
+
+#### 新版本检测与手动更新
+
+在「高级设置」启用**检查新版本并通知**后，worker 会在容器启动后检查一次，并在每天 `09:17`（容器时区）独立检查 GitHub Release；即使当天日报没有运行，也能发现新版本。发现比镜像内 `VERSION` 更新的发布版时，会通过已启用的通知渠道提醒一次。
+
+该功能**只检测和通知**，不会在运行中的容器里 `git pull`、重建镜像或重启服务；这样不会覆盖本地修改，也不会在任务中途替换程序。通知渠道全部不可用时不会把该版本记为“已提醒”，后续检查会自动重试。
+
+源码构建部署的更新方式：
+
+```bash
+git pull
+docker compose build
+docker compose up -d
+```
+
+未来若改用托管镜像，则使用：
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 #### WebUI 立即运行机制

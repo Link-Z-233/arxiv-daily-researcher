@@ -242,9 +242,11 @@
   },
 
   // ==================================================
-  // Auto-update Configuration
+  // Release Update Notification Configuration
   // ==================================================
   "auto_update": {
+    // Only checks GitHub Releases and sends a notification. It never pulls
+    // code, rebuilds images, or restarts the running installation.
     "enabled": true
   },
 

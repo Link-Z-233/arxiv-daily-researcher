@@ -263,8 +263,9 @@ class Settings(BaseSettings):
     # bounded even when an upstream server omits or lies about Content-Length.
     PDF_DOWNLOAD_MAX_BYTES: int = 50 * 1024 * 1024
 
-    # ==================== 自动更新配置 ====================
-    AUTO_UPDATE_ENABLED: bool = True  # 是否启用自动更新检查
+    # ==================== 版本更新通知配置 ====================
+    # 仅检测 GitHub Release 并发送提醒；绝不由运行中的程序自行拉取代码或重启容器。
+    AUTO_UPDATE_ENABLED: bool = True
 
     # ==================== 网络代理配置 ====================
     PROXY_ENABLED: bool = False  # 是否启用网络代理

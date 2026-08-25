@@ -142,6 +142,7 @@ def render(env_values: dict, config_values: dict):
             t("auto_update_label"),
             value=flat.get("auto_update_enabled", True),
             key="auto_update_enabled",
+            help=t("auto_update_help"),
         )
 
     st.divider()

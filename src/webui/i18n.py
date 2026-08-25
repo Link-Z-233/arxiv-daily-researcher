@@ -835,7 +835,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "advanced_reports_title": {"zh": "功能开关", "en": "Feature Toggles"},
     "html_reports_label": {"zh": "HTML 报告", "en": "HTML reports"},
     "token_tracking_label": {"zh": "Token 用量追踪", "en": "Token tracking"},
-    "auto_update_label": {"zh": "自动更新检查", "en": "Auto-update check"},
+    "auto_update_label": {
+        "zh": "检查新版本并通知",
+        "en": "Check for updates & notify",
+    },
+    "auto_update_help": {
+        "zh": "只检查 GitHub Release，不会自动拉取代码、重建镜像或重启容器。发现比当前版本更新的发布版时，经已启用的通知渠道提醒；若所有渠道未送达，后续检查会重试。",
+        "en": "Checks GitHub Releases only; it never pulls code, rebuilds images, or restarts containers. A newer release is sent through enabled notification channels, and failed delivery is retried by a later check.",
+    },
     "kw_tracker_title": {
         "zh": "关键词趋势追踪",
         "en": "Keyword Trend Tracking",

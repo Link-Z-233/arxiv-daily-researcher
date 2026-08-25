@@ -823,9 +823,9 @@ def section_advanced(existing_env: dict, existing_config: dict) -> tuple:
     if html_report is not None:
         config_values["enable_html_report"] = html_report
 
-    # Auto-update
+    # Release update notification (it never mutates the running installation).
     auto_update = questionary.confirm(
-        "Enable auto-update check?",
+        "Check for new releases and send notifications?",
         default=flat.get("auto_update_enabled", True),
         style=WIZARD_STYLE,
     ).ask()

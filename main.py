@@ -207,9 +207,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # 自动更新检查
     if settings.AUTO_UPDATE_ENABLED:
         try:
-            from utils.updater import check_and_update
+            from utils.updater import check_for_updates
 
-            check_and_update(logger)
+            check_for_updates(logger)
         except Exception as e:
             logger.warning(f"自动更新检查失败: {e}")
 
