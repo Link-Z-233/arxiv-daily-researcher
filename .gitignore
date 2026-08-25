@@ -1,48 +1,44 @@
 # Python
 __pycache__/
+/.pytest_cache/
 *.py[cod]
 *.so
 
-# Virtual Environment
-venv/
-.venv/
+# Virtual environments
+/venv/
+/.venv/
 
-# IDE
-.idea/
-.vscode/
+# Editor and local agent workspaces
+/.idea/
+/.vscode/
 *.code-workspace
+/.zcode/
+/.agents/
+/.claude/
+/.codex/
 
 # Environment variables
 .env
 .env.local
 !.env.example
 
-# Logs
-logs/
+# Runtime-generated data
+/logs/
 *.log
-
-# Data (runtime generated)
-data/
-
-# Database
+/data/
 *.db-journal
 *.db-wal
 *.db-shm
 
-# OS
+# Local tests and promotion/verification artifacts
+/test/
+/promo/
+
+# OS and temporary files
 .DS_Store
 Thumbs.db
 *:Zone.Identifier
-
-# Temp
 *.bak
 *.tmp
 *.swp
 *~
-
-# test
-test/
-# ZCode agent workspace
-.zcode/
-# Windows NTFS download markers
-*:Zone.Identifier
