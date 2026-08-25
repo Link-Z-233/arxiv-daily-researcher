@@ -127,6 +127,27 @@ class LLMResponseCompatibilityTests(unittest.TestCase):
         self.assertEqual(chat_call.call_count, 2)
         self.assertEqual(responses_call.call_count, 2)
 
+    def test_provider_connection_failure_is_preserved_without_leaking_a_key(self):
+        agent = AnalysisAgent.__new__(AnalysisAgent)
+        agent.cheap_client = SimpleNamespace(responses=None)
+        provider_error = RuntimeError("relay unavailable: api_key=sk-very-secret")
+        provider_error.__cause__ = ConnectionRefusedError("[Errno 111] Connection refused")
+
+        with patch(
+            "agents.analysis_agent.call_chat_completion",
+            side_effect=provider_error,
+        ):
+            with self.assertRaisesRegex(LLMResponseError, "relay unavailable") as raised:
+                agent._call_llm_with_fallback(
+                    agent.cheap_client,
+                    "model",
+                    "prompt",
+                    temperature=None,
+                )
+
+        self.assertIn("Connection refused", str(raised.exception))
+        self.assertNotIn("very-secret", str(raised.exception))
+
     def test_token_usage_accepts_chat_and_responses_field_names(self):
         with patch.object(settings, "TOKEN_TRACKING_ENABLED", True), patch(
             "utils.token_counter.token_counter.add"

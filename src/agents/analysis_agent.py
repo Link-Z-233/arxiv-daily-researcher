@@ -47,6 +47,41 @@ class LLMResponseError(RuntimeError):
     """Raised when an LLM provider returned no usable response text."""
 
 
+def _safe_llm_failure_detail(exc: Optional[BaseException]) -> str:
+    """Return useful nested provider diagnostics without exposing credentials.
+
+    Compatible OpenAI clients often wrap a socket/DNS failure in a terse
+    ``APIConnectionError('Connection error.')``.  The useful reason sits on
+    its chained exception, which used to be discarded when we raised the
+    generic empty-response error.  Retain that context for retry records and
+    the WebUI, but redact credentials before it leaves the exception chain.
+    """
+    details = []
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen and len(details) < 4:
+        seen.add(id(current))
+        detail = str(current).strip()
+        if detail and detail not in details:
+            details.append(detail)
+        current = current.__cause__ or current.__context__
+
+    rendered = " -> ".join(details)
+    if not rendered:
+        return ""
+    # Avoid persisting a key if a proxy/client included it in an error URL or
+    # header.  The patterns intentionally cover common OpenAI-style keys and
+    # key=value/header wording without trying to reinterpret arbitrary text.
+    rendered = re.sub(
+        r"(?i)(api[_-]?key|authorization|token|password)\\s*([:=])\\s*[^,;\\s]+",
+        r"\\1\\2***",
+        rendered,
+    )
+    rendered = re.sub(r"(?i)sk-[A-Za-z0-9_-]+", "sk-***", rendered)
+    rendered = re.sub(r"(https?://)[^/@\\s]+@", r"\\1***@", rendered)
+    return rendered[:600]
+
+
 def _normalized_person_name(value: Any) -> str:
     """Return a deterministic comparison key for a human name.
 
@@ -413,7 +448,11 @@ class AnalysisAgent:
             except Exception as exc:
                 last_error = exc
 
-        raise LLMResponseError("LLM 未返回可用正文") from last_error
+        detail = _safe_llm_failure_detail(last_error)
+        message = "LLM 未返回可用正文"
+        if detail:
+            message += f"（最后错误：{detail}）"
+        raise LLMResponseError(message) from last_error
 
     def _call_cheap_llm(self, prompt: str) -> str:
         """调用低成本LLM（JSON模式），带自动重试。"""
