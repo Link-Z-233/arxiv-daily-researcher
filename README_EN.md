@@ -2,392 +2,893 @@
 
 # 🔬 ArXiv Daily Researcher
 
-**A recoverable research workflow for individual researchers: discover, score, analyze, report, archive, and notify.**
+**An LLM-powered system for academic paper monitoring, selection, analysis, reporting, and research archiving**
 
-[![Version](https://img.shields.io/badge/version-v4.0-2563eb?style=flat-square)](CHANGELOG.md)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-16a34a?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.12+-facc15?style=flat-square)](https://www.python.org/)
-[![Docker](https://img.shields.io/badge/docker-compose-2496ed?style=flat-square)](docker-compose.yml)
+[![Version](https://img.shields.io/badge/version-v4.0-brightgreen.svg)](CHANGELOG.md)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Supported-2088FF?logo=github-actions)](https://github.com/features/actions)
+[![Streamlit](https://img.shields.io/badge/Config_Panel-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](#️-streamlit-configuration-panel)
+[![中文文档](https://img.shields.io/badge/README-中文-blue.svg)](README.md)
 
-[中文文档](README.md) · [Changelog](CHANGELOG.md) · [Issues](https://github.com/yzr278892/arxiv-daily-researcher/issues)
+*A complete workflow for daily literature tracking, focused research, and historical-data organization.*
 
 </div>
 
-> [!IMPORTANT]
-> SQLite is the only daily-history system in v4.0. `data/history/*_history.json` is no longer read, written, or synchronized by normal runs; it is input only for the explicit v3.2 legacy-import workflow.
+---
 
-ArXiv Daily Researcher is more than a daily fetcher. It turns a research run into inspectable, resumable state: candidates are fully scanned and registered first, then scored, translated, analyzed, reported, and finally committed as delivered. A transient network, LLM, notification, or WebDAV failure cannot silently discard unfinished work or make already delivered papers appear new again.
+ArXiv Daily Researcher collects papers from ArXiv and optional additional sources, evaluates them against a research profile, produces translated summaries and PDF analysis, tracks research trends, and delivers Markdown/HTML reports through multiple notification channels.
 
-## ✨ What v4.0 guarantees
+v4.0 uses SQLite for candidate papers, processing stages, report delivery, notification outbox rows, legacy-import backlogs, and historical-daily-report queues. Each workflow can resume from completed stages, which makes the system suitable for long-running deployments.
 
-| Question | v4.0 behavior |
-| :-- | :-- |
-| Can a daily scan miss papers? | Daily research uses a fixed 3-day window. arXiv scans both submissions and updates with full pagination; receipts and watermarks expand recovery after a failed window. |
-| What if one run finds too many papers? | Every candidate enters SQLite first. “Max papers per run” limits downstream work only, never fetching. `0` means unlimited; the remainder is durable queue work. |
-| Will a retry duplicate a paper? | Exact identity is `(source, canonical_id, version)`. A new arXiv version is a new deliverable; the earlier version is preserved. |
-| What happens when LLM/PDF work fails? | Completed stages are retained. Failed stages and a safe error summary stay retryable; incomplete papers are never delivered as a normal report. |
-| How is v3.2 history migrated? | One click imports JSON and HTML after the worker is idle, resolves duplicates by newest analysis, records missing work, scans historical ranges, and starts supplement reports automatically. |
-| How do I rerun old dates? | A date range becomes a persistent, day-by-day queue; each day uses the full daily pipeline and automatically resumes when capped. |
-| How are data and notifications protected? | Consistent SQLite gzip backups, configurable local retention, incremental WebDAV archiving, and a SQLite notification outbox. |
+The current release includes:
 
-## 📑 Contents
+- **Daily research**: a fixed three-day lookback for new papers and revisions
+- **Trend research**: topic, date-range, and category-based research reports
+- **Legacy import and supplement reports**: imports v3.2 JSON history and HTML reports into SQLite
+- **Past daily-report queues**: replays full daily workflows over a selected date range
+- **Streamlit configuration panel**: configuration, execution, reports, data management, and diagnostics
 
-- [Quick start](#-quick-start)
-- [Run model: scan to delivery](#-run-model-scan-to-delivery)
-- [WebUI and screenshots](#-webui-and-screenshots)
-- [Sources, scoring, and analysis](#-sources-scoring-and-analysis)
-- [Legacy import, supplement reports, and past daily reports](#-legacy-import-supplement-reports-and-past-daily-reports)
-- [Notifications, backups, and observability](#-notifications-backups-and-observability)
-- [Deployment, upgrades, and CLI](#-deployment-upgrades-and-cli)
-- [Complex troubleshooting](#-complex-troubleshooting)
+---
 
-## 🚀 Quick start
+## ✨ Core Features
 
-### Docker (recommended)
+<table>
+<tr>
+<td colspan="2" align="center"><sub>— Data collection & intelligent selection —</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-Requires Docker Engine and Docker Compose v2. Compose runs two services: a long-lived worker for cron, queues, and research tasks, plus a Streamlit WebUI bound to localhost by default.
+### 📡 Multi-Source Fetching
 
-```bash
+**ArXiv** is the primary source. The scanner paginates both first submissions and last updates, records scan receipts, and supports categories, announcement-delay rescans, and recovery watermarks. Optional sources include PRL, PRA/PRB, Nature, Science, Hugging Face Papers, and declarative journal definitions, with optional OpenAlex and Semantic Scholar enrichment.
+
+</td>
+<td width="50%" valign="top">
+
+### 🎯 Configurable Scoring Policies
+
+Choose **Core Relevance V2**, **Weighted Keywords V1**, or **Learned Preference V1**. V2 uses primary-keyword relevance plus a strong match for qualification, while reference terms and author preferences contribute to ranking. V1 retains the compatible weighted threshold, and learned preferences refine ordering from saved feedback.
+
+</td>
+</tr>
+<tr>
+<td colspan="2" align="center"><sub>— Deep analysis & recoverable archive —</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🔍 LLM and PDF Analysis
+
+<code>CHEAP_LLM</code> handles scoring, translation, keywords, and TLDRs; <code>SMART_LLM</code> handles PDF deep analysis and trend synthesis. PDF parsing supports local **PyMuPDF** and **MinerU**, with shared timeouts, retries, rate limits, and safe error summaries.
+
+</td>
+<td width="50%" valign="top">
+
+### 🗃️ SQLite Queues and Exact Delivery
+
+Papers enter SQLite before downstream processing. Source, canonical identity, and version provide exact de-duplication; failed stages remain retryable, and report delivery, scan watermarks, and notification outbox rows are committed together after a report is written.
+
+</td>
+</tr>
+<tr>
+<td colspan="2" align="center"><sub>— Trend research & history organization —</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🔬 Trend Research Mode
+
+<code>trend_research</code> accepts keywords, date ranges, and ArXiv categories. It creates a TLDR for each paper and uses <code>SMART_LLM</code> to synthesize topic evolution, researchers, methods, research gaps, and future directions.
+
+</td>
+<td width="50%" valign="top">
+
+### 📜 Legacy Import and Past Daily Reports
+
+Import v3.2 JSON history and HTML reports in one workflow. It merges repeated analyses, records incomplete data, scans for missed papers, and starts supplement reporting. Past daily reports use a durable date-range queue and run the complete research pipeline day by day.
+
+</td>
+</tr>
+<tr>
+<td colspan="2" align="center"><sub>— Reports & notifications —</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 📄 Markdown + HTML Reports
+
+Daily research, supplement reports, past daily reports, trend research, and keyword trends support Markdown and HTML output. The report viewer orders items by timestamp and provides previews, paper marks, and full-archive metadata search.
+
+</td>
+<td width="50%" valign="top">
+
+### 🔔 Multi-Channel Notifications and Outbox
+
+Supports **email, WeCom, DingTalk, Telegram, Slack, and generic webhooks**. Daily research, trend research, legacy import, supplement runs, past-report queues, and release updates send outcome summaries. Temporarily unavailable deliveries remain in the SQLite outbox for later retry.
+
+</td>
+</tr>
+<tr>
+<td colspan="2" align="center"><sub>— Configuration & operations —</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🧙 Setup Wizard and WebUI
+
+The CLI wizard covers LLMs, sources, keywords, scoring, notifications, and advanced settings. The Streamlit panel has 12 tabs for run status, reports, favorites, trends, sources, scoring, analytics, backups, and API tests.
+
+</td>
+<td width="50%" valign="top">
+
+### 🛡️ Backups, Sync, and Diagnostics
+
+SQLite automatically creates consistent gzip snapshots: all copies from today are retained, while older dates retain the newest copy per day. WebDAV uses content-change uploads, and Analytics provides token usage, LLM health, source health, and run diagnostics.
+
+</td>
+</tr>
+</table>
+
+---
+
+## 📑 Navigation
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 📘 Getting Started
+
+| Section | Description |
+| :----------------------: | :----------------------------------------- |
+| [✨ Core Features](#-core-features) | Overview of sources, analysis, archive, and notifications |
+| [🚀 Quick Start](#-quick-start) | Configure and run the first workflow in three steps |
+| [🛠️ Configuration Tools](#️-configuration-tools) | CLI wizard, WebUI, and screenshots |
+| [🐳 Deployment](#-deployment) | Docker, GHCR, GitHub Actions, and local scheduling |
+
+</td>
+<td width="50%" valign="top">
+
+### 📗 In Depth
+
+| Section | Description |
+| :------------------------: | :---------------------------------------------- |
+| [📖 Feature Details](#-feature-details) | Workflows, scoring, history tasks, reports, backup, and sync |
+| [📁 Project Structure](#-project-structure) | Directories, modules, and runtime data |
+| [❓ FAQ](#-faq) | LLMs, networking, queues, imports, and recovery |
+| [📝 Changelog](CHANGELOG.md) | Complete version, release, and compatibility history |
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🚀 Quick Start
+
+### Step 1: Clone the Project
+
+~~~bash
 git clone https://github.com/yzr278892/arxiv-daily-researcher.git
 cd arxiv-daily-researcher
-
 cp .env.example .env
-# At minimum, configure CHEAP_LLM and SMART_LLM key / base URL / model.
+~~~
 
+Docker is the recommended option for long-running deployments. Local Python and GitHub Actions instructions appear later in this document.
+
+### Step 2: Configure the System
+
+For a first installation, start the interactive wizard:
+
+~~~bash
+python src/utils/setup_wizard.py
+~~~
+
+Docker users can also start the WebUI and configure the system in a browser:
+
+~~~bash
+docker compose up -d --build
+~~~
+
+Open <http://127.0.0.1:8503> and configure LLMs, sources, keywords, scoring, notifications, and the run time. The WebUI binds to the local host, which works well with a VPN or an authenticated reverse proxy.
+
+<details>
+<summary><b>Manual configuration</b></summary>
+
+**1) Set the LLM environment variables:**
+
+~~~env
+CHEAP_LLM__API_KEY=sk-your-key
+CHEAP_LLM__BASE_URL=https://api.openai.com/v1
+CHEAP_LLM__MODEL_NAME=gpt-4o-mini
+
+SMART_LLM__API_KEY=sk-your-key
+SMART_LLM__BASE_URL=https://api.openai.com/v1
+SMART_LLM__MODEL_NAME=gpt-4o
+~~~
+
+**2) Set a research topic and ArXiv categories:**
+
+~~~json
+{
+  "keywords": {
+    "primary_keywords": {
+      "weight": 1.0,
+      "keywords": ["quantum error correction", "surface code"]
+    },
+    "research_context": "fault-tolerant quantum computing and quantum error-correcting codes"
+  },
+  "data_sources": {
+    "enabled": ["arxiv"]
+  },
+  "target_domains": {
+    "domains": ["quant-ph"]
+  }
+}
+~~~
+
+<code>configs/config.json</code> supports JSONC comments. WebUI saves preserve existing comments and settings from tabs outside the current session.
+
+</details>
+
+### Step 3: Run
+
+~~~bash
+# Docker: start the worker and WebUI
+docker compose up -d --build
+
+# Local Python: install dependencies and run daily research
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements-core.txt -r requirements-webui.txt
+python main.py
+
+# Trend research example
+python main.py --mode trend_research --keywords "quantum error correction"
+~~~
+
+For the first run, set **Maximum papers per run** to <code>5</code>, confirm reports, SQLite, notifications, and logs, then choose a regular limit or <code>0</code> for the complete available queue.
+
+Runtime data is stored in:
+
+- Reports: <code>data/reports/</code>
+- SQLite: <code>data/daily_research/daily_research.db</code>
+- Backups: <code>data/backups/</code>
+- Logs: <code>logs/</code>
+
+---
+
+## 🛠️ Configuration Tools
+
+The project offers two primary configuration paths: the **CLI setup wizard** and the **Streamlit configuration panel**.
+
+### 🧙 Interactive Setup Wizard
+
+Useful for first deployments, SSH sessions, and headless servers:
+
+~~~bash
+python src/utils/setup_wizard.py
+~~~
+
+| Step | Area | Description |
+| :---: | :--- | :---------- |
+| 1 | LLMs | Configure CHEAP_LLM, SMART_LLM, and connection settings |
+| 2 | Sources | ArXiv switch, categories, additional sources, and optional third-party APIs |
+| 3 | Keywords | Primary keywords, research context, and reference-PDF keyword extraction |
+| 4 | Scoring | Choose a policy, thresholds, weights, and author preferences |
+| 5 | Notifications | Global switch, channel credentials, and outcome notifications |
+| 6 | Advanced | PDF parsing, concurrency, retries, logs, proxy, backup, and WebDAV |
+
+The wizard shows a configuration summary before writing and creates a backup for an existing configuration.
+
+---
+
+### 🖥️ Streamlit Configuration Panel
+
+#### Start the panel
+
+~~~bash
+# Local
+streamlit run src/webui/config_panel.py
+
+# Docker
+docker compose up -d config-panel
+~~~
+
+Docker panel: <http://127.0.0.1:8503><br>
+Local Streamlit default: <http://127.0.0.1:8501>
+
+The WebUI and worker share <code>.env</code>, <code>configs/</code>, <code>data/</code>, and <code>logs/</code>. A saved configuration is loaded by the next task. After changing the run time, use the sidebar worker-restart control to reinstall cron.
+
+#### The 12 WebUI tabs
+
+| # | Tab | Functionality |
+| :---: | :--- | :------------- |
+| 1 | **Daily Push** | Start daily research; daily settings; status panel, auto-refresh, queue depth, and an 800px native log viewer; past-date range queue and start button |
+| 2 | **Report Viewer** | Browse daily, supplement, past-daily, trend, and keyword-trend reports by category and timestamp; HTML preview and paper marks |
+| 3 | **Favorites & Search** | Favorite timeline, like/dislike marks, interest profile, keyword statistics, author Top list, and full SQLite archive search |
+| 4 | **Trend Analysis** | Keywords, date range, categories, ordering, result cap, TLDR, output formats, and custom synthesis prompts |
+| 5 | **Keywords** | Research context, primary keywords, reference-PDF extraction, scrollable extracted keywords, and weight groups |
+| 6 | **Data Sources** | ArXiv switch, categories, and fetch settings; additional-source switch, built-in sources, and declarative source definitions |
+| 7 | **Scoring** | Localized policy names, qualification descriptions, thresholds, weights, author bonus, and live preview |
+| 8 | **Analytics** | Token usage, keyword trends, LLM health, source health, scan receipts, run diagnostics, and notification backlog |
+| 9 | **Notifications** | Global controls, success/failure/attachment settings, and email, WeCom, DingTalk, Telegram, Slack, and webhook configuration |
+| 10 | **Data Management** | Configuration import/export, SQLite import/export, automatic backup, WebDAV, legacy-history import, and supplement backlog status |
+| 11 | **API** | CHEAP_LLM, SMART_LLM, MinerU, OpenAlex, and Semantic Scholar switches, connection tests, and provider-console links |
+| 12 | **Advanced** | PDF parser, concurrency and retries, keyword maintenance, log retention, update checks, proxy, run locks, and path settings |
+
+### 🖼️ WebUI Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="assets/webui_daily_push_v4.png" alt="Daily Push and past daily reports" width="100%" />
+      <br />
+      <sub>Daily Push, status panel, and past daily reports</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/webui_analytics_v4.png" alt="Analytics and LLM health" width="100%" />
+      <br />
+      <sub>Analytics, LLM health, and source health</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/webui_scoring_v4.png" alt="Scoring policies" width="100%" />
+      <br />
+      <sub>Scoring policies and qualification logic</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/webui_data_management_v4.png" alt="Database backups" width="100%" />
+      <br />
+      <sub>Database backup and retention settings</sub>
+    </td>
+    <td align="center" width="50%" colspan="2">
+      <img src="assets/webui_history_import_v4.png" alt="Legacy history import" width="100%" />
+      <br />
+      <sub>v3.2 legacy history import entry point</sub>
+    </td>
+  </tr>
+</table>
+
+Screenshots use redacted test configuration. They contain no API keys, passwords, webhooks, email addresses, private network addresses, or local paths.
+
+<details>
+<summary><b>When should I use the wizard or the WebUI?</b></summary>
+
+| Tool | Best for | Characteristics |
+| :--- | :------- | :-------------- |
+| **Setup Wizard** (<code>setup_wizard.py</code>) | First deployment, SSH, and headless environments | Step-by-step initialization and configuration review |
+| **Configuration Panel** (<code>config_panel.py</code>) | Daily tuning, run observation, and report reading | 12 tabs for state, queues, reports, backups, and connection tests |
+
+The wizard is a convenient starting point, while the panel offers a practical daily operations view.
+
+</details>
+
+---
+
+## 🐳 Deployment
+
+### Docker Deployment <sup>Recommended</sup>
+
+Docker Compose starts two services:
+
+- <code>arxiv-daily-researcher</code>: worker, cron, queue watcher, and research tasks
+- <code>config-panel</code>: Streamlit panel bound to <code>127.0.0.1:8503</code>
+
+#### Build from source
+
+~~~bash
+git clone https://github.com/yzr278892/arxiv-daily-researcher.git
+cd arxiv-daily-researcher
+cp .env.example .env
 docker compose up -d --build
 docker compose ps
-```
+~~~
 
-Open <http://127.0.0.1:8503> and finish configuration in the WebUI. The panel intentionally binds only to localhost. Put it behind an authenticated reverse proxy or VPN if remote access is required; do not expose it directly to the public Internet.
+#### Use GHCR hosted images
 
-For a first real check, set **Max papers per run** to `5` in **Daily Push → Daily research settings**, click **Run now**, and verify reports, SQLite, notifications, and logs. Then change it back to `0` (all pending work) or your preferred normal limit.
+v4.0 ships x86_64 and ARM64 images. Pin a production deployment to a version tag:
 
-### Local Python
-
-```bash
-python -m venv venv
-source venv/bin/activate                 # Windows: venv\Scripts\activate
-pip install -r requirements-core.txt
-pip install -r requirements-webui.txt    # when using the WebUI
-
-cp .env.example .env
-python main.py
-```
-
-Helper scripts are available in `scripts/`. For a production self-host, Compose is preferred because it keeps the worker, logs, trigger queue, and shared data paths consistent.
-
-## 🧭 Run model: scan to delivery
-
-### Daily research
-
-The normal workflow always looks back three days. There is no longer a “search last N days” setting; use the past-daily queue for earlier dates instead of making normal daily scans unbounded.
-
-1. **Prepare and serialize**: acquire the run lock, wait for exclusive legacy-import work, then load sources, keywords, and successful scan watermarks.
-2. **Fully scan and register**: arXiv fetches submitted and updated papers for every enabled category with full pagination. Every source writes a terminal receipt. Candidates are registered in SQLite before downstream work starts.
-3. **Resume the right work first**: retryable failures and incomplete stages take priority over ordinary candidates. A positive run limit only caps scoring/translation/analysis; unselected work remains queued.
-4. **Score and enrich**: papers are scored and translated; qualified papers with an available PDF can receive PDF extraction and SMART_LLM analysis.
-5. **Atomically deliver**: only a non-empty report allows the paper-delivery ledger, run completion, notification outbox, watermarks, and maintenance work to commit. A notification/WebDAV outage does not reopen delivered papers.
-6. **Maintain**: create the SQLite backup, perform configured incremental WebDAV work, retry pending notifications, and refresh usage/health data.
-
-```text
-full scan → SQLite candidate queue → score / translate / analyze → report on disk
-    ↑             │                     │                       │
-    └── recovery watermark └─ retryable work ─┴─ atomic delivery + outbox
-```
-
-### Report types
-
-| Report | Trigger | Time and ordering |
-| :-- | :-- | :-- |
-| Daily research | cron, WebUI **Run now**, or CLI | Current execution time; ordered by filename timestamp. |
-| Supplement report | Automatically after legacy import finds missing/incomplete work | Same format as daily reports, explicitly titled “Supplement”; capped by max papers per run. |
-| Past daily report | WebUI date range or `backfill_run` | One persistent job per target day; filename uses target date plus actual execution time. |
-
-HTML and Markdown outputs can be toggled independently. Daily reports live under `data/reports/daily_research/{html,markdown}/<source>/`; trend and keyword-trend reports use `trend_research/` and `keyword_trend/`.
-
-## 🖥️ WebUI and screenshots
-
-The WebUI has 12 tabs: Daily Push, Reports, Favorites & Search, Trend Analysis, Keywords, Data Sources, Scoring, Analytics, Notifications, Data Management, API, and Advanced Settings. Saving preserves unseen tabs’ disk values instead of overwriting them with defaults.
-
-### Daily Push: launch, state, queue, and past dates
-
-![Daily Push state panel and past-date queue](assets/webui_daily_push_v4.png)
-
-The state panel auto-refreshes only while work is active and shows phase heartbeats, queue counts, and a live log tail. A stop request preserves finished stages and leaves unfinished papers retryable. Past daily reports accept a start/end range rather than a single-date-only action.
-
-### Analytics: usage, LLM health, source health, diagnostics
-
-![Analytics with the LLM health panel](assets/webui_analytics_v4.png)
-
-LLM health sends no probe request and spends no extra tokens. It summarizes final outcomes from real work only: latest call, consecutive failures, recent success rate, last success time, and a redacted failure detail for CHEAP_LLM and SMART_LLM. The same page contains persistent token usage, source scan receipts, and run diagnostics.
-
-### Scoring policies
-
-![Localized scoring-policy selector and explanation](assets/webui_scoring_v4.png)
-
-Policy labels and explanations are localized. Saved configuration still uses stable IDs, so changing the UI language never changes scoring behavior.
-
-### Data management and legacy import
-
-![Database backup settings](assets/webui_data_management_v4.png)
-
-![Legacy history import entry point](assets/webui_history_import_v4.png)
-
-The screenshots were captured from the latest local WebUI with API keys, passwords, webhooks, emails, intranet addresses, and local paths excluded.
-
-## 📡 Sources, scoring, and analysis
-
-### Sources
-
-- **arXiv** is the default primary source. Its toggle reveals category selection, fetch timeout, and announcement-delay recovery settings. The UI contains a searchable list of 153 top-level arXiv categories.
-- **Extra sources** have their own toggle. When enabled, curated sources (PRL, PRA/PRB, Nature/Science, Hugging Face Papers, and others) plus form-validated OpenAlex journal definitions become available. Source definitions contain data only: pasted Python, import paths, and callbacks are rejected.
-- **OpenAlex** is called only for enabled extra journal sources. Its API key is optional and raises official quota; the obsolete contact-email setting has been removed.
-- **Semantic Scholar** is an optional TL;DR/citation enrichment service. Disabling it stops requests; it never replaces arXiv’s complete category scan.
-
-The API tab offers separate toggles, connection tests, and official-console links for OpenAlex, Semantic Scholar, and MinerU. Provider terms and quotas change, so consult their official pages before deployment. The application rate-limits, retries transient failures, and fails fast on authentication/parameter errors.
-
-### Three scoring policies
-
-| Policy | Qualification | Ranking and use |
-| :-- | :-- | :-- |
-| **Core Relevance V2** | Weighted primary-keyword relevance must pass its threshold and at least one primary keyword must be a strong match. Reference terms and author preference cannot qualify unrelated papers. | Recommended for new setups. Reference terms and expert authors can add ranking signals after qualification. |
-| **Weighted Keywords V1 (compatibility)** | Main/reference keyword relevance and author bonus accumulate against a dynamic threshold. | Good for continued use of older reports or reference-heavy configurations. |
-| **Learned Preference V1** | Uses V1 qualification. | Likes/dislikes and previous V1 passes build capped, dampened keyword/author preferences that refine ranking; explicit configured keywords always dominate. |
-
-Scoring keeps non-sensitive audit evidence. Report cards provide one-click 👍 / 👎 controls; marks are stored in SQLite, and clearing a mark is also historically recorded. Favorites & Search provides full-library search, a time-ordered favorites list, keyword statistics, and top authors. Long lists switch to native scrolling after ten rows.
-
-### LLMs, PDFs, and keywords
-
-- `CHEAP_LLM` handles screening, keywords, translation, and TLDR; `SMART_LLM` handles deep analysis and trend synthesis. Both use an OpenAI-compatible interface and can target cloud services, relays, or compatible local models.
-- Every LLM client shares a request pool, timeout, and exponential backoff. 429/5xx/timeout/empty response errors retry; 401/403/404/400-style fatal errors fail quickly and leave a safe detail.
-- **PyMuPDF** is the default local PDF parser. **MinerU** settings appear only when MinerU is selected; an unavailable MinerU call falls back to PyMuPDF.
-- Reference-PDF keyword extraction is separately switchable. When disabled, extracted terms are hidden and do not affect scoring. Large keyword displays use fixed-height native scrolling.
-- A separate midnight keyword-maintenance job batches semantic normalization and optional keyword-trend reports. Its failure does not block daily delivery and is retried on a later run.
-
-### Trend research
-
-Trend research is separate from daily delivery. It searches a keyword/date/category range, creates per-paper TLDRs, then uses SMART_LLM for a whole-set synthesis of themes, evolution, researchers, gaps, and methods. It supports a custom analysis prompt, independent HTML/Markdown outputs, and success/failure notifications.
-
-## 📜 Legacy import, supplement reports, and past daily reports
-
-### The v3.2 legacy importer is one complete workflow
-
-Open **Data Management → Database Backup → Read Legacy History**. It reads old JSON history and HTML reports only when explicitly requested; all normal operations use SQLite.
-
-1. **Idle wait and exclusion**: the trigger is queued. If daily research, trend research, keyword maintenance, or a related job is active, import waits rather than writing concurrently.
-2. **Parse and merge**: v3.2 JSON and every HTML card restore metadata, scores, translations, and deep analysis. The newest duplicate analysis wins; a complete v4 record is never downgraded by older data.
-3. **Register missing work**: missing cards/translations/deep analyses and temporarily unfetchable metadata go to a supplement backlog rather than being marked complete. A later import retries them.
-4. **Scan the covered period**: after import, arXiv is scanned in chunks across the dates represented by old history. Missing papers are added to the same supplement backlog.
-5. **Automatically make supplement reports**: import then starts the existing daily pipeline for the backlog in batches controlled by **Max papers per run**. Delivered items resolve; the rest remains persistent.
-
-Legacy import, supplement work, and past-date queues are major tasks. They produce one consolidated result per platform. If the overall run completes with delayed/missing/failed substeps, the notification contains a short concrete issue rather than a full raw log.
-
-### Past daily queue
-
-Select a historical date range in **Daily Push → Past Daily Reports** and press **Start**. Every date creates a durable `backfill_queue` row and the worker claims them oldest-first:
-
-- Each day fetches that date’s papers and runs the complete scoring, translation, optional PDF analysis, and reporting workflow.
-- If a day exceeds the run cap, that same day resumes automatically in subsequent batches. A failed day records its error but does not discard later dates.
-- An interruption or container restart returns unfinished work to pending instead of marking the queue successful.
-
-## 🔔 Notifications, backups, and observability
-
-### Multi-platform notifications
-
-Email, WeCom, DingTalk, Telegram, Slack, and generic webhooks are supported. Templates live in `configs/templates/`; delivery requires the global switch, the channel switch, and valid channel credentials.
-
-Daily research, trend research, legacy import with automatic supplement work, manual supplement runs, past-date range queues, and new GitHub Release detection all emit an outcome notification. SQLite outbox rows retain a temporarily failed delivery for retry. Notifications include the failed stage or issue summary, never secrets or full stack traces.
-
-Automatic update checking **only checks and notifies** about GitHub Releases. It never pulls code, replaces images, or restarts the service.
-
-### SQLite backup and WebDAV
-
-| Item | Behavior |
-| :-- | :-- |
-| Local backup | A consistent SQLite gzip snapshot is made after each daily run. All copies from today are retained; for yesterday and older dates, only the newest copy per day remains. |
-| Retention | Set any non-negative integer in WebUI. Default is 7 days; `0` disables age expiry. |
-| WebDAV | Incremental: upload only when database content changed; this project never deletes remote copies. Config, SQLite history, keywords, and reports can be selected independently. |
-| Restore | Data Management can export zip or import zip / gz / db. Import validates the archive and archives the previous database; stop active writers first. |
-
-### Operational safety and observability
-
-- Run locks, a shared idle gate, and the WebUI trigger watcher prevent conflicting jobs from writing SQLite simultaneously.
-- Source receipts are persisted and watermarks advance only after complete delivery. Diagnostics show completion rate, qualification rate, notification backlog, and the latest scan.
-- Final LLM outcomes appear at **Analytics → LLM Health** with redacted errors. No extra model request is made just to populate the panel.
-- The log viewer has a fixed 800px height and native overflow scrolling. Other long lists have the same bounded behavior.
-
-## 🐳 Deployment, upgrades, and CLI
-
-### Compose operations
-
-```bash
-# Service state and health
-docker compose ps
-
-# Worker / WebUI logs
-docker compose logs -f arxiv-daily-researcher
-docker compose logs -f config-panel
-
-# After a code update, rebuild and force the newest local images
-git pull
-docker compose build
-docker compose up -d --force-recreate
-docker compose ps
-```
-
-The worker uses `network_mode: host`, so on Linux/NAS it can usually reach a host-local compatible LLM at `http://127.0.0.1:<port>/v1`. The WebUI and worker must share `data/`, `logs/`, `configs/`, and `.env`; do not point one service at a different data root.
-
-### GHCR hosted images
-
-Formal releases publish both x86_64 and ARM64 (NAS) images to GitHub Container Registry. Pin a production deployment to a version tag; `latest` is not an unattended-update mechanism:
-
-```bash
+~~~bash
 export ADR_WORKER_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher:4.0
 export ADR_WEBUI_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher-config-panel:4.0
 
 docker compose pull
 docker compose up -d --no-build --force-recreate
 docker compose ps
-```
+~~~
 
-Without these variables, Compose keeps the original source-build behavior. Every `v<version>` Git tag runs the complete regression suite before publishing both multi-architecture images; the tag must match `VERSION`. Before upgrading, read the Release/CHANGELOG, back up SQLite, and explicitly select a validated version tag.
+<code>latest</code> tracks the newest formal release. Fixed version tags provide a clear upgrade, rollback, and validation path. Each <code>v&lt;version&gt;</code> Git tag passes the complete regression suite before AMD64/ARM64 images are published.
 
-### Common CLI commands
+#### Common commands
 
-```bash
-# Default daily research
-python main.py
+~~~bash
+# Service state and health
+docker compose ps
 
-# Trend research
-python main.py --mode trend_research \
+# Worker or WebUI logs
+docker compose logs -f arxiv-daily-researcher
+docker compose logs -f config-panel
+
+# Rebuild local source images and recreate containers
+git pull
+docker compose build
+docker compose up -d --force-recreate
+
+# Run trend research inside the worker
+docker compose exec arxiv-daily-researcher python main.py --mode trend_research \
   --keywords "quantum error correction" \
-  --date-from 2026-01-01 --date-to 2026-03-31 \
+  --date-from 2026-01-01 \
   --categories quant-ph
 
-# Import v3.2 history (waits for idle work itself)
-python main.py --mode legacy_import
+# Stop services
+docker compose down
+~~~
 
-# Process an existing supplement backlog manually
-python main.py --mode supplement_run
+#### WebUI task triggering
 
-# Queue and replay a past date range
-python main.py --mode backfill_run \
-  --date-from 2026-01-01 --date-to 2026-01-07
-```
-
-Inside Docker, replace `python main.py ...` with:
-
-```bash
-docker compose exec arxiv-daily-researcher python main.py --mode daily_research
-```
-
-Set `daily_research.run_time` in `configs/config.json` or the **Daily Push** tab. After changing it, use the sidebar **Restart Worker** control or `docker compose restart arxiv-daily-researcher` so cron is rebuilt.
-
-## ❓ Complex troubleshooting
+The WebUI writes task requests through shared volumes, and the worker watches the trigger queue before launching the requested mode. Status, phase heartbeats, stop requests, and logs use the shared runtime directory, so the panel can present task progress, queues, and results.
 
 <details>
-<summary><b>After moving a NAS, changing DHCP, or restarting Tailscale, the container cannot resolve <code>export.arxiv.org</code>. Is this an application bug?</b></summary>
+<summary><b>Docker runtime settings</b></summary>
 
-Usually no. `NameResolutionError` / `Temporary failure in name resolution` means the host, Docker, or Tailscale DNS state did not refresh. Application retries cannot repair a container with no usable resolver. Check both the host and worker:
+| Setting | Default | Description |
+| :------ | :------ | :---------- |
+| <code>TZ</code> | <code>Asia/Shanghai</code> | Container timezone |
+| <code>daily_research.run_time</code> | <code>12:00</code> | Daily research time, configured in WebUI or <code>configs/config.json</code> |
+| <code>RUN_ON_STARTUP</code> | <code>false</code> | Run daily research once when the container starts |
+| <code>MODE</code> | <code>cron</code> | <code>cron</code> for the resident scheduler; <code>run-once</code> for a single run |
+| <code>SETUP_WIZARD</code> | <code>auto</code> | Check and start the setup wizard during first deployment |
+| <code>ADR_WORKER_IMAGE</code> | local worker image | Select a GHCR worker image |
+| <code>ADR_WEBUI_IMAGE</code> | local WebUI image | Select a GHCR WebUI image |
 
-```bash
+</details>
+
+<details>
+<summary><b>Using a local OpenAI-compatible LLM</b></summary>
+
+The worker uses the host network, so a local Linux/NAS service can use its loopback address:
+
+~~~env
+CHEAP_LLM__API_KEY=ollama
+CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
+CHEAP_LLM__MODEL_NAME=qwen2.5:7b
+~~~
+
+The WebUI uses a bridged network. Configure reverse proxies, VPNs, and local service addresses to match the deployment topology.
+
+</details>
+
+---
+
+### GitHub Actions Cloud Runs
+
+Useful for temporary cloud execution. The repository includes:
+
+- <code>daily-run.yml</code>: daily research, with the schedule disabled by default
+- <code>trend-research.yml</code>: manually started trend research
+- <code>test.yml</code>: complete regression suite for main and pull requests
+- <code>publish-containers.yml</code>: tag validation, test, and GHCR publication
+
+GitHub Actions needs an accessible OpenAI-compatible LLM service and uses Actions cache for SQLite state.
+
+#### Configuration
+
+1. Fork the repository
+2. Open **Settings → Secrets and variables → Actions**
+3. Configure the required secrets
+4. Enable the daily schedule after reviewing LLM, notification, and cache settings
+
+| Secret | Required | Description |
+| :----- | :------: | :---------- |
+| <code>CHEAP_LLM_API_KEY</code> | ✅ | API key for daily scoring, translation, and TLDR |
+| <code>CHEAP_LLM_BASE_URL</code> | ✅ | CHEAP_LLM OpenAI-compatible endpoint |
+| <code>CHEAP_LLM_MODEL_NAME</code> | ✅ | CHEAP_LLM model name |
+| <code>SMART_LLM_API_KEY</code> | ✅ | API key for deep analysis and trend synthesis |
+| <code>SMART_LLM_BASE_URL</code> | ✅ | SMART_LLM OpenAI-compatible endpoint |
+| <code>SMART_LLM_MODEL_NAME</code> | ✅ | SMART_LLM model name |
+| Notification secrets | Optional | SMTP, Telegram, webhooks, and related credentials |
+| Third-party source keys | Optional | OpenAlex, Semantic Scholar, and MinerU |
+
+The <code>schedule:</code> block in <code>daily-run.yml</code> is provided as comments. Enable it after configuration. Daily research always scans the most recent three days, while earlier dates belong in the past-daily-report queue.
+
+---
+
+### Local Scheduled Runs (System Cron)
+
+System Cron can also start daily research:
+
+~~~bash
+crontab -e
+0 12 * * * cd /path/to/arxiv-daily-researcher && /path/to/venv/bin/python main.py >> /path/to/arxiv-daily-researcher/logs/cron.log 2>&1
+~~~
+
+Use one project directory for the worker, WebUI, SQLite database, reports, and logs.
+
+---
+
+## 📖 Feature Details
+
+### 🔄 Two Primary Research Modes
+
+| Dimension | <code>daily_research</code> (default) | <code>trend_research</code> |
+| :-------- | :------------------------------------- | :-------------------------- |
+| Purpose | Track recent papers and revisions | Research a focused topic |
+| Sources | ArXiv and enabled additional sources | ArXiv |
+| Time range | Fixed most-recent 3 days with watermark recovery | Any date range |
+| Selection | Scoring policy, queue priority, optional PDF analysis | Keyword search followed by TLDRs |
+| Core analysis | Scores, translated summaries, keywords, and PDF deep analysis | Topic, time evolution, researchers, gaps, and method synthesis |
+| Triggers | Cron / Docker / Actions / WebUI / CLI | CLI / WebUI / Actions |
+| Output | <code>data/reports/daily_research/</code> | <code>data/reports/trend_research/</code> |
+
+### 📜 Historical Maintenance Tasks
+
+| Mode | Entry and coordination | Result |
+| :--- | :--------------------- | :----- |
+| <code>legacy_import</code> | Data Management → Read Legacy History; waits for related work to become idle | Merges v3.2 JSON/HTML, records missing data, scans omissions, and starts supplements |
+| <code>supplement_run</code> | Automatically after import or manually through CLI | Processes supplement backlog and produces supplement reports |
+| <code>backfill_run</code> | Daily Push date range or CLI date range | Queues one complete daily workflow per past date |
+
+### 📅 Daily Research Pipeline
+
+~~~text
+1. Load configuration, locks, activity gate, and the latest successful scan watermark
+2. Scan ArXiv first submissions and last updates, then record source scan receipts
+3. Register candidates in SQLite and prioritize retryable stages and supplement backlog
+4. Score, translate, extract keywords, and validate content within the current run cap
+5. Parse PDFs and perform SMART_LLM deep analysis for qualified papers
+6. Write HTML and Markdown reports
+7. Commit paper delivery, run result, watermark, and notification outbox rows in one SQLite transaction
+8. Run backups, incremental WebDAV sync, keyword maintenance, and notification redelivery
+~~~
+
+<code>max_papers_per_run</code> limits scoring, translation, and analysis work. Full scanning and candidate registration remain separate. <code>0</code> processes the full available queue.
+
+### 🔬 Trend Research Pipeline
+
+~~~text
+1. Search ArXiv by keywords, date range, and categories
+2. Generate a TLDR for each paper and retain source/date information
+3. Use SMART_LLM to synthesize themes, time evolution, researchers, gaps, and methods
+4. Write Markdown, HTML, and metadata.json
+5. Record the run and send a trend-research outcome notification
+~~~
+
+### 🎯 Scoring Policies and Qualification
+
+| Policy | Qualification | Ranking and use case |
+| :----- | :------------ | :------------------- |
+| **Core Relevance V2** | Weighted primary-keyword relevance reaches the threshold and at least one primary keyword strongly matches | Recommended for new configurations; reference keywords, experts, and favorites add ranking signals |
+| **Weighted Keywords V1 (compatible)** | Keyword relevance, reference terms, and author bonus are aggregated and compared with the threshold | Suitable for existing V1 configurations and reports |
+| **Learned Preference V1** | Uses V1 qualification | Converts favorites, dismissals, and previous V1 passes into bounded, decayed ranking preferences |
+
+The V1 threshold is configured as:
+
+~~~text
+pass threshold = base_score + weight_coefficient × Σ(keyword weights)
+~~~
+
+V2 thresholds, strong-match conditions, and ranking signals are configured in **Scoring**. Scoring results retain non-sensitive audit evidence for review in reports and Analytics.
+
+### 📡 Sources and Scan Receipts
+
+- **ArXiv**: primary source, complete category pagination for first submissions and last updates
+- **Additional sources**: built-in and declarative definitions behind an independent switch
+- **OpenAlex**: additional journal data; an API key can use the provider's official quota
+- **Semantic Scholar**: optional TLDR, citation, and related enrichment
+- **Source health**: every scan produces a terminal receipt; Analytics shows recent status, success rate, candidate count, and safe error summaries
+
+Watermarks advance after a complete and safe delivery. Transient network conditions are handled through retries, backoff, and later recovery windows.
+
+### 🔍 PDF Parsing and Content Analysis
+
+| Mode | Best for | Configuration |
+| :--- | :------- | :------------ |
+| <code>pymupdf</code> | Local execution, standard PDFs, simple deployment | Advanced → PDF parser |
+| <code>mineru</code> | Complex layouts and structured-text requirements | API → MinerU; selecting it expands its settings |
+
+The API page offers MinerU connection tests and an official console link. Parsing-service issues retain a stage summary while the available local parser path continues processing.
+
+### 📈 Keyword Trends and Favorites
+
+The keyword module:
+
+1. saves keywords extracted during scoring
+2. performs batch normalization at midnight
+3. generates keyword-trend reports on the configured schedule
+4. aggregates favorite keywords and Top authors in Favorites & Search
+
+Reference-PDF keyword extraction has its own switch. Disabled extraction stays outside scoring, and extracted keyword lists use a fixed-height scrolling container.
+
+### 🔒 Mutual Exclusion and Recovery
+
+| Scenario | Coordination |
+| :------- | :----------- |
+| Daily research | <code>daily_research.lock</code> and the daily-workflow gate |
+| Trend research | A parameter-hashed trend-research lock |
+| Legacy import | Exclusive legacy activity gate that waits for daily, trend, and maintenance tasks |
+| Supplement and past daily reports | Shared daily-workflow gate for the SQLite queue and delivery ledger |
+
+Kernel file locks are authoritative. PID and time data serve diagnostics. The WebUI presents active tasks, phase heartbeats, queues, and stop requests.
+
+### 📄 Report System
+
+#### Daily research, supplement reports, and past daily reports
+
+Paths:
+
+- <code>data/reports/daily_research/markdown/&lt;source&gt;/</code>
+- <code>data/reports/daily_research/html/&lt;source&gt;/</code>
+
+Reports include run summaries, paper lists, scores, translations, deep analysis, keywords, and token statistics. Supplement reports carry a supplement label. Past daily reports retain the target date and the actual runtime in their filenames for stable same-day ordering.
+
+#### Trend research reports
+
+Paths:
+
+- <code>data/reports/trend_research/markdown/&lt;keyword_slug&gt;/</code>
+- <code>data/reports/trend_research/html/&lt;keyword_slug&gt;/</code>
+
+Each run also creates <code>metadata.json</code> with research parameters and paper metadata.
+
+#### Keyword trend reports
+
+Paths:
+
+- <code>data/reports/keyword_trend/markdown/</code>
+- <code>data/reports/keyword_trend/html/</code>
+
+### 🔔 Notification System
+
+Supported channels: email, WeCom, DingTalk, Telegram, Slack, and generic webhooks.
+
+Notification configuration has three layers:
+
+1. global notification switch
+2. channel-specific switch and credentials
+3. outcome, failure-summary, attachment, and update-notification settings
+
+Large workflows send one consolidated outcome notification. Partial completion, delays, and failures include the affected stage and a concise summary. The outbox retains pending deliveries for later retry.
+
+### 🗄️ SQLite Backups and WebDAV
+
+| Item | Behavior |
+| :--- | :------- |
+| Local SQLite backup | A consistent gzip snapshot after each daily run; all copies from today and the newest copy per older day |
+| Retention | Any non-negative number in WebUI; default 7 days, with <code>0</code> for permanent retention |
+| WebDAV archive | Incremental upload when database content changes; remote snapshots remain available |
+| Sync scope | Configuration, SQLite, keywords, and reports can be selected independently |
+| Restore | Data Management imports/exports zip, gz, and db archives after validation |
+
+Stop SQLite-writing tasks and create a current export before restoring a historical archive.
+
+---
+
+## 📁 Project Structure
+
+~~~text
+arxiv-daily-researcher/
+├── main.py                       # CLI entry point and mode dispatch
+├── VERSION                       # Release version
+├── .env.example                  # Environment-variable template
+├── requirements-core.txt         # worker / CLI dependencies
+├── requirements-webui.txt        # Streamlit WebUI dependencies
+├── docker-compose.yml            # worker + config-panel composition
+├── docker/
+│   ├── Dockerfile                # worker / webui multi-stage images
+│   └── entrypoint.sh             # cron, trigger watcher, and worker startup
+├── configs/
+│   ├── config.json               # JSONC main configuration
+│   └── templates/                # report, email, and notification templates
+├── src/
+│   ├── modes/                    # daily / trend / legacy / supplement / backfill
+│   ├── agents/                   # scoring, analysis, keyword, and trend agents
+│   ├── sources/                  # ArXiv, OpenAlex, HF Papers, and other sources
+│   ├── report/                   # daily, trend, and keyword-trend reports
+│   ├── notifications/            # multi-channel delivery and SQLite outbox
+│   ├── keyword_tracker/          # keyword normalization and trends
+│   ├── utils/                    # SQLite, queues, locks, backups, sync, health checks
+│   └── webui/                    # Streamlit panel and i18n
+├── .github/workflows/            # research, test, and image-publication workflows
+├── data/                         # SQLite, reports, queues, backups (runtime generated)
+├── logs/                         # system and per-task logs (runtime generated)
+├── assets/                       # README screenshots
+└── tests/                        # regression tests
+~~~
+
+---
+
+## ❓ FAQ
+
+<details>
+<summary><b>1. How should I handle empty LLM responses, timeouts, or papers in the retry queue?</b></summary>
+
+Open **Analytics → LLM Health** to review recent final outcomes, consecutive failures, success rate, last success time, and redacted error summaries.
+
+- 401, 403, 404, and 400: verify API key, base URL, model name, and gateway compatibility
+- 429, 5xx, timeouts, and empty responses: the shared retry/backoff policy retains incomplete stages
+- After the provider or network recovers: run daily research or a supplement run to reuse completed stages
+
+SQLite queues and the delivery ledger are maintained by the application. Use the WebUI or CLI to continue recovery work.
+</details>
+
+<details>
+<summary><b>2. How do I diagnose Docker DNS failures after a network change?</b></summary>
+
+<code>NameResolutionError</code> and <code>Temporary failure in name resolution</code> usually point to host, Docker, or VPN DNS state. Check the host and worker in order:
+
+~~~bash
 getent hosts export.arxiv.org
 docker exec arxiv-daily-researcher getent hosts export.arxiv.org
 docker exec arxiv-daily-researcher cat /etc/resolv.conf
-```
+~~~
 
-Repair upstream DNS on the NAS first, then recreate the services:
+Restore the host upstream DNS, then recreate containers:
 
-```bash
+~~~bash
 docker compose up -d --force-recreate
-```
+~~~
 
-If DHCP DNS is persistently unreliable, create a local (uncommitted) `docker-compose.override.yml` with resolvers appropriate for your network. `100.100.100.100` is only appropriate when Tailscale MagicDNS is enabled; it is not a universal public DNS.
+For a fixed DNS policy, create a local <code>docker-compose.override.yml</code> and select resolvers suitable for the deployment network.
 </details>
 
 <details>
-<summary><b>LLM Health reports “no usable body,” a run partially completes, or the supplement backlog remains. How should I diagnose it?</b></summary>
+<summary><b>3. Why can legacy-history import wait in the queue?</b></summary>
 
-Open **Analytics → LLM Health** first. It shows real final outcomes and redacted detail. For 401/403/404/400, check model name, base URL, API key, and gateway compatibility. For 429, 5xx, timeout, DNS, or empty-body cases, the shared retry policy was already applied and unfinished papers remain retryable in SQLite. Do not manually mark them complete or delete database rows. Fix the provider/network and rerun daily or supplement work; successful earlier stages are reused.
+Legacy import takes exclusive SQLite access. During daily research, trend research, keyword maintenance, supplement runs, or past daily reports, the request stays in the trigger queue and the worker claims it after related work becomes idle.
+
+Check **Daily Push → Status Panel / Run Logs** and <code>legacy_import_*.log</code>. One import request at a time is sufficient.
 </details>
 
 <details>
-<summary><b>I clicked “Read Legacy History” but it did not start immediately. Is the button broken?</b></summary>
+<summary><b>4. How does legacy import handle repeated analyses, missing data, and missed papers?</b></summary>
 
-Not necessarily. Import is exclusive work: if daily/trend/keyword maintenance or another related job holds the activity gate, WebUI writes a trigger and the worker waits until idle. Check **Daily Push → Status Panel / Run Logs** and `legacy_import_*.log`. Do not launch a second CLI import to make it faster; both requests wait for the same gate.
+Import merges records by stable paper identity and selects the newest report analysis. Missing cards, translations, deep analysis, and papers found during range scans enter <code>supplement_backlog</code>. After import, the supplement workflow processes the backlog within the run cap; completed entries leave the backlog and remaining entries continue in later batches.
+
+Complete v4 records have a higher completeness priority, so their existing content remains available during import.
 </details>
 
 <details>
-<summary><b>How do duplicate replacement, missing-data retry, and automatic supplement reports remain correct during legacy import?</b></summary>
+<summary><b>5. How does a large past-daily date range resume after interruption?</b></summary>
 
-Import merges stable paper identities and selects the newest duplicate analysis. Older v3.2 data cannot downgrade a complete v4 row. Missing cards/translations/analysis and range-scan omissions enter `supplement_backlog`; they are never labeled delivered. Import automatically starts the supplement pipeline in capped batches. Failures and cap-deferred rows persist for later import/supplement work. Back up first and avoid hand-editing SQLite tables.
+Each target date becomes a persistent <code>backfill_queue</code> row. The worker claims dates in order, and a run cap continues remaining papers for the same date in a later batch. After a container restart, incomplete dates return to pending status.
+
+Outcome notifications summarize completed dates, deferred items, and failure summaries for the next run.
 </details>
 
 <details>
-<summary><b>Will a large past-date range lose remaining dates after a restart or a failure?</b></summary>
+<summary><b>6. How should SQLite backups, local snapshots, and WebDAV archives be restored?</b></summary>
 
-No. Each date is a durable `backfill_queue` row claimed in date order. An interruption returns the active date to pending, and a per-run cap automatically continues the same day. A failed date records its error and later dates continue; the result notification summarizes failed days and the first error. Start the queue again to recover eligible work.
+Today’s local snapshots provide recent-run recovery, while older dates retain their newest copy. WebDAV preserves archives uploaded after data changes and supports cross-device recovery.
+
+Recommended steps:
+
+1. stop daily, import, and supplement tasks
+2. export a current zip from Data Management as a protection copy
+3. import the target zip, gz, or db archive and review validation results
+4. restore reports, keywords, and configuration as required
+5. restart the worker and inspect Analytics and queue state
 </details>
 
 <details>
-<summary><b>There are many SQLite backups and different WebDAV copies. What is the safe restore procedure?</b></summary>
+<summary><b>7. How can Docker connect to local Ollama, vLLM, or LocalAI?</b></summary>
 
-All snapshots from today are intentionally retained so one bad write cannot replace the only same-day recovery point. Older days retain only their newest snapshot before age retention is applied. Stop all active writers, create a current zip export, then import the target zip/gz/db. WebDAV is incremental and never pruned, so decide whether configuration, SQLite, reports, and keyword data should be restored together. Never overwrite a live database with an untrusted file.
+The worker uses the host network, so a local Linux/NAS OpenAI-compatible service can use:
+
+~~~env
+CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
+~~~
+
+Align model-service listening addresses, reverse-proxy rules, and firewall policy with the deployment topology. The WebUI and worker have different network modes, so verify external API addresses with **API → Test Connection**.
 </details>
 
 <details>
-<summary><b>Why does an update notification not automatically update the container?</b></summary>
+<summary><b>8. How can I tune Core Relevance V2 when the pass rate is low?</b></summary>
 
-That is intentional. Update checking only compares GitHub Releases and sends a notification; it never pulls code, rebuilds images, or restarts active research unattended. Read release notes, back up SQLite, and use the controlled Compose upgrade commands above. When GHCR is introduced, pin a tested version tag instead of blindly following `latest`.
+V2 requires the weighted average relevance of primary keywords and at least one strong primary-keyword match. Add clear, identifiable primary keywords in **Keywords**, then tune the core-relevance and strong-match thresholds in **Scoring**.
+
+Reference keywords, expert authors, and favorites rank qualified papers. Primary keywords express the research topic.
 </details>
 
 <details>
-<summary><b>Core Relevance V2 passes almost nothing, or reference terms/expert authors seem to surface irrelevant work. How should I interpret it?</b></summary>
+<summary><b>9. How do GitHub Actions preserve SQLite state and avoid conflicting runs?</b></summary>
 
-V2 qualification requires weighted primary-keyword content relevance plus at least one strong primary match. Reference terms and expert authors cannot make an unrelated paper qualify; they only help rank papers that already qualified. Ensure the Keywords tab contains genuine primary terms, then tune core relevance and strong-match thresholds in Scoring. If your workflow is reference-term-heavy and primary terms are not curated yet, use the compatible Weighted Keywords V1 policy temporarily.
+<code>daily-run.yml</code> and <code>trend-research.yml</code> share an Actions-cache prefix for <code>data/daily_research/</code> and keyword data, and use one concurrency group to serialize execution. Each cloud run saves a new state snapshot when it finishes.
+
+Docker with persistent volumes is a strong fit for continuous operation. Actions works well for temporary cloud runs, validation, and manual trend research.
 </details>
 
-## 📁 Project layout
+<details>
+<summary><b>10. How should I upgrade after an update notification?</b></summary>
 
-```text
-arxiv-daily-researcher/
-├── main.py                       # CLI dispatch
-├── docker-compose.yml            # worker + config-panel
-├── docker/Dockerfile             # multi-stage worker / webui images
-├── configs/config.json           # JSONC configuration and scheduling
-├── configs/templates/            # report, email, and notification templates
-├── src/
-│   ├── modes/                    # daily / trend / legacy / backfill workflows
-│   ├── agents/                   # LLM scoring, keyword, and trend agents
-│   ├── sources/                  # arXiv, OpenAlex, HF Papers, etc.
-│   ├── report/                   # daily, trend, keyword-trend reports
-│   ├── notifications/            # multi-channel notification outbox
-│   ├── keyword_tracker/          # normalization and trend tracking
-│   ├── utils/                    # SQLite, queues, locks, backup, sync, health
-│   └── webui/                    # Streamlit panel and i18n
-├── data/                         # SQLite, reports, queues, backups (runtime)
-├── logs/                         # system and per-run logs (runtime)
-├── assets/                       # README screenshots
-└── tests/                        # regression and workflow tests
-```
+Update checks compare GitHub Releases and send a notification through enabled channels. Read the Release and CHANGELOG, export SQLite, then pin a new GHCR version or pull source and rebuild.
 
-## 🧪 Verification, contribution, and license
-
-```bash
-venv/bin/pytest -q
-docker compose build
-docker compose up -d --force-recreate
+~~~bash
+docker compose pull
+docker compose up -d --no-build --force-recreate
 docker compose ps
-```
+~~~
 
-Please report reproducible behavior, a redacted error summary, or feature ideas through [Issues](https://github.com/yzr278892/arxiv-daily-researcher/issues). Contributions must preserve the AGPL-3.0 copyleft terms; see [LICENSE](LICENSE).
+After the upgrade, inspect Analytics, queues, and recent logs to confirm compatibility with the current configuration.
+</details>
 
-See [CHANGELOG.md](CHANGELOG.md) for complete release history.
+---
+
+## 📜 License
+
+This project is licensed under [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html).
+
+| Term | Description |
+| :--- | :---------- |
+| ✅ Use | Free to use, modify, and distribute |
+| ✅ Commercial | Commercial use is allowed |
+| 📋 Source disclosure | Modified versions must provide source under the same license |
+| 🌐 Network use | Providing the service over a network also requires source disclosure |
+| 📝 Attribution | Preserve original copyright and license notices |
+
+---
+
+## 💬 Community and Feedback
+
+Contributions are welcome:
+
+- **🐛 Report an issue**: [GitHub Issues](https://github.com/yzr278892/arxiv-daily-researcher/issues) — include reproduction steps, version, redacted logs, and deployment method
+- **🔀 Contribute code**: Fork the repository and open a Pull Request
+- **⭐ Star**: If the project helps your research, a Star is appreciated
+
+---
+
+## 🤝 API Use
+
+Configuration and runtime behavior help deployments follow external-service requirements:
+
+| API | Project-side behavior |
+| :-- | :-------------------- |
+| **ArXiv** | Category pagination with backoff, Retry-After handling, and scan receipts |
+| **OpenAlex** | Called for enabled additional sources; supports an optional API key |
+| **Semantic Scholar** | Optional enrichment source with API-key support, rate limits, and safe error summaries |
+| **MinerU** | API page includes connection testing and an official console link; usage follows account quotas |
+
+Review each provider’s current policy, quota, and account requirements before deployment. External calls use shared timeout, retry, and proxy-scope settings.
+
+---
+
+## 🙏 Acknowledgments
+
+- [ArXiv](https://arxiv.org/), [OpenAlex](https://openalex.org/), and [Semantic Scholar](https://www.semanticscholar.org/) for academic-data services
+- [MinerU](https://mineru.net/) for PDF parsing services
+- The open-source communities behind Python, Docker, Streamlit, and related tools
+
+---
+
+## 📝 Changelog
+
+See **[CHANGELOG.md](CHANGELOG.md)** for the complete version history.
+
+### Latest Version Summary
+
+<table>
+<tr><th>Version</th><th>Date</th><th>Type</th><th>Highlights</th></tr>
+<tr><td><b>v4.0</b></td><td>2026-08-25</td><td>🚀 Major release</td><td>SQLite daily-history system, durable candidate and retry queues, complete scan receipts, Core Relevance V2, favorites, legacy import with automatic supplement reports, past-daily date-range queues, SQLite backups with incremental WebDAV archive, LLM health, workflow notifications, GHCR AMD64/ARM64 images, and release regression.</td></tr>
+<tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ Enhancements + fixes</td><td>Network proxy, WebDAV data sync, configuration export, Docker update notifications, Daily Push tab, Markdown/HTML output switches, and trend-analysis output settings.</td></tr>
+<tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ Enhancements + fixes</td><td>Run management, log viewer, Trend Analysis tab, report-view improvements, ArXiv timeout guard, and run-lock improvements.</td></tr>
+<tr><td><b>v3.0</b></td><td>2026-03-09</td><td>✨ Major release</td><td>Trend research, token tracking, setup wizard, concurrent locks, per-run logs, Streamlit configuration panel, and keyword-trend reports.</td></tr>
+</table>
+
+[View the complete history →](CHANGELOG.md)
+
+---
 
 <div align="center">
 
-If this project helps your research, a Star is appreciated ⭐
+If this project helps your research, consider giving it a **Star** ⭐
 
 [![Star History Chart](https://api.star-history.com/svg?repos=yzr278892/arxiv-daily-researcher&type=Date)](https://star-history.com/#/yzr278892/arxiv-daily-researcher&Date)
+
+[![Issues](https://img.shields.io/github/issues/yzr278892/arxiv-daily-researcher?style=flat-square&label=Issues)](https://github.com/yzr278892/arxiv-daily-researcher/issues)
 
 </div>
