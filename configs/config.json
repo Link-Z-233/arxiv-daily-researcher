@@ -10,6 +10,8 @@
     // Optional sources are data-only declarations. Disabled definitions are
     // retained but not fetched; no Python/import path is ever executed.
     "extra_sources": {
+      // 本地保留当天全部副本；昨天及更早每天仅留最新一份，再按保留期清理；0 表示保留每日归档
+      // WebDAV 为增量备份：仅当数据库内容变化时上传，远端永不删除
       "enabled": true,
       "definitions": []
     },
@@ -204,6 +206,13 @@
     "requests_per_minute": 30,
     "log_slow_wait_seconds": 5.0
   },
+  "llm": {
+    "timeout_seconds": 300.0,
+    "sdk_max_retries": 1,
+    "retry_max_attempts": 5,
+    "retry_min_wait": 5,
+    "retry_max_wait": 120
+  },
   "daily_research": {
     "enable_deep_analysis": true,
     // 0 = process every pending paper; positive values are useful for tests.
@@ -283,8 +292,6 @@
   // Database Backup Configuration
   // ==================================================
   "backup": {
-    // 本地为全量备份，按文件时间戳自动删除超过保留期的副本；0 表示永久保留
-    // WebDAV 为增量备份：仅当数据库内容变化时上传，远端永不删除
     "enabled": true,
     "local_retention_days": 7
   },

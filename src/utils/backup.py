@@ -3,8 +3,10 @@
 The daily-research database is the sole durable authority for the pending
 queue, reader preferences and usage statistics. A backup takes a consistent
 snapshot through SQLite's backup API (never a raw copy of a live WAL file)
-and compresses it before any network transfer. Local copies rotate strictly
-by the configured age window (seven days by default; zero keeps them forever).
+and compresses it before any network transfer. Local copies keep every
+snapshot made today, then compact each earlier calendar day to its newest
+snapshot before applying the configured age window (seven days by default;
+zero keeps the compacted daily history forever).
 The WebDAV mirror is
 incremental: an archive is uploaded only when the database content actually
 changed since the last upload, and remote copies are never deleted, so the
@@ -21,7 +23,7 @@ import re
 import sqlite3
 import tempfile
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,7 +33,7 @@ LOCAL_BACKUP_RETENTION_DAYS = 7
 MIN_LOCAL_BACKUP_RETENTION_DAYS = 0
 _GZIP_CHUNK_BYTES = 1024 * 1024
 _HASH_CHUNK_BYTES = 1024 * 1024
-_BACKUP_NAME_RE = re.compile(r"^daily_research_(\d{8}_\d{6})(?:_\d+)?\.db\.gz$")
+_BACKUP_NAME_RE = re.compile(r"^daily_research_(\d{8}_\d{6})(?:_(\d+))?\.db\.gz$")
 _UPLOAD_STATE_FILENAME = "webdav_upload_state.json"
 
 _backup_lock = threading.Lock()
@@ -40,9 +42,10 @@ _backup_lock = threading.Lock()
 def validate_local_backup_retention_days(value: Any) -> int:
     """Return a safe local-backup retention window in whole days.
 
-    ``0`` explicitly means keep local backups forever.  Positive values are
-    age windows in days; no artificial upper bound is imposed.  WebDAV
-    retention remains intentionally unlimited and is unaffected.
+    ``0`` explicitly disables age expiry; dated archives from earlier days
+    still compact to one newest copy per day. Positive values are age windows
+    in days; no artificial upper bound is imposed. WebDAV retention remains
+    intentionally unlimited and is unaffected.
     """
     if (
         isinstance(value, bool)
@@ -51,7 +54,7 @@ def validate_local_backup_retention_days(value: Any) -> int:
     ):
         raise ValueError(
             "backup.local_retention_days 必须是 "
-            f"大于或等于 {MIN_LOCAL_BACKUP_RETENTION_DAYS} 的整数（0 表示永久保留）"
+            f"大于或等于 {MIN_LOCAL_BACKUP_RETENTION_DAYS} 的整数（0 表示不按天数过期）"
         )
     return value
 
@@ -130,32 +133,70 @@ def _backup_timestamp(name: str) -> Optional[datetime]:
         return None
 
 
-def _rotate_local(directory: Path, retention_days: int) -> List[str]:
-    """Remove backups older than ``retention_days``; return the removed names.
+def _backup_order_key(name: str) -> Optional[tuple[datetime, int, str]]:
+    """Return filename order for choosing the newest same-day snapshot."""
+    match = _BACKUP_NAME_RE.match(name)
+    stamp = _backup_timestamp(name)
+    if match is None or stamp is None:
+        return None
+    # A suffixed file is created after the base name in the same second.
+    sequence = int(match.group(2) or 1)
+    return stamp, sequence, name
 
-    Rotation is strictly age-based (filename timestamp = creation time) and
-    never touches files whose name cannot be dated — an undated archive is
-    preserved forever rather than guessed at. ``retention_days=0`` disables
-    local rotation entirely.
+
+def _rotate_local(
+    directory: Path,
+    retention_days: int,
+    *,
+    now: Optional[datetime] = None,
+) -> List[str]:
+    """Prune expired archives and compact prior days to one newest snapshot.
+
+    All snapshots whose filename date is today remain available for rapid
+    rollback. For yesterday and earlier, only the most recent dated archive
+    of each calendar day remains. The configured age window is applied first;
+    ``retention_days=0`` disables only age expiry, not per-day compaction.
+    Files without a parseable timestamp are left untouched rather than guessed
+    at or deleted.
     """
-    # ``0`` is the user-facing "keep forever" setting.  Returning before
-    # calculating a zero-day cutoff also guarantees that a newly created
-    # archive can never be deleted in the same backup operation.
-    if retention_days == 0:
-        return []
-    cutoff = datetime.now() - timedelta(days=retention_days)
+    rotation_now = now or datetime.now()
+    cutoff = (
+        rotation_now - timedelta(days=retention_days)
+        if retention_days > 0
+        else None
+    )
     removed = []
+    prior_day_entries: Dict[date, List[tuple[tuple[datetime, int, str], Path]]] = {}
+
     for item in directory.iterdir():
         if not item.is_file() or not item.name.endswith(BACKUP_SUFFIX):
             continue
         stamp = _backup_timestamp(item.name)
-        if stamp is None or stamp >= cutoff:
+        if stamp is None:
             continue
-        try:
-            os.remove(item)
-            removed.append(item.name)
-        except OSError:
+        if cutoff is not None and stamp < cutoff:
+            try:
+                os.remove(item)
+                removed.append(item.name)
+            except OSError:
+                continue
             continue
+        if stamp.date() >= rotation_now.date():
+            continue
+        key = _backup_order_key(item.name)
+        if key is not None:
+            prior_day_entries.setdefault(stamp.date(), []).append((key, item))
+
+    for entries in prior_day_entries.values():
+        entries.sort(key=lambda entry: entry[0], reverse=True)
+        for _key, item in entries[1:]:
+            try:
+                os.remove(item)
+                removed.append(item.name)
+            except OSError:
+                continue
+
+    removed.sort()
     return removed
 
 
@@ -271,7 +312,7 @@ def create_backup(
     webdav_sync: Any = None,
     logger: Any = None,
 ) -> Dict[str, Any]:
-    """Create one compressed backup; rotate local copies by age.
+    """Create one compressed backup and compact/rotate local copies.
 
     ``webdav_sync`` may be any object exposing the small WebDAVSync surface
     (``client.upload_file``/``client.list``, ``_remote``, ``_ensure_remote_dir``);
@@ -291,7 +332,8 @@ def create_backup(
 
     directory = backups_directory(data_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    created_at = datetime.now()
+    stamp = created_at.strftime("%Y%m%d_%H%M%S")
 
     with _backup_lock:
         snapshot_fd, snapshot_name = tempfile.mkstemp(
@@ -320,7 +362,9 @@ def create_backup(
             "path": str(archive_path),
             "name": archive_path.name,
             "size_bytes": archive_path.stat().st_size,
-            "local_rotated": _rotate_local(directory, retention_days),
+            "local_rotated": _rotate_local(
+                directory, retention_days, now=created_at
+            ),
             "uploaded": False,
             "remote_path": None,
         }
@@ -347,7 +391,8 @@ def run_scheduled_backup(logger: Any = None) -> Optional[Dict[str, Any]]:
     """Worker hook after a daily run; honours the ``backup`` config section.
 
     备份始终先压缩再上传；只要 WebDAV 已启用并配置了凭据就镜像上传
-    （增量：内容未变化时跳过），本地按配置的保留天数轮转。
+    （增量：内容未变化时跳过），本地保留当天全部副本、旧日期每日最新
+    副本后再按配置的保留天数轮转。
     """
     from config import settings
 

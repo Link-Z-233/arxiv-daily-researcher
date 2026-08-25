@@ -1,4 +1,4 @@
-"""gzip 数据库备份：一致性快照、本地按周轮转、WebDAV 增量镜像。"""
+"""gzip 数据库备份：一致性快照、本地按日收敛、WebDAV 增量镜像。"""
 
 from __future__ import annotations
 
@@ -36,6 +36,19 @@ def _rename_backup(directory: Path, name: str, days_ago: int) -> str:
     aged = f"daily_research_{stamp}{BACKUP_SUFFIX}"
     (directory / name).rename(directory / aged)
     return aged
+
+
+def _write_dated_backup(
+    directory: Path,
+    stamp: datetime,
+    *,
+    sequence: int | None = None,
+) -> str:
+    """Create a lightweight archive-shaped file for local-rotation tests."""
+    suffix = f"_{sequence}" if sequence is not None else ""
+    name = f"daily_research_{stamp.strftime('%Y%m%d_%H%M%S')}{suffix}{BACKUP_SUFFIX}"
+    (directory / name).write_bytes(b"fixture")
+    return name
 
 
 class _FakeWebDAVClient:
@@ -135,7 +148,7 @@ class BackupCreationTests(unittest.TestCase):
         self.assertNotIn(aged, survivors)
         self.assertIn(aged, result["local_rotated"])
 
-    def test_zero_retention_keeps_local_backups_forever(self):
+    def test_zero_retention_keeps_each_prior_day_forever_after_compaction(self):
         fresh = create_backup(self.data_dir)
         aged = _rename_backup(self.data_dir / "backups", fresh["name"], 30)
 
@@ -146,6 +159,61 @@ class BackupCreationTests(unittest.TestCase):
             {entry["name"] for entry in list_local_backups(self.data_dir)},
         )
         self.assertEqual(result["local_rotated"], [])
+
+    def test_rotation_keeps_all_today_and_only_latest_archive_per_earlier_day(self):
+        directory = self.data_dir / "backups"
+        directory.mkdir()
+        now = datetime.now().replace(microsecond=0)
+        yesterday = now - timedelta(days=1)
+        two_days_ago = now - timedelta(days=2)
+
+        today_first = _write_dated_backup(
+            directory, now.replace(hour=0, minute=1, second=0)
+        )
+        today_second = _write_dated_backup(
+            directory, now.replace(hour=1, minute=1, second=0)
+        )
+        yesterday_old = _write_dated_backup(
+            directory, yesterday.replace(hour=8, minute=0, second=0)
+        )
+        yesterday_new = _write_dated_backup(
+            directory, yesterday.replace(hour=20, minute=0, second=0)
+        )
+        yesterday_same_second_old = _write_dated_backup(
+            directory, yesterday.replace(hour=21, minute=0, second=0)
+        )
+        yesterday_same_second_new = _write_dated_backup(
+            directory,
+            yesterday.replace(hour=21, minute=0, second=0),
+            sequence=2,
+        )
+        two_days_old = _write_dated_backup(
+            directory, two_days_ago.replace(hour=9, minute=0, second=0)
+        )
+        two_days_new = _write_dated_backup(
+            directory, two_days_ago.replace(hour=10, minute=0, second=0)
+        )
+
+        result = create_backup(self.data_dir, retention_days=0)
+        survivors = {entry["name"] for entry in list_local_backups(self.data_dir)}
+
+        self.assertIn(today_first, survivors)
+        self.assertIn(today_second, survivors)
+        self.assertIn(yesterday_same_second_new, survivors)
+        self.assertIn(two_days_new, survivors)
+        self.assertNotIn(yesterday_old, survivors)
+        self.assertNotIn(yesterday_new, survivors)
+        self.assertNotIn(yesterday_same_second_old, survivors)
+        self.assertNotIn(two_days_old, survivors)
+        self.assertEqual(
+            set(result["local_rotated"]),
+            {
+                yesterday_old,
+                yesterday_new,
+                yesterday_same_second_old,
+                two_days_old,
+            },
+        )
 
     def test_retention_window_rejects_negative_and_non_integers(self):
         for invalid in (-1, True, "7"):

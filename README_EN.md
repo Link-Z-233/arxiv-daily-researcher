@@ -145,7 +145,7 @@ A 7-step CLI wizard bootstraps first deployments (auto-triggered on first Docker
 
 ### 🛡️ Production-Grade Reliability
 
-**SQLite persistent queue** (resume after interruption, failed papers retried first, per-run cap against first-deploy floods), **atomic delivery** (report + delivery + notifications + maintenance in one transaction), **shared LLM timeout/retry policy** (per-request timeout, exponential backoff with jitter, Retry-After honored, fast-fail on auth errors), **arXiv rate-limit backoff with cross-domain cooldown**, **no-progress watchdog**, **file locks**, **gzip DB backups** (local full copies are automatically cleaned by a configurable retention window, 7 days by default; enter `0` to keep them forever; incremental WebDAV mirror never deletes remote files), **per-service proxy**.
+**SQLite persistent queue** (resume after interruption, failed papers retried first, per-run cap against first-deploy floods), **atomic delivery** (report + delivery + notifications + maintenance in one transaction), **shared LLM timeout/retry policy** (per-request timeout, exponential backoff with jitter, Retry-After honored, fast-fail on auth errors), **arXiv rate-limit backoff with cross-domain cooldown**, **no-progress watchdog**, **file locks**, **gzip DB backups** (all local copies made today are retained; each earlier day keeps only its newest copy before configurable age cleanup, 7 days by default; enter `0` to disable age expiry; incremental WebDAV mirror never deletes remote files), **per-service proxy**.
 
 </td>
 </tr>
