@@ -7,7 +7,7 @@ import threading
 import unicodedata
 import requests
 import fitz  # pymupdf
-from typing import Optional, Dict, Any, List, Mapping, Union
+from typing import Callable, Optional, Dict, Any, List, Mapping, Union
 from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
@@ -16,6 +16,7 @@ from config import settings
 from parsers.mineru_parser import MineruParser
 from utils.llm_request_pool import call_chat_completion, call_responses
 from utils.llm_resilience import build_llm_client, llm_retry
+from utils.llm_health import LLMHealthRecorder
 from utils.safe_download import download_external_bytes
 from utils.deep_analysis_contract import (
     ANALYSIS_META_KEY,
@@ -259,7 +260,7 @@ class AnalysisAgent:
     - 对及格论文进行深度分析（使用可配置模板）
     """
 
-    def __init__(self):
+    def __init__(self, health_recorder: Optional[LLMHealthRecorder] = None):
         # 初始化两个不同性能LLM客户端
         self.cheap_client = build_llm_client(
             settings.CHEAP_LLM.api_key, settings.CHEAP_LLM.base_url
@@ -274,6 +275,25 @@ class AnalysisAgent:
         # 加载报告模板以获取prompt配置
         self.basic_template = settings.load_report_template("basic_report_template.json")
         self.deep_template = settings.load_report_template("deep_analysis_template.json")
+        # The recorder is injected only by real workflow entry points.  This
+        # keeps the agent reusable in isolated tooling/tests and prevents a
+        # health observation from ever becoming a dependency of analysis.
+        self._health_recorder = health_recorder
+
+    def _record_llm_health(
+        self,
+        role: str,
+        model: str,
+        success: bool,
+        error: Optional[BaseException] = None,
+    ) -> None:
+        recorder = getattr(self, "_health_recorder", None)
+        if recorder is not None:
+            recorder(role, model, success, error)
+
+    def set_health_recorder(self, health_recorder: Optional[LLMHealthRecorder]) -> None:
+        """Attach optional passive observability after agent construction."""
+        self._health_recorder = health_recorder
 
     # ======================================================================
     # 带重试的 LLM / HTTP 调用封装
@@ -479,7 +499,13 @@ class AnalysisAgent:
             )
             return content
 
-        return _do_call()
+        try:
+            result = _do_call()
+        except Exception as exc:
+            self._record_llm_health("cheap", settings.CHEAP_LLM.model_name, False, exc)
+            raise
+        self._record_llm_health("cheap", settings.CHEAP_LLM.model_name, True)
+        return result
 
     def _call_cheap_llm_plain(self, prompt: str) -> str:
         """调用低成本LLM（纯文本模式），带自动重试。"""
@@ -505,7 +531,13 @@ class AnalysisAgent:
             )
             return content.strip()
 
-        return _do_call()
+        try:
+            result = _do_call()
+        except Exception as exc:
+            self._record_llm_health("cheap", settings.CHEAP_LLM.model_name, False, exc)
+            raise
+        self._record_llm_health("cheap", settings.CHEAP_LLM.model_name, True)
+        return result
 
     def _call_smart_llm(self, prompt: str) -> str:
         """调用高性能LLM（JSON模式），带自动重试。"""
@@ -532,7 +564,13 @@ class AnalysisAgent:
             )
             return content
 
-        return _do_call()
+        try:
+            result = _do_call()
+        except Exception as exc:
+            self._record_llm_health("smart", settings.SMART_LLM.model_name, False, exc)
+            raise
+        self._record_llm_health("smart", settings.SMART_LLM.model_name, True)
+        return result
 
     def _download_pdf_bytes(self, pdf_url: str) -> bytes:
         """Download a bounded, redirect-validated PDF with retries."""

@@ -16,12 +16,13 @@ from typing import List, Dict, Any, Optional
 from config import settings
 from utils.llm_request_pool import call_chat_completion
 from utils.llm_resilience import build_llm_client, llm_retry
+from utils.llm_health import LLMHealthRecorder
 
 logger = logging.getLogger(__name__)
 
 
 @llm_retry()
-def _llm_call_with_retry(client, model_name: str, temperature: float, prompt: str) -> str:
+def _llm_call_once(client, model_name: str, temperature: float, prompt: str) -> str:
     """带自动重试的 LLM 调用（模块级，避免每次调用重建 retry 装饰器）。"""
     estimated_prompt_tokens = len(prompt) // 4  # 用于重试失败时的近似计数
     try:
@@ -45,6 +46,27 @@ def _llm_call_with_retry(client, model_name: str, temperature: float, prompt: st
     return resp.choices[0].message.content.strip()
 
 
+def _llm_call_with_retry(
+    client,
+    model_name: str,
+    temperature: float,
+    prompt: str,
+    *,
+    role: str,
+    health_recorder: Optional[LLMHealthRecorder] = None,
+) -> str:
+    """Retry a call, then record only its final user-visible outcome."""
+    try:
+        result = _llm_call_once(client, model_name, temperature, prompt)
+    except Exception as exc:
+        if health_recorder is not None:
+            health_recorder(role, model_name, False, exc)
+        raise
+    if health_recorder is not None:
+        health_recorder(role, model_name, True, None)
+    return result
+
+
 class TrendAgent:
     """
     研究趋势分析 LLM Agent。
@@ -53,7 +75,7 @@ class TrendAgent:
     使用 SMART_LLM + Skills 系统进行整体趋势分析。
     """
 
-    def __init__(self):
+    def __init__(self, health_recorder: Optional[LLMHealthRecorder] = None):
         self.cheap_client = build_llm_client(
             settings.CHEAP_LLM.api_key,
             settings.CHEAP_LLM.base_url,
@@ -63,6 +85,7 @@ class TrendAgent:
             settings.SMART_LLM.base_url,
         )
         self.skills = self._load_skills()
+        self._health_recorder = health_recorder
 
     def _load_skills(self) -> Dict[str, Any]:
         """加载趋势分析技能库"""
@@ -77,16 +100,30 @@ class TrendAgent:
             logger.error(f"加载趋势分析技能失败: {e}")
             return {"skills": []}
 
+    def set_health_recorder(self, health_recorder: Optional[LLMHealthRecorder]) -> None:
+        """Attach optional passive observability after agent construction."""
+        self._health_recorder = health_recorder
+
     def _call_cheap_llm_plain(self, prompt: str) -> str:
         """调用低成本LLM（纯文本模式），带自动重试。"""
         return _llm_call_with_retry(
-            self.cheap_client, settings.CHEAP_LLM.model_name, settings.CHEAP_LLM.temperature, prompt
+            self.cheap_client,
+            settings.CHEAP_LLM.model_name,
+            settings.CHEAP_LLM.temperature,
+            prompt,
+            role="cheap",
+            health_recorder=getattr(self, "_health_recorder", None),
         )
 
     def _call_smart_llm_plain(self, prompt: str) -> str:
         """调用高性能LLM（纯文本模式），带自动重试。"""
         return _llm_call_with_retry(
-            self.smart_client, settings.SMART_LLM.model_name, settings.SMART_LLM.temperature, prompt
+            self.smart_client,
+            settings.SMART_LLM.model_name,
+            settings.SMART_LLM.temperature,
+            prompt,
+            role="smart",
+            health_recorder=getattr(self, "_health_recorder", None),
         )
 
     # ======================================================================

@@ -9,6 +9,8 @@ from datetime import date
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+from utils.llm_health import LLMHealthRecorder
+
 from .database import KeywordDatabase, KeywordTrendData
 from .normalizer import KeywordNormalizer
 from .mermaid_generator import MermaidGenerator
@@ -29,7 +31,8 @@ class KeywordTracker:
     def __init__(
         self,
         db_path: Optional[Path] = None,
-        enable_auto_normalize: bool = True
+        enable_auto_normalize: bool = True,
+        health_recorder: Optional[LLMHealthRecorder] = None,
     ):
         """
         初始化追踪器
@@ -44,7 +47,7 @@ class KeywordTracker:
             db_path = settings.DAILY_RESEARCH_DB_PATH
 
         self.db = KeywordDatabase(db_path)
-        self.normalizer = KeywordNormalizer()
+        self.normalizer = KeywordNormalizer(health_recorder=health_recorder)
         self.mermaid = MermaidGenerator()
         self.enable_auto_normalize = enable_auto_normalize
 
@@ -53,6 +56,10 @@ class KeywordTracker:
         self.chart_top_n = getattr(settings, 'KEYWORD_CHART_TOP_N', 15)
         self.trend_top_n = getattr(settings, 'KEYWORD_TREND_TOP_N', 5)
         self.batch_size = getattr(settings, 'KEYWORD_NORMALIZATION_BATCH_SIZE', 25)
+
+    def set_health_recorder(self, health_recorder: Optional[LLMHealthRecorder]) -> None:
+        """Forward optional LLM observability to the normalizer."""
+        self.normalizer.set_health_recorder(health_recorder)
 
     def run_daily_normalization(self, batch_size: Optional[int] = None) -> Dict[str, Any]:
         """

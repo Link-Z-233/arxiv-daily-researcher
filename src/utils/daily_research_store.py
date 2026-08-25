@@ -341,6 +341,26 @@ class DailyResearchStore:
                 "CREATE INDEX IF NOT EXISTS idx_run_token_usage_recorded "
                 "ON run_token_usage(recorded_at)"
             )
+            # Lightweight health observations from *real* LLM calls.  They
+            # intentionally sit beside run/token history so the WebUI can
+            # inspect one authoritative local database without making an
+            # extra paid provider request.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS llm_health_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role TEXT NOT NULL CHECK (role IN ('cheap', 'smart')),
+                    model TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed')),
+                    error_summary TEXT,
+                    occurred_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_llm_health_events_role_time "
+                "ON llm_health_events(role, occurred_at DESC, event_id DESC)"
+            )
             # Reader-owned paper preferences (like/dislike). Rows are never
             # deleted: clearing a preference writes 'none' so the history of
             # what was marked stays intact. Snapshots of title/authors keep
@@ -1840,6 +1860,85 @@ class DailyResearchStore:
             }
             for row in rows
         ]
+
+    # ==================== LLM health ====================
+
+    def record_llm_health_event(
+        self,
+        role: str,
+        model: str,
+        success: bool,
+        error_summary: Optional[str] = None,
+    ) -> None:
+        """Persist the final outcome of one real LLM operation.
+
+        The caller owns retrying.  A failed event therefore means the full
+        retry budget was exhausted (or a fatal provider error occurred), not
+        merely that one transient attempt was retried successfully.
+        """
+        normalized_role = str(role or "").strip().lower()
+        if normalized_role not in {"cheap", "smart"}:
+            raise ValueError(f"invalid LLM role: {role!r}")
+        normalized_model = str(model or "").strip() or "unknown"
+        status = "succeeded" if success else "failed"
+        # Health events contain only a compact, pre-sanitized user-facing
+        # explanation.  Bound it again at this storage boundary so direct
+        # callers cannot accidentally turn the table into a log sink.
+        detail = str(error_summary or "").strip()[:360] or None
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO llm_health_events(
+                    role, model, status, error_summary, occurred_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (normalized_role, normalized_model, status, detail, now),
+            )
+
+    def get_llm_health(self, window: int = 20) -> Dict[str, Dict[str, Any]]:
+        """Summarize recent real-call outcomes for the cheap and smart roles."""
+        bounded_window = max(1, min(int(window), 100))
+        summaries: Dict[str, Dict[str, Any]] = {}
+        with self._connect() as conn:
+            for role in ("cheap", "smart"):
+                rows = conn.execute(
+                    """
+                    SELECT model, status, error_summary, occurred_at
+                    FROM llm_health_events
+                    WHERE role = ?
+                    ORDER BY occurred_at DESC, event_id DESC
+                    LIMIT ?
+                    """,
+                    (role, bounded_window),
+                ).fetchall()
+                if not rows:
+                    continue
+
+                newest = rows[0]
+                last_success = next(
+                    (row for row in rows if row["status"] == "succeeded"), None
+                )
+                last_failure = next(
+                    (row for row in rows if row["status"] == "failed"), None
+                )
+                consecutive_failures = 0
+                for row in rows:
+                    if row["status"] != "failed":
+                        break
+                    consecutive_failures += 1
+                succeeded = sum(1 for row in rows if row["status"] == "succeeded")
+                summaries[role] = {
+                    "last_status": newest["status"],
+                    "last_event_at": newest["occurred_at"],
+                    "last_model": newest["model"],
+                    "last_success_at": last_success["occurred_at"] if last_success else None,
+                    "last_error": last_failure["error_summary"] if last_failure else None,
+                    "consecutive_failures": consecutive_failures,
+                    "events_in_window": len(rows),
+                    "success_rate": succeeded / len(rows),
+                }
+        return summaries
 
     # ==================== Paper preferences ====================
 

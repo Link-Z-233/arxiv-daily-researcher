@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from config import settings
 from utils.llm_request_pool import call_chat_completion
+from utils.llm_health import LLMHealthRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class KeywordNormalizer:
     - 拼写变体统一
     """
 
-    def __init__(self):
+    def __init__(self, health_recorder: Optional[LLMHealthRecorder] = None):
         """初始化，使用 settings 中的 cheap_llm 配置"""
         from config import settings
         from utils.llm_resilience import build_llm_client
@@ -56,6 +57,18 @@ class KeywordNormalizer:
             settings.CHEAP_LLM.base_url,
         )
         self.model = settings.CHEAP_LLM.model_name
+        self._health_recorder = health_recorder
+
+    def _record_llm_health(
+        self, success: bool, error: Optional[BaseException] = None
+    ) -> None:
+        recorder = getattr(self, "_health_recorder", None)
+        if recorder is not None:
+            recorder("cheap", self.model, success, error)
+
+    def set_health_recorder(self, health_recorder: Optional[LLMHealthRecorder]) -> None:
+        """Attach optional passive observability after construction."""
+        self._health_recorder = health_recorder
 
     def normalize_batch(
         self,
@@ -162,11 +175,11 @@ class KeywordNormalizer:
                     )
                 )
 
+            self._record_llm_health(True)
             return results
 
-        except json.JSONDecodeError:
-            raise
         except Exception as e:
+            self._record_llm_health(False, e)
             logger.error(f"LLM 调用失败: {e}")
             raise
 

@@ -175,6 +175,31 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "fav_like": {"zh": "喜欢", "en": "Like"},
     "fav_dislike": {"zh": "不喜欢", "en": "Dislike"},
     "tab_analytics": {"zh": "数据分析", "en": "Analytics"},
+    "llm_health_title": {"zh": "LLM 健康", "en": "LLM Health"},
+    "llm_health_hint": {
+        "zh": "只汇总真实任务的最终调用结果；不会发送探针请求，也不会额外消耗 token。",
+        "en": "Summarizes final outcomes from real work only; no probe request or extra token use.",
+    },
+    "llm_health_no_data": {
+        "zh": "尚无真实 LLM 调用记录。运行需要 LLM 的任务后可在这里查看。",
+        "en": "No real LLM calls recorded yet. Run an LLM-backed task to see health here.",
+    },
+    "llm_health_load_failed": {
+        "zh": "无法读取 LLM 健康数据：{}",
+        "en": "Could not read LLM health data: {}",
+    },
+    "llm_health_cheap": {"zh": "低成本 LLM", "en": "Low-Cost LLM"},
+    "llm_health_smart": {"zh": "高性能 LLM", "en": "High-Performance LLM"},
+    "llm_health_status_ok": {"zh": "成功", "en": "Succeeded"},
+    "llm_health_status_failed": {"zh": "失败", "en": "Failed"},
+    "llm_health_last_result": {"zh": "最新调用", "en": "Latest call"},
+    "llm_health_consecutive_failures": {"zh": "连续失败", "en": "Consecutive failures"},
+    "llm_health_recent_success": {"zh": "最近 20 次成功率", "en": "Success rate (last 20)"},
+    "llm_health_times": {
+        "zh": "最近调用：{event} · 最近成功：{success}",
+        "en": "Latest call: {event} · Last success: {success}",
+    },
+    "llm_health_last_error": {"zh": "最近失败说明（已脱敏）", "en": "Latest failure detail (redacted)"},
     "an_diag_title": {"zh": "运行诊断", "en": "Run diagnostics"},
     "an_diag_recent_runs": {"zh": "近 10 次运行（完成/可用）", "en": "Last 10 runs (done/avail)"},
     "an_diag_recent_runs_help": {

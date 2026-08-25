@@ -15,6 +15,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import settings  # noqa: E402
+from utils.llm_health import make_database_llm_health_recorder  # noqa: E402
 from utils.run_lock import legacy_import_activity_gate, run_lock  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,15 @@ def run_keyword_maintenance(today: Optional[date] = None) -> int:
     try:
         from keyword_tracker import KeywordTracker
 
+        # Keyword normalization is a real CHEAP_LLM workload, so bind it to
+        # the same SQLite health ledger as daily research.  It remains fully
+        # optional for callers that use KeywordTracker outside this command.
         tracker = KeywordTracker()
+        attach_health_recorder = getattr(tracker, "set_health_recorder", None)
+        if callable(attach_health_recorder):
+            attach_health_recorder(
+                make_database_llm_health_recorder(settings.DAILY_RESEARCH_DB_PATH)
+            )
     except Exception as exc:
         logger.error("关键词跟踪器初始化失败: %s", exc)
         return 1

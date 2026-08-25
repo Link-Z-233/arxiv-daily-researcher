@@ -21,6 +21,8 @@ from tqdm import tqdm
 from config import settings
 from utils.logger import setup_logger
 from utils.token_counter import token_counter
+from utils.daily_research_store import DailyResearchStore
+from utils.llm_health import make_database_llm_health_recorder
 from sources.arxiv_source import ArxivSource
 from agents.trend_agent import TrendAgent
 from report.trend.reporter import TrendReporter
@@ -81,6 +83,16 @@ class TrendResearchPipeline:
             if settings.TOKEN_TRACKING_ENABLED:
                 token_counter.reset()
 
+            # Trend reports make real cheap/smart calls too.  Reuse the main
+            # SQLite ledger for passive health observations; no probe request
+            # is issued and a health-write failure cannot stop the report.
+            health_db_path = getattr(settings, "DAILY_RESEARCH_DB_PATH", None)
+            llm_health_recorder = (
+                make_database_llm_health_recorder(health_db_path)
+                if health_db_path is not None
+                else None
+            )
+
             # ==================== 阶段1: 搜索论文 ====================
             logger.info(">>> 阶段1: 从 ArXiv 搜索论文...")
 
@@ -119,6 +131,9 @@ class TrendResearchPipeline:
             # ==================== 阶段2: 生成 TLDR ====================
             tldrs: Dict[str, str] = {}
             trend_agent = TrendAgent()
+            attach_health_recorder = getattr(trend_agent, "set_health_recorder", None)
+            if callable(attach_health_recorder):
+                attach_health_recorder(llm_health_recorder)
 
             if self.settings.RESEARCH_GENERATE_TLDR:
                 logger.info(">>> 阶段2: 生成论文 TLDR...")
@@ -250,8 +265,6 @@ class TrendResearchPipeline:
                 if settings.TOKEN_TRACKING_ENABLED:
                     usage = token_counter.get_summary()
                     if usage.get("by_model"):
-                        from utils.daily_research_store import DailyResearchStore
-
                         store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
                         synthetic_run_id = (
                             f"trend_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

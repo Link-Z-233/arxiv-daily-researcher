@@ -1,4 +1,4 @@
-"""数据分析 Tab — 用量统计 + 数据源健康 + 精简运行诊断，合并为一页。
+"""数据分析 Tab — 用量统计 + LLM/数据源健康 + 精简运行诊断，合并为一页。
 
 数据全部来自 SQLite 只读查询（token 用量、扫描收据、运行诊断），
 本页不做任何写入。
@@ -473,6 +473,73 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
 # ─── 数据源健康 ───────────────────────────────────────────────────────────────
 
 
+def _format_health_time(value: object) -> str:
+    """Keep local observability timestamps readable without exposing paths."""
+    if not isinstance(value, str) or not value.strip():
+        return "—"
+    try:
+        return value.replace("T", " ")[:19]
+    except Exception:
+        return "—"
+
+
+def _render_llm_health_section(config_values: dict) -> None:
+    """Render passive LLM health from persisted real-call outcomes only."""
+    st.markdown(
+        f'<p class="section-title">🧠 {t("llm_health_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption(t("llm_health_hint"))
+
+    db_path = _daily_db_path_from_config(config_values or {})
+    if not db_path.exists():
+        st.info(t("llm_health_no_data"))
+        return
+    try:
+        summaries = DailyResearchStore(db_path).get_llm_health(window=20)
+    except Exception as exc:
+        st.warning(t("llm_health_load_failed").format(exc))
+        return
+    if not summaries:
+        st.info(t("llm_health_no_data"))
+        return
+
+    role_labels = {
+        "cheap": t("llm_health_cheap"),
+        "smart": t("llm_health_smart"),
+    }
+    for role in ("cheap", "smart"):
+        summary = summaries.get(role)
+        if not summary:
+            continue
+        succeeded = summary.get("last_status") == "succeeded"
+        icon = "✅" if succeeded else "❌"
+        status = t("llm_health_status_ok") if succeeded else t("llm_health_status_failed")
+        model = str(summary.get("last_model") or "—")
+        with st.container(border=True):
+            st.markdown(f"**{icon} {role_labels[role]}**  \n`{model}`")
+            result_col, failure_col, rate_col = st.columns(3)
+            result_col.metric(t("llm_health_last_result"), status)
+            failure_col.metric(
+                t("llm_health_consecutive_failures"),
+                str(summary.get("consecutive_failures", 0)),
+            )
+            rate = summary.get("success_rate")
+            rate_col.metric(
+                t("llm_health_recent_success"),
+                f"{float(rate) * 100:.0f}%" if isinstance(rate, (int, float)) else "—",
+            )
+            st.caption(
+                t("llm_health_times").format(
+                    event=_format_health_time(summary.get("last_event_at")),
+                    success=_format_health_time(summary.get("last_success_at")),
+                )
+            )
+            if not succeeded and summary.get("last_error"):
+                with st.expander(t("llm_health_last_error")):
+                    st.code(str(summary["last_error"]), language=None)
+
+
 def _render_source_health_section(_env_values: dict, config_values: dict) -> None:
     st.markdown(
         f'<p class="section-title">📡 {t("sh_title")}</p>',
@@ -666,8 +733,11 @@ def _render_diagnostics_section(config_values: dict) -> None:
 
 
 def render(env_values: dict, config_values: dict) -> None:
-    """渲染数据分析 Tab：用量统计 → 数据源健康 → 运行诊断（精简）。"""
+    """渲染数据分析 Tab：用量统计 → LLM 健康 → 数据源健康 → 运行诊断。"""
     _render_usage_section(env_values, config_values)
+
+    st.divider()
+    _render_llm_health_section(config_values)
 
     st.divider()
     _render_source_health_section(env_values, config_values)

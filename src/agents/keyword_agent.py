@@ -3,10 +3,11 @@ import logging
 import json
 import hashlib
 from pathlib import Path
-from typing import Dict, Set, List
+from typing import Dict, Set, List, Optional
 from config import settings
 from utils.llm_request_pool import call_chat_completion
 from utils.llm_resilience import build_llm_client
+from utils.llm_health import LLMHealthRecorder
 from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ class KeywordAgent:
     - 智能去重相似关键词
     """
 
-    def __init__(self):
+    def __init__(self, health_recorder: Optional[LLMHealthRecorder] = None):
         # 初始化低成本LLM客户端
         self.client = build_llm_client(
             settings.CHEAP_LLM.api_key, settings.CHEAP_LLM.base_url
@@ -34,6 +35,18 @@ class KeywordAgent:
 
         # 缓存文件路径
         self.cache_file = settings.DATA_DIR / "keywords" / "keywords_cache.json"
+        self._health_recorder = health_recorder
+
+    def _record_llm_health(
+        self, success: bool, error: Optional[BaseException] = None
+    ) -> None:
+        recorder = getattr(self, "_health_recorder", None)
+        if recorder is not None:
+            recorder("cheap", settings.CHEAP_LLM.model_name, success, error)
+
+    def set_health_recorder(self, health_recorder: Optional[LLMHealthRecorder]) -> None:
+        """Attach optional passive observability after agent construction."""
+        self._health_recorder = health_recorder
 
     def _calculate_pdf_hash(self, pdf_path: Path) -> str:
         """
@@ -376,7 +389,10 @@ class KeywordAgent:
                 for pdf in new_pdfs[:5]:
                     cached_pdf_keywords[pdf.name] = new_keywords.copy()
 
+                self._record_llm_health(True)
+
             except Exception as e:
+                self._record_llm_health(False, e)
                 logger.error(f"通过LLM提取关键词失败: {e}")
                 import traceback
 

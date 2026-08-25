@@ -45,6 +45,7 @@ from utils.daily_research_store import (
     DailyResearchStore,
     V1_PASS_SIGNAL_STRENGTH,
 )
+from utils.llm_health import make_llm_health_recorder
 from utils.daily_research_errors import PaperStageError, paper_stage_error
 from utils.daily_research_fingerprints import (
     build_score_audit_metadata,
@@ -938,6 +939,10 @@ class DailyResearchPipeline:
             # delivery state; falling back to JSON would discard those
             # guarantees on an upgraded installation.
             store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
+            # Record only final outcomes of the real calls performed by this
+            # run.  The callback is best-effort and shares this run's SQLite
+            # ledger, so concurrent paper workers do not create side stores.
+            llm_health_recorder = make_llm_health_recorder(store)
             # Keep the durable run ledger truthful: supplement/backfill runs
             # share the daily pipeline, but they are distinct operations in
             # diagnostics and must never be presented as an ordinary daily
@@ -1001,6 +1006,9 @@ class DailyResearchPipeline:
             logger.info(">>> 阶段2: 准备关键词...")
 
             keyword_agent = KeywordAgent()
+            attach_health_recorder = getattr(keyword_agent, "set_health_recorder", None)
+            if callable(attach_health_recorder):
+                attach_health_recorder(llm_health_recorder)
             all_keywords = keyword_agent.get_all_keywords()
 
             if not all_keywords:
@@ -1369,6 +1377,9 @@ class DailyResearchPipeline:
             store.record_run_phase(run_id, "score")
 
             analysis_agent = AnalysisAgent()
+            attach_health_recorder = getattr(analysis_agent, "set_health_recorder", None)
+            if callable(attach_health_recorder):
+                attach_health_recorder(llm_health_recorder)
             scored_papers_by_source: Dict[str, List[Dict[str, Any]]] = {}
 
             translation_cache = {}
