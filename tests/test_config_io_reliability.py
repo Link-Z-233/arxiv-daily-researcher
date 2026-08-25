@@ -173,6 +173,32 @@ class ConfigIOReliabilityTests(unittest.TestCase):
             self.assertEqual(oct(path.stat().st_mode & 0o777), "0o600")
             self.assertEqual(list(Path(temp_dir).glob(".*.tmp")), [])
 
+    def test_env_write_removes_the_obsolete_openalex_mailto_setting(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = root / ".env.example"
+            template.write_text(
+                "OPENALEX_API_KEY=\n# ENABLE_OPENALEX=true\n", encoding="utf-8"
+            )
+            env_path = root / ".env"
+            env_path.write_text(
+                "OPENALEX_EMAIL=legacy@example.test\nOPENALEX_API_KEY=old-key\n",
+                encoding="utf-8",
+            )
+
+            with patch("utils.config_io.ENV_EXAMPLE_PATH", template):
+                write_env(
+                    {
+                        "OPENALEX_EMAIL": "legacy@example.test",
+                        "OPENALEX_API_KEY": "new-key",
+                    },
+                    env_path,
+                )
+
+            content = env_path.read_text(encoding="utf-8")
+            self.assertNotIn("OPENALEX_EMAIL", content)
+            self.assertIn("OPENALEX_API_KEY=new-key", content)
+
     def test_config_and_env_writes_are_atomic_and_keep_expected_permissions(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

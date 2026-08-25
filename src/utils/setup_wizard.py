@@ -376,12 +376,7 @@ def section_data_sources(existing_config: dict) -> dict:
 
     # OpenAlex config
     console.print()
-    console.print("[dim]OpenAlex provides journal paper data. An email improves rate limits.[/]")
-    openalex_email = questionary.text(
-        "OpenAlex email (optional, press Enter to skip):",
-        default="",
-        style=WIZARD_STYLE,
-    ).ask()
+    console.print("[dim]OpenAlex provides journal paper data. A free API key raises the daily budget 10×.[/]")
     openalex_key = questionary.text(
         "OpenAlex API Key (optional):",
         default="",
@@ -389,8 +384,6 @@ def section_data_sources(existing_config: dict) -> dict:
     ).ask()
 
     result["_env"] = {}
-    if openalex_email:
-        result["_env"]["OPENALEX_EMAIL"] = openalex_email
     if openalex_key:
         result["_env"]["OPENALEX_API_KEY"] = openalex_key
 

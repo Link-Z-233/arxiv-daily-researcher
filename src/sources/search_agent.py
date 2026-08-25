@@ -48,7 +48,6 @@ class SearchAgent:
         journals: List[str] = None,
         max_results: Optional[int] = None,
         max_results_per_source: Dict[str, int] = None,
-        openalex_email: str = None,
         openalex_api_key: str = None,
         enable_semantic_scholar: bool = True,
         semantic_scholar_api_key: str = None,
@@ -68,7 +67,6 @@ class SearchAgent:
             max_results: 旧配置兼容字段。日报扫描不按数量截断，始终处理
                 时间窗口内的全部论文。
             max_results_per_source: 旧配置兼容字段；不作为日报抓取预算。
-            openalex_email: OpenAlex 礼貌池邮箱
             openalex_api_key: OpenAlex API Key
             enable_semantic_scholar: 是否启用 Semantic Scholar TLDR
             semantic_scholar_api_key: Semantic Scholar API Key
@@ -90,7 +88,6 @@ class SearchAgent:
         # configured time window instead of treating them as an item budget.
         self.max_results = max_results
         self.max_results_per_source = max_results_per_source or {}
-        self.openalex_email = openalex_email
         self.openalex_api_key = openalex_api_key
         self.use_legacy_history_filter = bool(use_legacy_history_filter)
         self.extra_source_definitions = validate_source_definitions(extra_source_definitions or [])
@@ -256,7 +253,6 @@ class SearchAgent:
                 "history_dir": self.history_dir,
                 "journals": journal_codes,
                 "journal_catalog": self.journal_catalog,
-                "email": self.openalex_email,
                 "api_key": self.openalex_api_key,
             }
             if not self.use_legacy_history_filter:

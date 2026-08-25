@@ -144,7 +144,6 @@ class BackfillPipelineTests(unittest.TestCase):
                 "PRIMARY_KEYWORD_WEIGHT": 1.0,
                 "SCORE_STRATEGY": "legacy_weighted_keyword_v1",
                 "HISTORY_DIR": root / "history",
-                "OPENALEX_EMAIL": "",
                 "OPENALEX_API_KEY": "",
                 "ENABLE_SEMANTIC_SCHOLAR_TLDR": False,
                 "SEMANTIC_SCHOLAR_API_KEY": "",

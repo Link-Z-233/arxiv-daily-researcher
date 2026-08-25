@@ -55,7 +55,6 @@ class OpenAlexSource(BasePaperSource):
         history_dir: Path,
         journals: List[str] = None,
         max_results: int = 100,
-        email: str = None,
         api_key: str = None,
         journal_catalog: Optional[Dict[str, Dict[str, Any]]] = None,
         load_legacy_history: bool = True,
@@ -67,15 +66,13 @@ class OpenAlexSource(BasePaperSource):
             history_dir: 历史记录存储目录
             journals: 要抓取的期刊代码列表，如 ["prl", "pra"]
             max_results: 兼容旧配置的参数。日报抓取不按数量截断，始终扫描时间窗口内的全部结果。
-            email: 用户邮箱（用于礼貌池，提高速率限制）
-            api_key: OpenAlex API Key（可选，2026年2月后必需）
+            api_key: OpenAlex API Key（可选；免费 Key 可提高每日额度）
         """
         super().__init__(
             "openalex", history_dir, load_legacy_history=load_legacy_history
         )
         self.journals = journals or []
         self.max_results = max_results
-        self.email = email
         self.api_key = api_key
         self.journal_catalog = journal_catalog or OPENALEX_JOURNAL_CATALOG
 
@@ -85,6 +82,11 @@ class OpenAlexSource(BasePaperSource):
                 "User-Agent": "ArxivDailyResearcher/2.0 (https://github.com/yzr278892/arxiv-daily-researcher; yzr278892@gmail.com)"
             }
         )
+        if api_key:
+            # The official API supports a bearer token as an alternative to
+            # ``api_key`` in the query string.  Keep a secret out of request
+            # URLs, which can otherwise be retained by proxy/debug logs.
+            self.session.headers.update({"Authorization": f"Bearer {api_key}"})
 
     def __enter__(self):
         """支持上下文管理器"""
@@ -380,12 +382,7 @@ class OpenAlexSource(BasePaperSource):
 
         url = f"{self.API_BASE_URL}/works"
 
-        # 添加邮箱或API Key到基础参数
         base_params = {}
-        if self.api_key:
-            base_params["api_key"] = self.api_key
-        elif self.email:
-            base_params["mailto"] = self.email
 
         # Daily fetches must exhaust the date window.  ``max_results`` remains
         # an API-compatible constructor field for older configurations, but it
@@ -396,7 +393,7 @@ class OpenAlexSource(BasePaperSource):
         # paging is therefore required here: a busy journal or a wider retry
         # window must not silently stop at that API limit.
         page = 0
-        per_page = 200  # OpenAlex 的单页上限
+        per_page = 100  # OpenAlex documented per-page maximum
         api_total = 0
         cursor = "*"
         seen_cursors = set()

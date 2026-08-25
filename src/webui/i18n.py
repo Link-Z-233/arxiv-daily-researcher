@@ -253,10 +253,6 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "可选的 API 密钥，用于增强功能。",
         "en": "Optional API keys for enhanced features.",
     },
-    "openalex_email_label": {
-        "zh": "OpenAlex 联系邮箱（可选）",
-        "en": "OpenAlex contact email (optional)",
-    },
     "s2_api_key_label": {
         "zh": "Semantic Scholar API Key",
         "en": "Semantic Scholar API Key",

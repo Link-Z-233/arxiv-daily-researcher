@@ -81,7 +81,6 @@ def _pipeline_overrides(root: Path, db_path: Path, report_path: Path, reporter_l
         "PRIMARY_KEYWORD_WEIGHT": 1.0,
         "SCORE_STRATEGY": "legacy_weighted_keyword_v1",
         "HISTORY_DIR": root / "history",
-        "OPENALEX_EMAIL": "",
         "OPENALEX_API_KEY": "",
         "ENABLE_SEMANTIC_SCHOLAR_TLDR": False,
         "SEMANTIC_SCHOLAR_API_KEY": "",

@@ -184,7 +184,6 @@ ENV_FIELDS = [
     ("SMART_LLM__MODEL_NAME", "High-perf LLM Model", False, "gpt-4o"),
     ("SMART_LLM__TEMPERATURE", "High-perf LLM Temperature", False, "0.3"),
     # Third-party APIs
-    ("OPENALEX_EMAIL", "OpenAlex Email", False, ""),
     ("OPENALEX_API_KEY", "OpenAlex API Key", True, ""),
     ("SEMANTIC_SCHOLAR_API_KEY", "Semantic Scholar API Key", True, ""),
     ("MINERU_API_KEY", "MinerU API Key", True, ""),
@@ -337,6 +336,9 @@ def read_env(path: Optional[Path] = None) -> Dict[str, str]:
     return result
 
 
+_DEPRECATED_ENV_KEYS = frozenset({"OPENALEX_EMAIL"})
+
+
 def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
     """
     Write .env file using .env.example as structural template.
@@ -347,6 +349,10 @@ def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
     if path is None:
         path = DEFAULT_ENV_PATH
     path = Path(path)
+    # ``mailto`` no longer participates in OpenAlex authentication or quota
+    # allocation.  Drop a legacy value on the next normal panel/wizard save
+    # instead of perpetuating a misleading personal-data setting.
+    values = {key: value for key, value in values.items() if key not in _DEPRECATED_ENV_KEYS}
 
     # Backup existing
     if path.exists():
@@ -1447,26 +1453,20 @@ def validate_mineru_connection(api_key: str) -> Tuple[bool, str]:
         return False, f"⚠️ 无法连接 MinerU API: {e}"
 
 
-def validate_openalex_connection(api_key: str, email: str = "") -> Tuple[bool, str]:
+def validate_openalex_connection(api_key: str) -> Tuple[bool, str]:
     """Test OpenAlex with one inexpensive, read-only API request.
 
     OpenAlex officially accepts either an ``Authorization: Bearer`` header or
     an ``api_key`` query parameter.  Use the header here so a diagnostic
     request never puts the credential in a URL that a proxy/logger could
-    retain.  The normal source still follows the provider's documented query
-    parameter form.
+    retain.  The normal source uses the same header-based form.
     """
     import urllib.error as urlerr
     import urllib.parse as urlparse
     import urllib.request as urlreq
 
     clean_key = (api_key or "").strip()
-    clean_email = (email or "").strip()
     params = {"per-page": "1", "select": "id"}
-    if not clean_key and clean_email:
-        # Retain the user's contact information on anonymous diagnostics,
-        # matching the source's normal request behavior.
-        params["mailto"] = clean_email
 
     request = urlreq.Request(
         "https://api.openalex.org/works?" + urlparse.urlencode(params),

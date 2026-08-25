@@ -260,11 +260,6 @@ def render(env_values: dict, _config_values: dict):
         unsafe_allow_html=True,
     )
     st.markdown(f'<p class="hint-text">{t("openalex_section_hint")}</p>', unsafe_allow_html=True)
-    st.text_input(
-        t("openalex_email_label"),
-        value=env_values.get("OPENALEX_EMAIL", ""),
-        key="openalex_email",
-    )
     render_secret_input(
         st,
         label=t("openalex_api_key_label"),
@@ -285,7 +280,6 @@ def render(env_values: dict, _config_values: dict):
 
             ok, msg = validate_openalex_connection(
                 resolve_secret_value(env_values, "OPENALEX_API_KEY", "openalex_key", st.session_state),
-                st.session_state.get("openalex_email", env_values.get("OPENALEX_EMAIL", "")),
             )
         if ok:
             st.success(msg)
@@ -366,7 +360,6 @@ def collect(env_values: dict, _config_values: dict) -> dict:
         "SMART_LLM__TEMPERATURE": current_env(
             "smart_temperature", "SMART_LLM__TEMPERATURE", "0.3"
         ),
-        "OPENALEX_EMAIL": current_env("openalex_email", "OPENALEX_EMAIL"),
         "OPENALEX_API_KEY": resolve_secret_value(
             env_values, "OPENALEX_API_KEY", "openalex_key", st.session_state
         ),

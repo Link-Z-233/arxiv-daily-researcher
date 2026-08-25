@@ -53,8 +53,8 @@ def _arxiv_metadata(arxiv_id: str, journal_code: str, journal_name: str, doi: st
 
 class OpenAlexFetchTests(unittest.TestCase):
     def test_daily_scan_is_cursor_paginated_and_not_limited_by_max_results(self):
-        first_page = [_work(index) for index in range(200)]
-        second_page = [_work(index) for index in range(200, 201)]
+        first_page = [_work(index) for index in range(100)]
+        second_page = [_work(index) for index in range(100, 101)]
         requests = []
 
         def fake_api_request(_url, params):
@@ -70,17 +70,29 @@ class OpenAlexFetchTests(unittest.TestCase):
             source._api_request = fake_api_request
             papers = source.fetch_papers(days=1)
 
-        self.assertEqual(len(papers), 201)
+        self.assertEqual(len(papers), 101)
         self.assertEqual([request["cursor"] for request in requests], ["*", "next-page"])
-        self.assertTrue(all(request["per-page"] == 200 for request in requests))
+        self.assertTrue(all(request["per-page"] == 100 for request in requests))
         self.assertTrue(all("page" not in request for request in requests))
 
     def test_missing_continuation_on_full_page_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = OpenAlexSource(Path(temp_dir), journals=["prl"])
-            source._api_request = lambda _url, _params: {"results": [_work(i) for i in range(200)]}
+            source._api_request = lambda _url, _params: {"results": [_work(i) for i in range(100)]}
             with self.assertRaisesRegex(OpenAlexFetchError, "next_cursor"):
                 source.fetch_papers(days=1)
+
+    def test_api_key_uses_authorization_header_not_query_parameter(self):
+        requests = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = OpenAlexSource(
+                Path(temp_dir), journals=["prl"], api_key="test-key"
+            )
+            source._api_request = lambda _url, params: requests.append(params.copy()) or {"results": []}
+            source.fetch_papers(days=1)
+
+        self.assertEqual(source.session.headers.get("Authorization"), "Bearer test-key")
+        self.assertNotIn("api_key", requests[0])
 
     def test_second_journal_failure_does_not_return_partial_first_journal_results(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -307,7 +319,6 @@ class OpenAlexFetchTests(unittest.TestCase):
                 CORE_RELEVANCE_THRESHOLD=6.0,
                 CORE_KEYWORD_MIN_SCORE=8.0,
                 HISTORY_DIR=Path(temp_dir) / "history",
-                OPENALEX_EMAIL="",
                 OPENALEX_API_KEY="",
                 ENABLE_SEMANTIC_SCHOLAR_TLDR=False,
                 SEMANTIC_SCHOLAR_API_KEY="",
@@ -380,7 +391,6 @@ class OpenAlexFetchTests(unittest.TestCase):
                 CORE_RELEVANCE_THRESHOLD=6.0,
                 CORE_KEYWORD_MIN_SCORE=8.0,
                 HISTORY_DIR=Path(temp_dir) / "history",
-                OPENALEX_EMAIL="",
                 OPENALEX_API_KEY="",
                 ENABLE_SEMANTIC_SCHOLAR_TLDR=False,
                 SEMANTIC_SCHOLAR_API_KEY="",
