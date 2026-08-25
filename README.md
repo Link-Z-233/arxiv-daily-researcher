@@ -2,773 +2,280 @@
 
 # 🔬 ArXiv Daily Researcher
 
-**基于 LLM 的智能学术论文监控、筛选、深度分析与趋势研究系统**
+**面向个人研究者的可恢复论文研究工作流：抓取、筛选、分析、报告、归档与通知。**
 
-[![Version](https://img.shields.io/badge/version-4.0-brightgreen.svg)](CHANGELOG.md)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Supported-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
-[![Streamlit](https://img.shields.io/badge/Config_Panel-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](#️-streamlit-配置面板)
-[![English](https://img.shields.io/badge/README-English-blue.svg)](README_EN.md)
+[![Version](https://img.shields.io/badge/version-v4.0-2563eb?style=flat-square)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-16a34a?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12+-facc15?style=flat-square)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/docker-compose-2496ed?style=flat-square)](docker-compose.yml)
 
-*每天接收高质量论文摘要；一行命令纵览一年研究趋势；一个面板完成配置、运行、预览与排障。*
+[English](README_EN.md) · [更新日志](CHANGELOG.md) · [问题反馈](https://github.com/yzr278892/arxiv-daily-researcher/issues)
 
 </div>
 
----
+> [!IMPORTANT]
+> v4.0 的唯一日常历史系统是 SQLite。`data/history/*_history.json` 不再参与每日运行、同步或双写；它仅作为 v3.2 旧历史导入功能的输入。
 
-ArXiv Daily Researcher 会自动从 **ArXiv** 与**可声明扩展的期刊源**（PRL、PRA/PRB、Nature、Science、Hugging Face Papers 等）抓取论文，利用可配置的关键词权重评分系统筛选相关工作，下载 PDF 进行深度分析，跟踪关键词演变趋势，生成 Markdown / HTML 报告，并将结果推送到多种通知渠道。所有论文身份、阶段状态与交付历史持久化在 **SQLite** 中：同一版本只交付一次、新版本自动重新推送、中断后可从队列续跑。
+ArXiv Daily Researcher 不只是“每天抓几篇论文”。它把一次研究任务拆为可审计、可恢复的状态：先完整扫描并登记候选，再按规则评分、翻译与分析，确认报告已落盘后才提交交付记录和通知。网络、LLM、通知或 WebDAV 的单点波动不会让已经完成的论文重复推送，也不会静默丢掉未完成项。
 
-当前版本支持：
-- **每日研究模式**：面向日常监控与高相关论文追踪（默认每天 12:00，可配置）
-- **趋势研究模式**：面向指定主题的中长期趋势洞察
-- **Streamlit 可视化面板**：12 个 Tab 覆盖配置、运行、进度、收藏、检索、预览与排障
-- **每日 0 点静默关键词维护**：LLM 批量标准化与趋势报告独立于主流程执行
+## ✨ v4.0 一览
 
----
+| 你关心的事 | v4.0 的处理方式 |
+| :-- | :-- |
+| 每天的新论文会漏吗？ | 每日报固定回看最近 3 天；arXiv 同时扫描提交和更新并完整分页。扫描收据与水位线让失败窗口在下一次自动扩大恢复。 |
+| 一次论文太多怎么办？ | 所有候选先写入 SQLite；“本次最多处理论文数”只限制评分/分析，不截断抓取。`0` 表示不限量，剩余项会持久排队。 |
+| 同一篇论文重跑会重复吗？ | 以 `(source, canonical_id, version)` 精确去重；arXiv 新版本是新的可交付版本，旧版本不会被覆盖。 |
+| LLM 或 PDF 解析失败怎么办？ | 成功阶段保留，失败阶段带安全错误信息留在待重试队列；不把不完整论文交付为日报。 |
+| v3.2 历史如何迁入？ | 一键读取 JSON 与 HTML，等待其他任务空闲后执行；最新分析优先、缺失可重试、自动时间段回扫与补充报告。 |
+| 过去某段时间的日报如何补？ | 日期范围进入持久队列，按天逐篇运行完整流程；同一天超过上限会自动续跑。 |
+| 怎么保障数据和通知？ | SQLite 一致性 gzip 备份、本地可配置保留期、WebDAV 增量归档、SQLite notification outbox 与多平台结果通知。 |
 
-## ✨ 核心功能
+## 📑 导航
 
-<table>
-<tr>
-<td colspan="2" align="center"><sub>— 数据获取 & 智能筛选 —</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 📡 多数据源抓取
-
-核心来源为 **ArXiv**（官方 API、完整分页、提交+更新双查询）与 PRL；其余来源（PRA/PRB、Nature、Science、Hugging Face Papers 等）为**默认关闭的声明式 JSON 定义**，面板下拉勾选即可启用。期刊论文若存在 ArXiv 版本，自动切换到 ArXiv 获取更完整摘要与 PDF。可选接入 **Semantic Scholar** 补充引用数与 AI TLDR。任一来源扫描失败即判定本次运行失败，水位线只在完整运行后推进。
-
-</td>
-<td width="50%" valign="top">
-
-### 🎯 三种评分策略
-
-`CHEAP_LLM` 对每篇论文按关键词逐项评分（0–10）：
-
-- **v1 加权评分**：关键词权重总和 + 专家作者加分 + 动态及格线
-- **核心相关度 V2**：面向核心相关性的改进评分
-- **学习模式（`learned_preference_v1`）**：在 v1 之上叠加由收藏/不喜欢（强信号）与及格历史（弱信号）持续学习的关键词/作者修正库，单项限幅、整体衰减，学习影响始终低于直接配置的关键词
-
-</td>
-</tr>
-<tr>
-<td colspan="2" align="center"><sub>— 深度分析 & 知识积累 —</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🔍 深度 PDF 分析
-
-通过筛选的论文自动下载 PDF，由 `SMART_LLM` 提取 **研究方法、创新点、技术栈、关键结论、局限性、研究关联、未来方向** 七个维度。支持 **PyMuPDF 本地解析（默认）**与 **MinerU 云端解析**双模式，MinerU 不可用时自动降级。报告中标注 TLDR 是否来自全文解析。
-
-</td>
-<td width="50%" valign="top">
-
-### 📈 关键词趋势追踪
-
-评分阶段提取的关键词写入 SQLite，**每天 0 点由独立 cron 任务静默完成 LLM 批量标准化**（同义归并、缩写展开、拼写统一），不占用主流程时间；按频率（每日/每周/每月）生成含彩色柱状图与趋势热图的独立 HTML 报告。
-
-</td>
-</tr>
-<tr>
-<td colspan="2" align="center"><sub>— 趋势研究 & 成本可观测 —</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🔬 趋势研究模式
-
-独立的 `trend_research` 模式支持指定关键词、日期范围与 **ArXiv 全分类下拉过滤**（153 个一级分类按字母序），批量检索相关论文，逐篇生成 TLDR，并由 `SMART_LLM` 单次综合分析热点话题、时间演变、核心研究者、研究空白与方法论趋势。支持自定义深度分析提示词模板。
-
-</td>
-<td width="50%" valign="top">
-
-### 📊 Token 消耗追踪
-
-线程安全 Token 计数器统计各模型输入/输出消耗，持久化到 SQLite（成功/失败/中断的运行均保留）。「数据分析」页提供当日/近 30 天汇总、近一月热力图、静态自适应折线图与按模型汇总，数据永久保留。
-
-</td>
-</tr>
-<tr>
-<td colspan="2" align="center"><sub>— 报告输出 & 收藏反馈 —</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 📄 双格式报告与收藏偏好
-
-每日研究 / 趋势研究 / 关键词趋势三类报告，Markdown（适合归档）与 HTML（浏览器阅读、KaTeX 公式渲染）可独立开关。报告预览卡片内可直接 👍/👎 标记论文（无闪屏、实时落库）；「收藏与检索」页按时间列出收藏论文（标题超链接直达 arXiv）并统计收藏关键词与高产作者。
-
-</td>
-<td width="50%" valign="top">
-
-### 🔎 论文全量检索
-
-基于 SQLite 元数据的历史检索：标题/作者/摘要/TLDR/提取关键词匹配，支持来源、处理日期范围、最低总分、只看收藏过滤，分页浏览。数据永久存档，存量随时间增长也不怕找不到。
-
-</td>
-</tr>
-<tr>
-<td colspan="2" align="center"><sub>— 历史迁移 & 补跑 —</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 📜 旧历史导入 + 时间段扫描
-
-从 v3.x 升级时，「数据管理」页一键**读取旧历史**：v3.2 的历史 JSON 与全部 HTML 报告卡解析写入 SQLite（含评分、翻译、深度分析），重复分析以最新覆盖，缺失数据记入待补清单；随后自动按旧历史覆盖的日期范围**分块回扫 arXiv**，找出当年漏掉的论文。任务在空闲时自动排队执行，不打扰正在运行的每日研究；整批可重复执行且幂等。
-
-</td>
-<td width="50%" valign="top">
-
-### 🧩 补充报告 + 过去日报
-
-读取旧历史完成后，待补清单（缺失数据 + 遗漏论文）会自动汇总并重跑一次每日研究流程，生成格式与日报一致的**补充报告**（单次篇数受「本次最多处理论文数」约束）；「每日推送」页可选择一个过去**日期范围**，把每一天按队列顺序逐日补跑。报告时间戳为过去日期 + 本次运行时刻，与历史报告一起按时间线排列，都出现在「报告查看 → 每日研究」下。
-
-</td>
-</tr>
-<tr>
-<td colspan="2" align="center"><sub>— 配置管理 & 部署运维 —</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🧙 交互式配置向导 + 面板
-
-首次部署可通过 6 步 CLI 向导完成初始化（Docker 首次部署自动触发）；日常使用 **Streamlit 面板**（12 Tab）调参、立即运行、查看进度与日志、预览报告。保存未浏览的页面时保留磁盘现值，不会误覆盖。
-
-</td>
-<td width="50%" valign="top">
-
-### 🛡️ 生产级可靠性
-
-**SQLite 持久化队列**（中断续跑、失败论文优先重试、单次处理上限防首次部署洪峰）、**原子交付**（报告落盘后单事务提交交付/通知/维护任务）、**共享 LLM 超时与重试策略**（单请求超时 + 指数退避 + 抖动 + Retry-After 遵从，认证类错误快速失败）、**arXiv 限流指数退避与跨领域冷却**、**无进展看门狗**、**文件锁防重并发**、**gzip 数据库备份**（本地当天保留全部副本；昨天及更早每天仅留最新一份，再按可配置保留天数清理，默认 7 天；填 0 不按天数过期；WebDAV 增量、远端永不删除）、**网络代理**（按服务粒度）。
-
-</td>
-</tr>
-</table>
-
----
-
-## 📑 导航目录
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### 📘 快速上手
-
-|           章节           | 简介                        |
-| :----------------------: | :-------------------------- |
-| [✨ 核心功能](#-核心功能) | 核心能力总览                |
-| [🚀 快速开始](#-快速开始) | 三步完成首次运行            |
-| [🛠️ 配置工具](#️-配置工具) | CLI 向导 + Streamlit 面板   |
-| [🐳 部署方式](#-部署方式) | Docker / Actions / 本地定时 |
-
-</td>
-<td width="50%" valign="top">
-
-### 📗 深入了解
-
-|            章节            | 简介                         |
-| :------------------------: | :--------------------------- |
-|  [📖 功能详解](#-功能详解)  | 运行模式、报告、通知、锁机制 |
-|  [📁 项目结构](#-项目结构)  | 目录与模块说明               |
-|  [❓ 常见问题](#-常见问题)  | 11 个实战排障与深度使用指南  |
-| [📝 更新日志](CHANGELOG.md) | 完整版本变更历史             |
-
-</td>
-</tr>
-</table>
-
----
+- [快速开始](#-快速开始)
+- [运行模型：从扫描到交付](#-运行模型从扫描到交付)
+- [WebUI 与截图](#-webui-与截图)
+- [数据源、评分与分析](#-数据源评分与分析)
+- [历史导入、补充报告与过去日报](#-历史导入补充报告与过去日报)
+- [通知、备份与可观测性](#-通知备份与可观测性)
+- [部署、升级与命令行](#-部署升级与命令行)
+- [复杂问题排查](#-复杂问题排查)
 
 ## 🚀 快速开始
 
-### 第一步：克隆与安装
+### Docker（推荐）
+
+需要 Docker Engine 与 Docker Compose v2。项目会启动两个容器：长期运行的 worker（cron、队列监听、研究任务）与只绑定本机的 Streamlit WebUI。
 
 ```bash
 git clone https://github.com/yzr278892/arxiv-daily-researcher.git
 cd arxiv-daily-researcher
-python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements-core.txt              # 面板额外需要 requirements-webui.txt
-```
 
-### 第二步：完成配置
-
-推荐先运行交互式配置向导：
-
-```bash
-python src/utils/setup_wizard.py
-```
-
-向导会引导你完成 LLM 配置、搜索参数、数据源选择、关键词与研究背景、评分参数、通知渠道与高级设置，完成后自动生成 `.env` 与 `configs/config.json`（JSONC，支持手写注释，面板保存时会回注保留）。
-
-> [!TIP]
-> 若已有配置，向导会预填已有值；只需修改想变更的字段，其余按 Enter 保留。
-
-<details>
-<summary><b>手动配置（跳过向导）</b></summary>
-
-**1）复制环境变量模板：**
-
-```bash
 cp .env.example .env
+# 至少填写 CHEAP_LLM 与 SMART_LLM 的 API Key / Base URL / Model
+
+docker compose up -d --build
+docker compose ps
 ```
 
-**2）填写 LLM：**
+打开 <http://127.0.0.1:8503>，在 WebUI 完成其余配置。面板默认只监听本机；如需远程访问，请放在带认证的反向代理或 VPN 后面，而不是直接暴露端口。
 
-```env
-CHEAP_LLM__API_KEY=sk-your-key
-CHEAP_LLM__BASE_URL=https://api.openai.com/v1
-CHEAP_LLM__MODEL_NAME=gpt-4o-mini
+首次建议做一个小规模验证：在「每日推送 → 每日研究设置」把“本次最多处理论文数”临时设为 `5`，点击“立即运行”，确认报告、SQLite、通知和日志都符合预期后再改回 `0`（处理全部）或你的日常上限。
 
-SMART_LLM__API_KEY=sk-your-key
-SMART_LLM__BASE_URL=https://api.openai.com/v1
-SMART_LLM__MODEL_NAME=gpt-4o
-```
-
-**3）填写核心关键词与领域：**
-
-```jsonc
-{
-  "keywords": {
-    "primary_keywords": {
-      "weight": 1.0,
-      "keywords": ["quantum error correction", "surface code"]
-    },
-    "research_context": "我的研究方向是容错量子计算与量子纠错码"
-  },
-  "target_domains": {
-    "domains": ["quant-ph"]
-  }
-}
-```
-
-</details>
-
-### 第三步：运行
+### 本地运行
 
 ```bash
-# 每日研究模式（默认）
+python -m venv venv
+source venv/bin/activate                 # Windows: venv\Scripts\activate
+pip install -r requirements-core.txt
+pip install -r requirements-webui.txt    # 需要 WebUI 时
+
+cp .env.example .env
 python main.py
-
-# 趋势研究模式
-python main.py --mode trend_research --keywords "quantum error correction"
 ```
 
-运行结果默认输出到：
-- 报告：`data/reports/`
-- 日志：`logs/`
+也可使用 `scripts/run_daily.sh`、`scripts/run_daily.ps1` 或 `scripts/run_daily_mac.sh`。本地定时任务和 WebUI 配置方式见后文；生产自托管更建议使用 Compose，以免 worker、日志与共享队列的路径不一致。
 
----
+## 🧭 运行模型：从扫描到交付
 
-## 🛠️ 配置工具
+### 每日研究
 
-本项目提供两种主要配置方式：**CLI 配置向导**与 **Streamlit 配置面板**。
+默认工作流固定回看最近 3 天；它不再提供“搜索最近 N 天”配置。需要处理更早日期时，请使用“过去日报”队列，而不是把日常扫描窗口无限扩大。
 
-### 🧙 交互式配置向导
+1. **准备与互斥**：取得运行锁，等待旧历史导入等独占任务结束，加载关键词、数据源和上次成功扫描水位线。
+2. **完整扫描并登记**：arXiv 按分类查询首次提交和最后更新，完整分页；额外来源也写入终态扫描收据。所有候选先进入 SQLite。
+3. **恢复优先队列**：失败或缺失阶段的论文优先于普通新候选。正数上限只限制本轮下游处理量；未处理项不丢失。
+4. **评分与内容处理**：按策略筛选，生成中文摘要；对需要深度分析且可获取 PDF 的合格论文做 PDF 解析和 SMART_LLM 分析。
+5. **报告与原子交付**：报告文件存在且非空后，论文交付账本、运行状态、通知 outbox、扫描水位线和后续维护项一起提交。通知或 WebDAV 短暂失败不会把论文重新变成“新论文”。
+6. **后处理**：自动备份 SQLite、按配置触发 WebDAV 增量同步、补发旧通知，并更新数据分析页的用量/健康信息。
 
-适合首次部署、SSH 环境与无头服务器：
-
-```bash
-python src/utils/setup_wizard.py
+```text
+完整扫描 → SQLite 候选队列 → 评分/翻译/分析 → 报告落盘
+    ↑             │                    │                 │
+    └──── 水位线恢复 └── 失败留队重试 ───┴── 原子交付 + 通知 outbox
 ```
 
-| 步骤  | 内容     | 说明                                      |
-| :---: | :------- | :---------------------------------------- |
-|   1   | LLM 配置 | 选择 Provider、填写 API Key、可选连接测试 |
-|   2   | 数据源   | ArXiv 与期刊启用、ArXiv 分类              |
-|   3   | 关键词   | 主关键词、参考 PDF 提取、研究背景         |
-|   4   | 评分     | 基础分、权重系数、作者加分                |
-|   5   | 通知     | 渠道启用与凭据填写                        |
-|   6   | 高级设置 | PDF 解析、并发、日志保留等                |
+### 三类报告
 
-向导写入前会自动备份已有配置到 `.bak` 文件。
+| 报告 | 触发方式 | 时间与排序 |
+| :-- | :-- | :-- |
+| 每日研究 | cron、WebUI“立即运行”或 CLI | 当前运行时间；按文件名时间戳排序。 |
+| 补充报告 | 旧历史导入发现缺数据/遗漏后自动衔接 | 格式与日报相同，标题标注“补充报告”；受本次处理上限约束。 |
+| 过去日报 | WebUI 日期范围或 `backfill_run` | 每个目标日期单独入队；文件名使用“过去日期 + 实际运行时分秒”。 |
 
----
+报告默认输出 HTML 与 Markdown，可分别关闭。每日研究报告位于 `data/reports/daily_research/{html,markdown}/<source>/`；趋势研究与关键词趋势报告分别位于 `trend_research/` 和 `keyword_trend/`。
 
-### 🖥️ Streamlit 配置面板
+## 🖥️ WebUI 与截图
 
-#### 启动方式
+WebUI 提供 12 个页签：每日推送、报告查看、收藏与检索、趋势分析、关键词、数据源、评分、数据分析、通知、数据管理、API、高级设置。保存时会保留未浏览页签的磁盘配置，不会用默认值覆盖它们。
+
+### 每日推送：启动、状态、队列与过去日报
+
+![每日推送状态与过去日报队列](assets/webui_daily_push_v4.png)
+
+状态面板只在有任务运行时自动刷新，显示阶段心跳、队列与日志尾部；可请求停止 WebUI 触发的任务，已完成阶段保留、未完成论文继续待重试。过去日报支持开始/结束日期，不是单日按钮。
+
+### 数据分析：用量、LLM 健康、来源健康与运行诊断
+
+![数据分析中的 LLM 健康面板](assets/webui_analytics_v4.png)
+
+LLM 健康面板不发“探针”请求，也不额外消耗 token；它仅汇总真实任务的最终调用结果。CHEAP_LLM 和 SMART_LLM 分别显示最近调用、连续失败、近 20 次成功率、最近成功时间和脱敏后的失败说明。历史 token 用量、数据源扫描收据与运行诊断同在此页。
+
+### 评分策略
+
+![中文评分策略与策略说明](assets/webui_scoring_v4.png)
+
+策略名称、说明和选项都支持中英双语；保存到配置文件的仍是稳定的策略 ID，因此切换语言不会改变实际行为。
+
+### 数据管理与旧历史导入
+
+![数据库备份设置](assets/webui_data_management_v4.png)
+
+![旧版本历史导入入口](assets/webui_history_import_v4.png)
+
+所有截图均在本地最新 WebUI 生成，未展示 API Key、密码、Webhook、邮箱、内网地址或本机路径。
+
+## 📡 数据源、评分与分析
+
+### 数据源
+
+- **arXiv**：默认主来源。开关开启后配置目标分类、抓取超时与公告延迟重扫；内置 153 个一级分类的可搜索多选。
+- **额外来源**：独立滑动开关。启用后再展开内置来源（PRL、PRA/PRB、Nature/Science、Hugging Face Papers 等）与安全表单化的 OpenAlex 期刊定义。来源定义只允许数据字段，不执行用户粘贴的 Python、import path 或 callback。
+- **OpenAlex**：只有启用额外期刊来源时才调用。可选 API Key 用于更高的官方配额；旧的联系邮箱配置已移除。
+- **Semantic Scholar**：可选 TL;DR/引用信息增强，关闭后不会请求它。它是增强服务，不取代 arXiv 的完整分类扫描。
+
+WebUI 的 API 页为 OpenAlex、Semantic Scholar 与 MinerU 分别提供开关、连接测试和官方控制台链接。供应商配额和政策会变化，部署前应以其官方页面为准；本项目会限速、重试并在认证/参数错误时快速失败。
+
+### 三种评分策略
+
+| 策略 | 资格判断 | 排序与适用场景 |
+| :-- | :-- | :-- |
+| **核心相关性 V2** | 主关键词加权平均相关度达到阈值，且至少一个主关键词强匹配。参考词和作者偏好不能让无关论文通过。 | 推荐新配置。参考关键词、专家作者可作为额外排序信号。 |
+| **加权关键词 V1（兼容）** | 主关键词/参考关键词相关度和作者加分按权重累计，与动态通过线比较。 | 适合延续旧报告或依赖参考关键词的配置。 |
+| **偏好学习 V1** | 以 V1 资格逻辑为基础。 | 收藏/不喜欢和既有 V1 通过记录形成受限、衰减的关键词/作者偏好，用于微调排序；直接配置的关键词始终优先。 |
+
+评分结果带有非敏感审计信息。报告内可一键 👍 / 👎；标记写入 SQLite，清除标记也保留历史状态。收藏与检索页提供论文全库搜索、收藏时间线、关键词统计与作者 Top 列表；长列表超过 10 条使用原生滚动容器。
+
+### LLM、PDF 与关键词
+
+- `CHEAP_LLM` 负责初筛、关键词、翻译和 TLDR；`SMART_LLM` 负责深度分析与趋势总结。两者通过 OpenAI 兼容接口配置，可使用云模型、中转或本地兼容服务。
+- 所有 LLM 客户端共享请求池、超时和指数退避：429、5xx、超时和空正文会重试；401/403/404/400 等不可恢复错误会快速终止并留下安全错误摘要。
+- PDF 解析默认使用本地 **PyMuPDF**。选择 **MinerU** 时才显示其 Token、模型与测试设置；MinerU 不可用时会降级到 PyMuPDF。
+- 参考文献 PDF 关键词提取可单独关闭；关闭后已提取关键词不显示、也不参与评分。关键词较多时使用固定高度原生滚动区域。
+- 每日 0 点的独立关键词维护任务负责批量标准化和可选趋势报告；它失败不会阻断日报，下一次会重新尝试。
+
+### 趋势研究
+
+趋势研究是独立于日报的批量研究模式：指定关键词、日期范围和可选分类后，系统搜集论文、逐篇生成 TLDR，再让 SMART_LLM 对整体主题、时间演变、研究者、空白与方法趋势做综合分析。支持自定义分析提示词、HTML/Markdown 输出和独立成功/失败通知。
+
+## 📜 历史导入、补充报告与过去日报
+
+### v3.2 旧历史导入是一次完整工作流
+
+入口位于「数据管理 → 数据库备份」下方的“读取旧历史”。它只读取旧系统的 JSON 历史和 HTML 日报，之后所有运行都使用 SQLite。
+
+1. **空闲等待与互斥**：任务进入 trigger 队列；每日研究、趋势分析、关键词维护或其他相关任务未空闲时，导入等待而不并发写库。
+2. **解析与合并**：读取 v3.2 JSON 与全部 HTML 卡片，恢复元数据、评分、译文和深度分析。重复分析以时间最新的报告为准；现有 v4 的完整记录不会被较旧数据降级。
+3. **缺失登记与重试**：缺报告卡、缺译文、缺深度分析或无法获取元数据的项目进入补充积压，不会假装完成；下次读取旧历史会再次尝试。
+4. **时间段回扫**：按旧历史涉及日期分块扫描 arXiv，与 SQLite 对照找漏掉的论文，追加到同一补充积压。
+5. **自动补充报告**：导入后自动衔接补充运行，按“本次最多处理论文数”分批走相同评分/翻译/分析/报告流程。成功项出账，剩余项持久保留。
+
+导入、补充、过去日报都是大型任务：各平台通知会发送一个汇总结果；若任务整体完成但某一步有缺失、延后或失败，通知会包含简短的具体问题，而不是整段日志。
+
+### 过去日报队列
+
+在「每日推送 → 过去日报」选择一个过去日期范围并点击“开始运行”。范围内每一天都会写入 `backfill_queue`，由 worker 从早到晚顺序处理：
+
+- 每天只抓取该目标日期的新论文，随后执行完整评分、翻译、可选 PDF 分析和报告生成。
+- 某天因“本次最多处理论文数”未处理完时，同一天自动续跑；单天失败会保留错误并继续后续日期，便于后续重试。
+- 运行中断或容器重启后，未完成日期恢复为待处理，不会把队列误标为成功。
+
+## 🔔 通知、备份与可观测性
+
+### 多平台通知
+
+支持邮件、企业微信、钉钉、Telegram、Slack 与通用 Webhook。通知模板存放于 `configs/templates/`；只在总开关、渠道开关和对应凭据都配置完成时发送。
+
+以下大型任务拥有结果通知：日常研究、趋势研究、旧历史导入（含自动补充）、手动补充报告、过去日报范围队列，以及发现新 GitHub Release 的更新提醒。通知写入 SQLite outbox，渠道暂时不可用时会留待后续补发；失败消息包含发生问题的阶段/摘要，敏感凭据与完整堆栈不会发送出去。
+
+自动更新功能**只检查并通知** GitHub Release，不会拉取代码、覆盖容器或自行重启服务。
+
+### SQLite 备份与 WebDAV
+
+| 项目 | 行为 |
+| :-- | :-- |
+| 本地备份 | 每次每日运行结束创建 SQLite 一致性 gzip 快照。当天保留全部副本；昨天及更早的每一天只保留最新一份。 |
+| 保留期 | WebUI 可设任意非负整数，默认 7 天；`0` 表示不按天数过期。 |
+| WebDAV | 增量上传：数据库内容改变才上传；远端副本从不由本项目删除。配置、SQLite、关键词、报告可分别选择同步。 |
+| 恢复 | 数据管理页可导出 zip，或导入 zip / gz / db。导入会校验并归档旧数据库；先停止正在写库的任务。 |
+
+### 运行安全与可观测性
+
+- 运行锁、共享空闲闸门和 WebUI trigger watcher 防止相互冲突的任务同时写入 SQLite。
+- 每个来源有扫描收据；水位线只有在完整交付后推进。运行诊断展示近期完成率、通过率、通知积压与最近一次扫描。
+- 每次 LLM 最终调用的成功/失败可在“数据分析 → LLM 健康”查看，错误自动脱敏。不会为了健康检查额外产生模型请求。
+- 运行日志区域固定为 800px 高，溢出内容在原生滚动容器中查看；长列表同样限制首屏高度。
+
+## 🐳 部署、升级与命令行
+
+### Compose 运行与维护
 
 ```bash
-# 本地运行
-streamlit run src/webui/config_panel.py
-```
-
-```bash
-# Docker 运行
-docker compose up -d config-panel
-```
-
-浏览器访问：`http://localhost:8501`（Docker 默认仅绑定 `127.0.0.1`）
-
-配置面板与主程序共用同一套 `.env` 和 `configs/config.json`，修改后在下次任务运行时立即生效。侧边栏提供保存、从磁盘重新加载与 **🔄 重启主研究容器**（容器模式下经共享卷请求 worker 重启，重启后按最新配置重装 cron）。
-
-#### 12 个 Tab 页详解
-
-|   #   | Tab              | 功能                                                                                                                                                         |
-| :---: | :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|   1   | **每日推送**     | 一键立即运行每日研究；其下是同级的 **过去日报**（选择日期范围、持久化入队并逐日补跑，按钮为「开始运行」）；再下方为**实时运行状态**（锁/PID + **阶段心跳进度**：准备→抓取→评分翻译→深度分析→生成报告，显示登记/已评分/已分析/失败计数与运行时长，5 秒自动刷新）；停止运行（二次确认）；**每日研究设置**（每日运行时间 / HTML 报告 / Markdown 报告 / 包含所有论文 / 单次处理上限）；运行日志查看器 |
-|   2   | **报告查看**     | 三列展示每日研究 / 趋势研究 / 关键词趋势 HTML 报告，支持预览与前后日期导航；预览卡片内**随手标记**当日论文（喜欢/不喜欢，无闪屏实时落库）                     |
-|   3   | **收藏与检索**   | **收藏的论文**（按时间列出、标题超链接直达 arXiv、👍/👎 统计）+ **关键词统计**（收藏论文关键词频次与高产作者）+ **论文检索**（全量历史元数据检索）             |
-|   4   | **趋势分析**     | 设置关键词、日期范围、**ArXiv 全分类下拉过滤**、排序、最大结果数、TLDR、输出格式与综合分析技能；自定义深度分析提示词（可保存/应用/删除模板），一键启动 / 停止 |
-|   5   | **关键词**       | 研究背景（置顶）、主关键词、参考 PDF 提取（高/中/低重要性三档权重框展示 + 已提取关键词只读列表）、相似度阈值                                                    |
-|   6   | **数据源**       | 数据源开关、额外来源（启用后内置下拉多选 + 自定义新增）、**ArXiv 全分类下拉多选**与抓取超时                                                          |
-|   7   | **评分（评价策略）** | 评分策略（v1 / V2 / 学习模式）、及格线公式、每关键词最高分、作者加分、学习库预览与实时评分预览                                                             |
-|   8   | **数据分析**     | Token 用量（当日/近 30 天汇总、近一月热力图、静态自适应折线图、按模型汇总）、数据源健康（近 20 次扫描收据聚合）、精简运行诊断                                 |
-|   9   | **通知**         | 全局开关、成功 / 失败 / 附件控制、六大渠道配置、SMTP 测试                                                                                                    |
-|  10   | **数据管理**     | 一键导出配置文件（config.json + .env）为 zip；**WebDAV 同步**（手动 / 定时 / 报告后自动）；**数据库备份**（gzip 压缩；本地当天保留全部副本、昨天及更早每天仅留最新一份，再按可配置保留天数清理，默认 7 天，填 0 不按天数过期；WebDAV 增量上传远端永不删除 + 立即备份）；**旧历史导入**（读取旧历史 + 时间段扫描 + 生成补充报告，空闲时自动执行）         |
-|  11   | **API**          | 配置 CHEAP_LLM / SMART_LLM / MinerU，支持连接测试                                                                                                            |
-|  12   | **高级设置**     | PDF 解析模式（默认 pymupdf）、并发、Token 追踪、新版本检测与通知、关键词趋势追踪、重试、日志轮转与运行锁超龄回收、**网络代理**                                    |
-
-### 🖼️ WebUI 界面预览
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/img_en.png" alt="English WebUI" width="100%" />
-      <br />
-      <sub>英文 WebUI 主界面</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/img_noti.png" alt="Notification settings" width="100%" />
-      <br />
-      <sub>中文通知设置界面</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/img_prev.png" alt="Report preview" width="100%" />
-      <br />
-      <sub>中文报告预览界面</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/img_serh.png" alt="Search sources settings" width="100%" />
-      <br />
-      <sub>中文搜索源设置界面</sub>
-    </td>
-  </tr>
-</table>
-
-<details>
-<summary><b>配置向导 vs 配置面板，该用哪个？</b></summary>
-
-| 工具                             | 适用场景                    | 特点                                          |
-| :------------------------------- | :-------------------------- | :-------------------------------------------- |
-| **配置向导** (`setup_wizard.py`) | 首次部署、SSH、无浏览器环境 | CLI 交互、适合初始化、可连接测试              |
-| **配置面板** (`config_panel.py`) | 日常调参、报告预览、排障    | 12 个 Tab，所见即所得，支持运行管理与趋势分析 |
-
-**建议**：首次安装先跑向导，后续日常使用面板更高效。
-
-</details>
-
----
-
-## 🐳 部署方式
-
-### Docker 部署 <sup>推荐</sup>
-
-Docker 是**推荐部署方式**，适合长期后台运行。编排包含两个容器（单镜像双目标构建）：
-- **arxiv-daily-researcher**（worker）：定时任务、触发监听、报告生成；`network_mode: host` 便于直接访问宿主机本地 LLM 服务
-- **arxiv-daily-researcher-config-panel**（WebUI）：Streamlit 面板，仅绑定 `127.0.0.1:8501`，经共享卷与 worker 协作
-
-#### 启动
-
-```bash
-git clone https://github.com/yzr278892/arxiv-daily-researcher.git
-cd arxiv-daily-researcher
-cp .env.example .env
-docker compose up -d
-```
-
-容器内置三条定时任务（时区 `TZ`，默认 `Asia/Shanghai`）：
-
-| 时间       | 任务                                       | 说明                                                         |
-| :--------- | :----------------------------------------- | :----------------------------------------------------------- |
-| 可配置     | 每日研究                                   | `configs/config.json` 的 `daily_research.run_time`（HH:MM，**默认 12:00**），面板「每日推送」页直接调整，容器重启后生效 |
-| `0 0 * * *` | 关键词标准化 + 趋势报告                    | 静默执行，日志写入 `logs/keyword_*.log`，失败不影响日报      |
-| 每分钟 tick | WebDAV 定时同步探测                        | 仅在配置选择定时模式且表达式匹配时真正传输                   |
-
-其余默认行为：
-- `RUN_ON_STARTUP=false`：主容器启动后不立即运行（需要可设为 `true`）
-- `MODE=cron`：定时模式（`run-once` 为单次执行后退出）
-- `SETUP_WIZARD=auto`：首次部署（无 `.env`）自动触发配置向导
-
-> [!NOTE]
-> 每日运行时间**不再由环境变量控制**：修改 `daily_research.run_time` 后点击侧边栏「🔄 重启主研究容器」（或 `docker compose restart arxiv-daily-researcher`）即可重装 cron。
-
-#### 常用命令
-
-```bash
-# 查看运行状态
+# 查看服务与健康状态
 docker compose ps
 
-# 查看日志
-docker compose logs -f
+# 追踪 worker / WebUI 日志
+docker compose logs -f arxiv-daily-researcher
+docker compose logs -f config-panel
 
-# 启动 / 停止 WebUI
-docker compose up -d config-panel
-docker compose stop config-panel
-
-# 容器内直接执行趋势研究
-docker exec -it arxiv-daily-researcher python main.py --mode trend_research \
-  --keywords "quantum error correction" \
-  --date-from 2025-01-01 \
-  --categories quant-ph
-
-# 手动触发一次关键词维护（通常由每日 0 点 cron 自动执行）
-docker exec arxiv-daily-researcher python -m modes.keyword_maintenance
-
-# 停止主服务
-docker compose down
-```
-
-#### 新版本检测与手动更新
-
-在「高级设置」启用**检查新版本并通知**后，worker 会在容器启动后检查一次，并在每天 `09:17`（容器时区）独立检查 GitHub Release；即使当天日报没有运行，也能发现新版本。发现比镜像内 `VERSION` 更新的发布版时，会通过已启用的通知渠道提醒一次。
-
-该功能**只检测和通知**，不会在运行中的容器里 `git pull`、重建镜像或重启服务；这样不会覆盖本地修改，也不会在任务中途替换程序。通知渠道全部不可用时不会把该版本记为“已提醒”，后续检查会自动重试。
-
-源码构建部署的更新方式：
-
-```bash
+# 代码更新后重建并强制使用最新本地镜像
 git pull
 docker compose build
-docker compose up -d
+docker compose up -d --force-recreate
+docker compose ps
 ```
 
-未来若改用托管镜像，则使用：
+worker 使用 `network_mode: host`，因此在 Linux/NAS 上访问宿主机本地 LLM 时，`.env` 中通常可直接填写 `http://127.0.0.1:<port>/v1`。WebUI 通过共享的 `data/`、`logs/`、`configs/` 和 `.env` 与 worker 协作；不要把其中一个容器指向不同的数据目录。
+
+当前仓库提供本地 Compose 构建。GHCR 托管镜像会在 v4.0 功能稳定并正式发布后再启用；在此之前，不应把 `latest` 当作已发布的远端镜像标签。
+
+### 常用 CLI
 
 ```bash
-docker compose pull
-docker compose up -d
+# 默认每日研究
+python main.py
+
+# 趋势研究
+python main.py --mode trend_research \
+  --keywords "quantum error correction" \
+  --date-from 2026-01-01 --date-to 2026-03-31 \
+  --categories quant-ph
+
+# 读取 v3.2 旧历史（会自行等待空闲）
+python main.py --mode legacy_import
+
+# 手动处理现有补充积压
+python main.py --mode supplement_run
+
+# 将过去日期范围写入持久队列并顺序补跑
+python main.py --mode backfill_run \
+  --date-from 2026-01-01 --date-to 2026-01-07
 ```
 
-#### WebUI 立即运行机制
-
-WebUI 通过共享卷中的**原子 JSON 请求队列**请求主容器执行任务（无需 Docker Socket）：
-1. 用户在 WebUI 点击「立即运行」，原子写入 `data/run/webui_triggers/<ts>_<id>.json`
-2. 主容器 `entrypoint.sh` 的 `trigger_watcher` 每 5 秒轮询，`mv` 原子认领请求（防重复执行）
-3. 认领后启动 `python main.py --mode daily_research`，真实 PID 写入 `data/run/webui_triggered.pid`
-4. 运行日志写入 `logs/manual_*.log`；终态（含失败原因摘要）写入 `webui_triggers/status/`
-5. 相同任务已在运行时触发改记为 `skipped_busy`（退出码 75），不伪装成功
-
-重启按钮同样经共享卷投递 `restart_worker.request` 标记，worker 归档标记后向 PID 1 发送 TERM 完成重启。
-
-<details>
-<summary><b>容器环境变量</b></summary>
-
-| 变量             | 默认值          | 说明                                               |
-| :--------------- | :-------------- | :------------------------------------------------- |
-| `TZ`             | `Asia/Shanghai` | 时区（影响所有 cron 时刻）                         |
-| `RUN_ON_STARTUP` | `false`         | 启动时是否立即运行一次（默认否）                   |
-| `MODE`           | `cron`          | `cron` 为定时模式，`run-once` 为单次执行           |
-| `SETUP_WIZARD`   | `auto`          | `auto` 首次自动触发，`true` 强制触发，`false` 跳过 |
-
-> 每日运行时间由 `configs/config.json` 的 `daily_research.run_time` 控制，没有环境变量覆盖项。
-
-</details>
-
-<details>
-<summary><b>使用本地 LLM（Ollama 等）</b></summary>
-
-由于主研究容器使用 `network_mode: host`，可以直接访问宿主机上的本地服务：
-
-```env
-CHEAP_LLM__API_KEY=ollama
-CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
-CHEAP_LLM__MODEL_NAME=qwen2.5:7b
-```
-
-</details>
-
----
-
-### GitHub Actions 云端运行
-
-适合没有常驻服务器的场景。支持两个工作流：
-- `daily-run.yml`：每日研究
-- `trend-research.yml`：手动趋势研究
-
-> [!IMPORTANT]
-> **使用建议**：GitHub Actions 适合简单使用或测试。请遵守 GitHub 使用规则，不要滥用 Actions 资源。`daily-run.yml` 中的定时触发默认是**注释掉的**，需要时再手动启用。**长期生产使用推荐 Docker 部署**。
-
-#### 配置步骤
-
-1. Fork 本仓库
-2. 进入 **Settings → Secrets and variables → Actions**
-3. 配置至少以下 Secrets：
-
-| Secret 名称            | 必填  | 说明                         |
-| :--------------------- | :---: | :--------------------------- |
-| `CHEAP_LLM_API_KEY`    |   ✅   | 低成本 LLM API Key           |
-| `CHEAP_LLM_BASE_URL`   |   ✅   | 低成本 LLM API 地址          |
-| `CHEAP_LLM_MODEL_NAME` |   ✅   | 低成本 LLM 模型              |
-| `SMART_LLM_API_KEY`    |   ✅   | 高性能 LLM API Key           |
-| `SMART_LLM_BASE_URL`   |   ✅   | 高性能 LLM API 地址          |
-| `SMART_LLM_MODEL_NAME` |   ✅   | 高性能 LLM 模型              |
-| 通知相关 Secrets       | 可选  | SMTP / Telegram / Webhook 等 |
-
-#### 手动趋势研究
-
-`trend-research.yml` 支持传入 `keywords`、`date_from`、`date_to`、`categories`、`sort_order`、`max_results`。报告会作为 Artifact 保存 30 天。
-
----
-
-### 本地定时运行（系统 Cron）
-
-如果你不想使用 Docker 或 GitHub Actions，也可以直接使用系统 Cron：
+Docker 中可把上面的 `python main.py ...` 替换为：
 
 ```bash
-crontab -e
-# 每日研究（示例 12:00）+ 每日 0 点关键词维护
-0 12 * * * cd /path/to/arxiv-daily-researcher && ./scripts/run_daily.sh >> /tmp/arxiv-cron.log 2>&1
-0 0 * * * cd /path/to/arxiv-daily-researcher && PYTHONPATH=src python -m modes.keyword_maintenance >> /tmp/arxiv-keyword.log 2>&1
+docker compose exec arxiv-daily-researcher python main.py --mode daily_research
 ```
 
----
+`daily_research.run_time` 在 `configs/config.json` 或 WebUI“每日推送”中设置。修改时间后，点击侧栏“重启主研究容器”或执行 `docker compose restart arxiv-daily-researcher`，让 worker 重装 cron。
 
-## 📖 功能详解
-
-### 🔄 两种运行模式
-
-| 维度     | `daily_research`（默认）       | `trend_research`               |
-| :------- | :----------------------------- | :----------------------------- |
-| 定位     | 每日自动追踪最新论文           | 指定主题的长期趋势分析         |
-| 数据源   | ArXiv + 声明式期刊源           | ArXiv                          |
-| 时间范围 | 固定最近 3 天（+公告延迟回看；过去日期可补跑） | 任意日期区间                   |
-| 筛选方式 | 关键词加权评分（三种策略）     | 无评分，全量保留               |
-| 核心分析 | 高分论文 PDF 深度分析          | 全量 TLDR + 趋势综合分析       |
-| 触发方式 | Cron / Docker / Actions / 面板 | CLI / 面板 / Actions           |
-| 输出路径 | `data/reports/daily_research/` | `data/reports/trend_research/` |
-
-### 📅 每日研究流水线
-
-```text
-1. 准备关键词与动态及格线
-2. 从 ArXiv / 期刊抓取论文（候选先原子登记进 SQLite 队列）
-3. 按队列逐篇评分 + 翻译（跳过已交付的精确版本；新版本重新处理）
-4. 对通过筛选的论文执行 PDF 深度分析
-5. 生成 Markdown / HTML 报告并原子提交交付状态
-6. 发送通知、执行数据库备份与 WebDAV 维护
-```
-
-每个阶段切换都会写入阶段心跳，「每日推送」页实时显示当前阶段（准备/抓取/评分翻译/深度分析/生成报告）与登记/已评分/已分析/失败计数。日报固定回看**最近 3 天**并处理窗口内全部新论文（失败后水位线自动扩窗重扫，已交付版本由账本去重）；更早日期的新论文通过「过去日报」补跑。单次处理上限 `max_papers_per_run`（默认 200，`0` 不限）防止首次部署的历史论文一次涌入；超出部分留队，失败论文下次优先；补充报告同样受此上限约束。
-
-### 🧩 补跑与历史迁移
-
-- **旧历史导入 + 自动补充报告**（`--mode legacy_import`，面板「数据管理」一键触发）：解析 v3.2 历史 JSON 与全部 HTML 报告写入 SQLite，随后按旧历史日期范围分块回扫 arXiv 找遗漏论文；缺失数据与遗漏论文会在同一工作流中按「本次最多处理论文数」自动分批生成补充报告，直至可处理积压清空。暂时失败的数据会保留，并在下次读取旧历史时重试。
-- **过去日报**（`--mode backfill_run --date-from YYYY-MM-DD --date-to YYYY-MM-DD`）：所选范围的每个日期持久化入队，按日期顺序逐日运行当天的完整每日研究；单天超过处理上限会自动续跑后续批次，单天失败会保留记录但不会阻塞后续日期。报告文件名时间戳 = 过去日期 + 本次运行时分秒，与历史真实报告一起按时间线排列。
-- 上述工作流均在空闲时执行（等待每日研究、趋势分析及维护任务结束后才启动），互不冲突、可恢复、可重跑。
-
-### 🎯 动态及格线公式
-
-```text
-及格线 = base_score + weight_coefficient × Σ(关键词权重)
-```
-
-默认配置中 `base_score = 1.5`、`weight_coefficient = 2.5`，可在「每日推送」Tab 的「每日研究设置」或 `configs/config.json` 中调整。
-
-### 🛡️ LLM 与 arXiv 的重试回退
-
-所有 OpenAI 客户端共享统一的超时/重试边界（`configs/config.json` 的 `llm` 段）：
-
-| 配置                          | 默认  | 说明                                                       |
-| :---------------------------- | :----: | :--------------------------------------------------------- |
-| `llm.timeout_seconds`         |  300   | 单次 LLM HTTP 请求超时                                     |
-| `llm.sdk_max_retries`         |   1    | SDK 层快速重试（连接抖动 / Retry-After）                   |
-| `llm.retry_max_attempts`      |   5    | 应用层最大尝试次数                                         |
-| `llm.retry_min_wait`          |   5    | 指数退避起始等待（秒，带抖动）                             |
-| `llm.retry_max_wait`          |  120   | 指数退避等待上限（秒）                                     |
-
-429/5xx/超时/空响应按瞬态错误指数退避重试；401/403/404/400 等认证或参数错误快速失败，不浪费时间。另有全局请求池限速（`llm_request_pool.requests_per_minute`，默认 30）适配低并发中转。
-
-arXiv 抓取侧：无进展看门狗（默认 180s，持续收到结果则合法延长）、429 指数退避（60→480s）、其他错误线性退避、**遵从响应头 Retry-After**、领域失败后跨领域冷却 60s；关键词搜索与领域扫描共享同一套策略。
-
-### 📡 数据源与 ArXiv 优先策略
-
-- ArXiv：官方 `arxiv` 库，分页间 6 秒限速，提交+更新双查询完整分页
-- 期刊：通过 OpenAlex 获取，声明式定义可在面板启用/自定义
-- 期刊论文存在 ArXiv 版本时优先切换到 ArXiv 元数据与 PDF
-- 可选接入 Semantic Scholar 获取引用数与 AI TLDR
-
-### 🔍 PDF 解析与智能降级
-
-| 模式      | 优点                         | 限制                |
-| :-------- | :--------------------------- | :------------------ |
-| `pymupdf` | 纯本地、零外部依赖（**默认**） | 解析质量受 PDF 影响 |
-| `mineru`  | 结构化效果更好，适合复杂论文 | 需要 Token          |
-
-当 MinerU 不可用时，系统自动降级到 PyMuPDF，避免整次任务失败。
-
-### 🔒 并发运行互斥锁
-
-| 模式             | 锁文件                                 |
-| :--------------- | :------------------------------------- |
-| `daily_research` | `data/run/daily_research.lock`         |
-| `trend_research` | `data/run/trend_research_<hash8>.lock` |
-
-相同任务重复启动时直接安全退出；锁文件写入 PID 与启动时间；支持超龄锁回收（默认 12 小时）；回收失败时保守退出，避免双实例并发。
-
-### 📄 报告系统
-
-| 报告       | 路径                                                    |
-| :--------- | :------------------------------------------------------ |
-| 每日研究   | `data/reports/daily_research/{markdown,html}/<source>/` |
-| 趋势研究   | `data/reports/trend_research/{markdown,html}/<slug>/`（含 metadata.json） |
-| 关键词趋势 | `data/reports/keyword_trend/{markdown,html}/`           |
-
-Markdown / HTML 可独立开关（「每日推送」与「趋势分析」Tab）。每日报告通常包括统计摘要、通过论文详情（含深度分析与全文 TLDR 溯源）、未通过论文列表、关键词趋势图与 Token 消耗统计。
-
-### 🔔 通知系统
-
-支持 **邮件、企业微信、钉钉、Telegram、Slack、通用 Webhook** 六渠道。通知开关分为全局总开关与各渠道独立开关两层；渠道只有在配置已填写且 `enabled=true` 时才会真正发送。通知走 SQLite outbox：失败自动保留待补发，不会因渠道抖动丢消息。
-
----
-
-## 📁 项目结构
-
-```text
-arxiv-daily-researcher/
-├── main.py                          # CLI 入口，按模式分发
-├── .env.example                     # 环境变量模板
-├── requirements-core.txt            # worker 依赖（requirements-webui.txt 为面板依赖）
-├── README.md / README_EN.md
-│
-├── src/
-│   ├── config.py                    # 全局配置加载（.env + JSONC config.json）
-│   ├── scoring_policy.py            # 评分策略（v1 / core_v2 / learned_preference_v1）
-│   ├── modes/
-│   │   ├── daily_research.py        # 每日研究流水线
-│   │   ├── trend_research.py        # 趋势研究流水线
-│   │   └── keyword_maintenance.py   # 每日 0 点静默关键词标准化任务
-│   ├── agents/                      # LLM 分析相关 Agent
-│   ├── sources/                     # ArXiv / OpenAlex / HF Papers / 搜索编排
-│   ├── report/                      # daily / trend / keyword_trend 报告生成
-│   ├── notifications/               # 多渠道通知
-│   ├── parsers/                     # PDF 解析（PyMuPDF / MinerU）
-│   ├── keyword_tracker/             # 关键词追踪与标准化
-│   ├── utils/
-│   │   ├── config_io.py             # JSONC 读写（保留手写注释）
-│   │   ├── daily_research_store.py  # SQLite 状态库（队列/交付/偏好/用量）
-│   │   ├── llm_resilience.py        # 共享 LLM 超时与重试策略
-│   │   ├── llm_request_pool.py      # 全局 LLM 请求限速
-│   │   ├── run_lock.py / webui_trigger.py / backup.py / webdav_sync.py …
-│   └── webui/                       # Streamlit 配置面板
-│       ├── config_panel.py
-│       ├── i18n.py                  # 中英双语
-│       ├── arxiv_categories.py      # 153 个 ArXiv 一级分类目录
-│       ├── report_component/        # 报告预览自定义组件（无闪屏标记）
-│       └── tabs/                    # 12 个 Tab 页模块
-│
-├── configs/
-│   ├── config.json                  # 主配置文件（JSONC）
-│   └── templates/                   # 报告、通知、邮件模板
-│
-├── docker-compose.yml               # 双容器编排（worker + config-panel）
-├── docker/
-│   ├── Dockerfile                   # 多阶段：worker / webui 两个目标
-│   └── entrypoint.sh                # cron 安装 / 触发监听 / 重启处理
-│
-├── VERSION                          # 版本号（用于更新检查）
-├── scripts/                         # 运行脚本与 Makefile
-├── assets/                          # README / WebUI 预览图片
-├── data/                            # 运行数据（SQLite、报告、触发队列；自动创建）
-└── logs/                            # 系统日志与每次运行日志
-```
-
----
-
-## ❓ 常见问题
+## ❓ 复杂问题排查
 
 <details>
-<summary><b>1. WebDAV 连接坚果云总是提示失败（403）怎么办？</b></summary>
+<summary><b>NAS 移动网络、重配 DHCP 或启停 Tailscale 后，容器突然无法解析 <code>export.arxiv.org</code>，这是代码问题吗？</b></summary>
 
-坚果云 WebDAV 服务器**不支持 HTTP HEAD 方法**，而大多数 WebDAV 客户端库使用 HEAD 来检测资源是否存在。本项目已内置兼容处理（使用 PROPFIND 替代 HEAD 进行存在性检查）。
-
-如果仍遇到连接问题，请检查：
-- WebDAV URL 是否以 `https://dav.jianguoyun.com/dav/` 结尾
-- 密码是否为坚果云的**应用专用密码**（在坚果云账户安全设置中生成，而非登录密码）
-- 在 WebUI「数据管理」Tab 中点击「测试连接」确认凭据有效
-</details>
-
-<details>
-<summary><b>2. 趋势分析如何选择合适的参数？</b></summary>
-
-几个关键建议：
-- **日期范围**：初次使用建议 90-180 天，避免范围过大导致结果过多
-- **分类过滤**：使用全分类下拉限定到相关领域（如 `quant-ph · Quantum Physics`），大幅提升精度
-- **输出格式**：Markdown 和 HTML 均可独立开关，在 WebUI 趋势分析 Tab 中直接切换
-- **Skill 选择**：默认 `comprehensive_analysis` 单次覆盖全部五个维度，适合多数场景
-- **max_results**：默认 500，如果结果很多但分析速度慢，可以降低到 200；反之可以提升到 1000
-</details>
-
-<details>
-<summary><b>3. 任务提示"已在运行中"，但我怀疑是残留锁怎么办？</b></summary>
-
-系统已支持多层保护：
-- **死进程残留锁自动清理**：启动时检查 PID 是否存活，不存活则自动回收
-- **超龄锁自动回收**：超过 `run_lock_max_age_hours`（默认 12 小时）的锁会被回收
-- **面板停止**：「每日推送」页运行状态区的停止按钮（二次确认），已完成阶段保留、未完成论文留队
-
-> [!WARNING]
-> 仅在不确定 PID 是否存活时才手动清理锁。如果进程确实在运行，删除锁可能导致重复运行。
-</details>
-
-<details>
-<summary><b>4. Docker 中如何配置和使用本地 LLM（Ollama / vLLM / LocalAI）？</b></summary>
-
-主研究容器默认使用 `network_mode: host`，因此可以直接访问宿主机上的本地 LLM 服务：
-
-```env
-CHEAP_LLM__API_KEY=ollama
-CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
-CHEAP_LLM__MODEL_NAME=qwen2.5:7b
-```
-
-如果使用桥接网络模式（WebUI 容器等），需要将 `127.0.0.1` 换成 `host.docker.internal`（Windows/Mac）或宿主机真实 IP（Linux）。确保本地 LLM 服务已监听 `0.0.0.0` 而非 `127.0.0.1`。
-</details>
-
-<details>
-<summary><b>5. WebUI 的「立即运行」与「重启容器」是如何与主容器协同的？</b></summary>
-
-Docker 模式下采用**共享卷消息机制**，无需 Docker Socket：
-
-- **立即运行**：WebUI 原子写入 `data/run/webui_triggers/<ts>_<id>.json` → 主容器 `trigger_watcher` 每 5 秒轮询并 `mv` 原子认领 → 启动 `python main.py --mode daily_research`（PID 写入 `webui_triggered.pid`，日志写入 `logs/manual_*.log`）
-- **重启容器**：侧边栏「🔄 重启主研究容器」写入 `restart_worker.request` → worker 归档标记后向 PID 1 发送 TERM → 容器重启并按最新配置重装 cron
-- **停止运行**：面板经共享卷向真实 PID 转发 SIGTERM，未完成论文留队待重试
-
-关键是两个容器必须挂载**相同的** `data/` 和 `logs/` 卷。
-</details>
-
-<details>
-<summary><b>6. 如何配置网络代理？代理可以按服务粒度控制吗？</b></summary>
-
-在 WebUI「高级设置」页的网络代理分区或 `configs/config.json` 的 `proxy` 块中配置：
-
-- **全局开关**：`proxy.enabled`
-- **代理地址**：`proxy.url`，支持 HTTP/SOCKS5（如 `http://127.0.0.1:7890`）
-- **服务粒度控制**（`proxy.scope`）：可独立控制 ArXiv、OpenAlex、Semantic Scholar、LLM API、通知、检查更新是否走代理
-
-Docker 注意：`network_mode: host` 模式下用 `127.0.0.1`；桥接模式下 Linux 需 `--add-host=host.docker.internal:host-gateway`。
-</details>
-
-<details>
-<summary><b>7. Docker 报错 <code>NameResolutionError</code> 或无法解析 <code>export.arxiv.org</code> 怎么办？</b></summary>
-
-这通常是 **NAS/宿主机网络、Docker DNS 或 Tailscale DNS 在网络切换后未刷新**，不是论文抓取或项目业务代码错误。典型日志为：
-
-```text
-HTTPSConnectionPool(host='export.arxiv.org', ...)
-... NameResolutionError: Temporary failure in name resolution
-```
-
-先在宿主机和 worker 中分别确认解析是否正常：
+通常不是。`NameResolutionError` / `Temporary failure in name resolution` 表示宿主机、Docker 或 Tailscale 的 DNS 在网络变化后没有刷新；业务层重试不能修复“容器没有任何可用 DNS”。先分别检查宿主机与 worker：
 
 ```bash
 getent hosts export.arxiv.org
@@ -776,147 +283,98 @@ docker exec arxiv-daily-researcher getent hosts export.arxiv.org
 docker exec arxiv-daily-researcher cat /etc/resolv.conf
 ```
 
-移动 NAS、重配路由/DHCP、切换网络或启停 Tailscale 后，优先修复 NAS 的上游 DNS，再重新创建应用容器以让 Docker 重建容器内的 `resolv.conf`：
+先修复 NAS 的上游 DNS，再执行：
 
 ```bash
 docker compose up -d --force-recreate
 ```
 
-若 NAS 的 DHCP DNS 经常不稳定，可在**本机**新增 `docker-compose.override.yml`（避免把某个地区/个人网络的 DNS 固化到项目默认编排）并重新创建容器：
+如果 DHCP DNS 经常不稳定，可在本机新增（不要提交）`docker-compose.override.yml`，为两个服务设置适合所在地网络的 DNS。`100.100.100.100` 只适用于已启用 Tailscale MagicDNS 的环境；它不是通用公共 DNS。
+</details>
 
-```yaml
-services:
-  arxiv-daily-researcher:
-    dns:
-      # 仅在已启用 Tailscale MagicDNS 时保留这一项
-      - 100.100.100.100
-      # 中国大陆网络可用的公共 DNS 备用项；其他地区请改为当地可靠 DNS
-      - 223.5.5.5
-  config-panel:
-    dns:
-      - 100.100.100.100
-      - 223.5.5.5
+<details>
+<summary><b>LLM 显示“未返回可用正文”、任务部分完成或补充队列持续存在，应该如何判断？</b></summary>
+
+先看“数据分析 → LLM 健康”：它展示真实调用的最近终态和脱敏错误。如果是 401/403/404/400，核对模型名、Base URL、API Key 与网关兼容性；如果是 429、5xx、超时或空正文，系统已按全局重试策略尝试，并将未完成论文留在 SQLite 待重试。不要手工把论文标记成完成，也不要直接删数据库行。修复供应商或网络后再运行日报/补充流程即可复用已成功的阶段。
+</details>
+
+<details>
+<summary><b>点击“读取旧历史”后好像没有立即开始，是不是按钮失效？</b></summary>
+
+不一定。导入是独占工作流：当每日研究、趋势研究、关键词维护或相关任务持有活动闸门时，WebUI 只会写入 trigger 队列，worker 空闲后才认领。到“每日推送 → 状态面板 / 运行日志”查看 trigger 状态和 `legacy_import_*.log`。不要同时从 CLI 再启动第二个导入；它们会等待同一空闲闸门，重复点击不会加速。
+</details>
+
+<details>
+<summary><b>旧历史导入如何保证重复覆盖、缺失重试和补充报告正确？</b></summary>
+
+导入按稳定论文身份合并，重复分析按最新报告时间取值；较旧的 v3.2 数据不会降级完整的 v4 行。缺卡、缺译文、缺分析或回扫发现的漏论文进入 `supplement_backlog`，不会被标记为已交付。导入结束后自动触发补充流程，每批受“本次最多处理论文数”限制；无论暂时失败还是因上限延后，积压都会保留，下一次导入/补充可继续。可在 SQLite 备份后检查队列，不建议手改表。
+</details>
+
+<details>
+<summary><b>过去日报范围很大，容器重启或某一天失败后，剩余日期会丢吗？</b></summary>
+
+不会。每一天都是 `backfill_queue` 的持久行，按目标日期顺序认领；中断会把当前日期退回 pending，单日处理上限导致的剩余论文会自动续跑同一天。某天失败会记录错误并继续后续日期，结果通知会汇总失败日期与首个错误。再次从面板或 CLI 启动后，worker 会恢复可运行的条目。
+</details>
+
+<details>
+<summary><b>SQLite 备份很多，WebDAV 又有不同副本，恢复前应怎样操作？</b></summary>
+
+当天的本地快照会全部保留，这是防止一次运行中损坏后覆盖唯一恢复点；昨天及更早每天只留最新一个，再受保留期控制。先停止所有写库任务，使用“数据管理 → 生成导出”做一份当前 zip，然后导入目标 zip/gz/db。WebDAV 是增量归档且远端永不删除，所以恢复后请确认 `daily_research.db`、报告目录和配置范围是否需要一起恢复；不要用不明来源的 `.db` 直接覆盖运行中数据库。
+</details>
+
+<details>
+<summary><b>更新提醒说有新版本，为什么容器没有自己升级？</b></summary>
+
+这是设计如此。自动更新只比较 GitHub Release 并发送通知，不会在无人确认时拉取代码、重建镜像或重启正在研究的容器。阅读 release note、备份 SQLite 后，用上面的 Compose 更新命令完成受控升级；如使用未来 GHCR 镜像，也应固定已验证版本标签而非盲目追随 `latest`。
+</details>
+
+<details>
+<summary><b>“核心相关性 V2”几乎没有论文通过，或者参考词/专家作者让无关论文排在前面，如何理解？</b></summary>
+
+V2 的资格由主关键词的加权内容相关度和至少一个强匹配共同决定；参考关键词与专家作者不能让无关论文获得资格。它们只可用于已合格论文的排序。请确认“关键词”页已配置真正的主关键词，再在“评分”页调整核心相关度阈值和强匹配阈值；若你的研究依赖大量参考文献术语且主关键词尚未整理，可暂时使用兼容的加权关键词 V1。
+</details>
+
+## 📁 项目结构
+
+```text
+arxiv-daily-researcher/
+├── main.py                       # CLI 入口与模式分发
+├── docker-compose.yml            # worker + config-panel
+├── docker/Dockerfile             # 多阶段 worker / webui 镜像
+├── configs/config.json           # JSONC 主配置与调度设置
+├── configs/templates/            # 报告、邮件和通知模板
+├── src/
+│   ├── modes/                    # daily / trend / legacy / backfill 工作流
+│   ├── agents/                   # 评分、关键词、趋势 LLM Agent
+│   ├── sources/                  # arXiv、OpenAlex、HF Papers 等
+│   ├── report/                   # 每日、趋势、关键词趋势报告
+│   ├── notifications/            # 多渠道通知与 outbox
+│   ├── keyword_tracker/          # 关键词标准化与趋势
+│   ├── utils/                    # SQLite、队列、锁、备份、同步、健康检查
+│   └── webui/                    # Streamlit 面板与 i18n
+├── data/                         # SQLite、报告、队列、备份（运行时生成）
+├── logs/                         # 系统与每次任务日志（运行时生成）
+├── assets/                       # README 截图
+└── tests/                        # 回归与工作流测试
 ```
 
-`100.100.100.100` 是 Tailscale 的 MagicDNS 地址，并非通用公共 DNS；未使用 MagicDNS 时应删除它并配置两台适合本地网络的公共/路由器 DNS。项目会对网络请求重试，但当容器没有任何可用 DNS 时，必须由部署环境恢复解析能力。
-</details>
+## 🧪 验证、贡献与许可证
 
-<details>
-<summary><b>8. Markdown 和 HTML 报告有什么区别？可以只生成一种吗？</b></summary>
+```bash
+venv/bin/pytest -q
+docker compose build
+docker compose up -d --force-recreate
+docker compose ps
+```
 
-两者内容相同，格式不同：**Markdown** 适合 Git 版本管理、归档；**HTML** 适合浏览器阅读、分享，含样式与 KaTeX 公式渲染。在「每日推送」Tab 的「每日研究设置」中可独立开关；趋势分析报告的开关在「趋势分析」Tab。
-</details>
+欢迎通过 [Issues](https://github.com/yzr278892/arxiv-daily-researcher/issues) 提交真实复现步骤、日志中已脱敏的错误摘要或功能建议。修改后请保留 AGPL-3.0 的同许可证要求；详见 [LICENSE](LICENSE)。
 
-<details>
-<summary><b>9. 关键词追踪与标准化是什么时候运行的？</b></summary>
-
-1. CHEAP_LLM 在评分阶段自动从论文标题、摘要中提取关键词并写入 SQLite
-2. **每天 0 点**由独立 cron 任务（`modes/keyword_maintenance.py`）静默执行 LLM 批量语义归并（如 "quantum computing" 和 "quantum computation" 合并），失败只记日志、次日自动重试，不影响日报
-3. 按配置频率（每日/每周/每月/始终）生成关键词趋势报告
-
-可在「高级设置」Tab 或 `config.json` 中将 `keyword_tracker.enabled` 设为 `false` 关闭（`keyword_tracker.normalization.enabled` 可单独关闭标准化）。
-</details>
-
-<details>
-<summary><b>10. MinerU PDF 解析和 PyMuPDF 如何选择？MinerU Token 过期了怎么办？</b></summary>
-
-| 场景                           | 推荐模式  |
-| :----------------------------- | :-------- |
-| 无外部依赖、离线环境、长期稳定 | `pymupdf`（默认） |
-| 追求解析质量、处理复杂排版论文 | `mineru`  |
-
-在 WebUI「API」Tab 或「高级设置」Tab 切换。MinerU Token 有效期 3 个月，过期后系统**自动降级**到 PyMuPDF 不会中断运行，并发送错误告警通知；到 [mineru.net](https://mineru.net/apiManage/apiKey) 重新申请 Token 更新即可。
-</details>
-
-<details>
-<summary><b>11. 如何利用 WebDAV 同步在多台设备间共享配置和报告？</b></summary>
-
-WebDAV 同步支持三种模式（在 WebUI「数据管理」Tab 配置）：
-
-| 模式           | 说明                                   |
-| :------------- | :------------------------------------- |
-| **手动**       | 在 WebUI 中点击「上传」或「下载」按钮  |
-| **定时**       | 按 cron 表达式自动执行（如每天 23:00） |
-| **报告后自动** | 每次每日研究报告生成后自动上传         |
-
-同步范围可选：配置文件（config.json）、**新历史数据（SQLite）**、关键词数据、报告文件。旧 `data/history` JSON 只作为 v3.2「读取旧历史」的本地导入输入，不参与常规同步或运行。默认仅同步配置文件。典型用法：主设备设置「报告后自动」上传，辅设备设置「手动」模式，按需下载恢复配置和数据。
-</details>
-
----
-
-## 📜 许可证
-
-本项目采用 [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) 许可证。
-
-| 条款       | 说明                                     |
-| :--------- | :--------------------------------------- |
-| ✅ 使用     | 可自由使用、修改、分发                   |
-| ✅ 商用     | 允许商业使用                             |
-| 📋 源码公开 | 修改后的版本须公开源代码并使用相同许可证 |
-| 🌐 网络使用 | 通过网络提供服务时也须公开源代码         |
-| 📝 声明     | 需保留原始版权声明和许可证               |
-
----
-
-## 💬 社区与反馈
-
-项目持续活跃开发中。欢迎通过以下方式参与：
-
-- **🐛 报告问题**：[GitHub Issues](https://github.com/yzr278892/arxiv-daily-researcher/issues) — 遇到 Bug 或有功能建议，欢迎提交 Issue
-- **🔀 贡献代码**：Fork → 修改 → Pull Request，我们欢迎任何改进
-- **⭐ Star**：如果这个项目对你有帮助，点亮 Star 是对我们最大的鼓励
-
----
-
-## 🤝 API 使用说明
-
-本项目遵循各 API 提供方的使用规范，确保合规调用：
-
-| API                  | 合规措施                                                                |
-| :------------------- | :---------------------------------------------------------------------- |
-| **ArXiv**            | 使用官方 `arxiv` Python 库，内置 6 秒请求延迟、限流指数退避与 Retry-After 遵从 |
-| **OpenAlex**         | 基础查询可匿名使用；免费 `OPENALEX_API_KEY` 将每日额度从 $0.10 提高到 $1，并可在 [用量控制台](https://openalex.org/settings/api) 查看/轮换 Key |
-| **Semantic Scholar** | 大多数端点可匿名调用，但共享额度在繁忙时可能被限流；API Key 初始配额为 1 请求/秒，项目会自动按此节奏请求。可在官方 [申请页](https://www.semanticscholar.org/product/api#api-key-form) 获取 Key |
-| **MinerU**           | 遵守每日 2000 页优先级额度限制，超出后自动降至普通优先级                |
-
-> [!NOTE]
-> 所有外部 API 与 LLM 调用均配有指数退避自动重试（带抖动）与全局请求限速，网络波动与供应商限流不会导致运行中断；认证类错误快速失败并明确记录。
-
----
-
-## 🙏 致谢
-
-- 感谢 [Claude](https://www.anthropic.com/claude) 与 [Claude Code](https://claude.ai/code) 在本项目开发过程中的辅助
-- 感谢 [ArXiv](https://arxiv.org/)、[OpenAlex](https://openalex.org/)、[Semantic Scholar](https://www.semanticscholar.org/) 提供开放学术数据
-- 感谢 [MinerU](https://mineru.net/) 提供云端 PDF 解析能力
-
----
-
-## 📝 更新日志
-
-完整的版本变更历史请查看 **[CHANGELOG.md](CHANGELOG.md)**。
-
-### 最新版本摘要
-
-<table>
-<tr><th>版本</th><th>日期</th><th>类型</th><th>亮点</th></tr>
-<tr><td><b>v4.0</b></td><td>2026-08-23</td><td>🚀 重大更新</td><td>SQLite 日报历史与精确版本交付、持久化待处理队列、arXiv 完整分页与扫描收据、声明式额外数据源、学习模式评分、gzip 数据库备份（本地全量按可配置保留天数自动清理，默认 7 天；填 0 永久保留；WebDAV 增量永不删除）、论文全量检索、收藏与检索独立 Tab（时间轴收藏列表 + arXiv 超链接 + 关键词统计）、ArXiv 全分类下拉、每日运行时间面板化（默认 12:00，纯配置无环境变量）、关键词标准化改为每日 0 点静默任务、长任务阶段进度反馈、共享 LLM 超时/重试强化与 arXiv 退避统一（Retry-After + 跨领域冷却）、侧边栏一键重启 worker、实时运行监控与停止控制、v3.2 旧历史一键导入 + 时间段遗漏扫描 + 补充报告、过去日期日报补跑（报告按文件名时间戳排序）、日报固定 3 天窗口（移除搜索天数配置）、Docker 镜像拆分与安全修复、大规模可靠性加固（fail-closed、原子交付、边界加固）</td></tr>
-<tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ 增强 + 🐛 修复</td><td>网络代理（per-service 粒度）、WebDAV 数据同步（含坚果云兼容修复）、配置一键导出、Docker 更新通知、Markdown/HTML 报告独立开关、趋势分析双开关输出、ArXiv 抓取优化与早停、每日深度分析可配置</td></tr>
-<tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ 增强 + 🐛 修复</td><td>运行管理 Tab、日志查看器升级、趋势分析 Tab、报告查看增强、ArXiv 超时守卫、运行锁超龄回收</td></tr>
-<tr><td><b>v3.0</b></td><td>2026-03-09</td><td>✨ 重大更新</td><td>研究趋势模式、趋势分析 GitHub Actions 工作流、综合趋势分析、Token 追踪、配置向导自动触发、并发运行互斥锁、运行专用日志、Streamlit 配置面板（含报告查看）、关键词趋势 HTML 报告</td></tr>
-</table>
-
-[查看完整更新历史 →](CHANGELOG.md)
-
----
+完整版本历史请查看 [CHANGELOG.md](CHANGELOG.md)。
 
 <div align="center">
 
-如果这个项目对你有帮助，欢迎点一个 **Star** ⭐
+如果这个项目帮助了你的研究，欢迎点一个 Star ⭐
 
 [![Star History Chart](https://api.star-history.com/svg?repos=yzr278892/arxiv-daily-researcher&type=Date)](https://star-history.com/#/yzr278892/arxiv-daily-researcher&Date)
-
-[![Issues](https://img.shields.io/github/issues/yzr278892/arxiv-daily-researcher?style=flat-square&label=Issues)](https://github.com/yzr278892/arxiv-daily-researcher/issues)
-[![Email](https://img.shields.io/badge/Email-联系作者-blue?style=flat-square)](mailto:yzr278892@gmail.com)
 
 </div>
