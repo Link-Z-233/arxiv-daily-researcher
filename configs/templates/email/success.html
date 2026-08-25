@@ -9,6 +9,7 @@
     {source_rows}      — 各数据源统计行（HTML <tr> 片段）
     {top_papers_html}  — Top-N 论文卡片（HTML 片段）
     {report_list_html} — 报告路径列表（HTML 片段）
+    {issues_html}      — 已降级/待重试步骤摘要（HTML 片段）
 
   修改此文件即可自定义成功邮件通知的样式和内容。
 -->
@@ -107,6 +108,9 @@
               </table>
             </td>
           </tr>
+
+          <!-- Section: Workflow caveats -->
+          {issues_html}
 
           <!-- Section: Top Papers -->
           {top_papers_html}

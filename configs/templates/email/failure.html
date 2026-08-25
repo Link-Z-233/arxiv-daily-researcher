@@ -8,6 +8,7 @@
     {total_qualified}  — 及格论文总数
     {total_analyzed}   — 深度分析论文总数
     {source_rows}      — 各数据源统计行（HTML <tr> 片段）
+    {issues_html}      — 已完成步骤中的降级/待重试摘要（HTML 片段）
 
   修改此文件即可自定义失败邮件通知的样式和内容。
 -->
@@ -128,6 +129,8 @@
               </table>
             </td>
           </tr>
+
+          {issues_html}
 
           <!-- Action Suggestion -->
           <tr>

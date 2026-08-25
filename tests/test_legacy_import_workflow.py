@@ -228,6 +228,53 @@ class LegacyImportWorkflowTests(unittest.TestCase):
             summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
             self.assertEqual(summary["supplement"]["state"], "not_needed")
 
+    def test_import_and_automatic_supplement_emit_one_consolidated_notification(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "daily.db"
+            delivered = []
+
+            class _Notifier:
+                def enqueue_workflow_result(self, _store, run_id, result):
+                    delivered.append((run_id, result))
+                    return 1
+
+                def deliver_pending_workflow_results(self, _store):
+                    return {"claimed": 1, "sent": 1, "deferred": 0}
+
+            def fake_import(_store, **_kwargs):
+                return {
+                    "finished_at": "2026-08-24T12:00:00",
+                    "history_files": {"arxiv": 2},
+                    "reports_scanned": 1,
+                    "cards_found": 1,
+                    "backlog_queued": 0,
+                }
+
+            with (
+                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
+                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
+                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
+                patch.object(legacy_import.settings, "ENABLE_NOTIFICATIONS", True),
+                patch.object(legacy_import, "NotifierAgent", _Notifier),
+                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
+                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
+                patch.object(
+                    legacy_import,
+                    "legacy_import_activity_gate",
+                    side_effect=_no_lock,
+                ),
+            ):
+                self.assertEqual(legacy_import.main(), 0)
+
+            self.assertEqual(len(delivered), 1)
+            _run_id, result = delivered[0]
+            self.assertEqual(result.workflow, "旧历史导入")
+            self.assertTrue(result.success)
+            self.assertEqual(result.summary["自动补充报告"].split("；", 1)[0], "not_needed")
+
     def test_failed_automatic_supplement_keeps_backlog_retryable(self):
         """A failed second phase must not consume repair entries permanently."""
         with tempfile.TemporaryDirectory() as temp_dir:

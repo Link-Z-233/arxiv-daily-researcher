@@ -137,8 +137,33 @@ class RunResult:
     success: bool = True
     interrupted: bool = False
     error_message: Optional[str] = None
+    # A report can be safely delivered while some individual papers/stages are
+    # deferred for retry.  Keep those bounded details visible to the user
+    # instead of presenting a misleading all-clear notification.
+    issues: List[str] = field(default_factory=list)
     top_papers: List[Dict[str, Any]] = field(default_factory=list)
     token_usage: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class WorkflowResult:
+    """Summary for one user-visible, multi-step background workflow.
+
+    Daily reports have their own richer notification format.  Long-running
+    operations such as legacy imports and historical-report queues instead
+    use this compact, generic shape so their internal batches do not create a
+    burst of duplicate notifications.
+    """
+
+    workflow: str
+    run_timestamp: str = ""
+    success: bool = True
+    interrupted: bool = False
+    summary: Dict[str, Any] = field(default_factory=dict)
+    # Non-terminal degradation details: a task may finish successfully while
+    # a retryable repair, skipped source, or capped sub-batch remains.
+    issues: List[str] = field(default_factory=list)
+    error_message: Optional[str] = None
 
 
 @dataclass
@@ -639,6 +664,145 @@ class NotifierAgent:
 
         return summary
 
+    # ------------------------------------------------------------------
+    # 长任务汇总通知
+    # ------------------------------------------------------------------
+
+    def send_workflow_result_to_channel(self, channel: str, result: WorkflowResult) -> None:
+        """Send one consolidated background-workflow result to one channel.
+
+        These messages deliberately have no report attachments: a legacy
+        import can touch hundreds of historical reports, while the useful
+        notification is the compact status/count summary.
+        """
+        notifier = self.notifiers_by_channel.get(channel)
+        if notifier is None:
+            raise LookupError(f"通知渠道当前未配置: {channel}")
+
+        subject = self._format_workflow_subject(result)
+        platform = self._platform_for_notifier(notifier)
+        body = self._format_workflow_body_for_platform(result, platform)
+        if isinstance(notifier, EmailNotifier):
+            notifier.send(subject, body, html_body=self._format_workflow_html_body(result))
+        else:
+            notifier.send(subject, body)
+
+    def notify_workflow(self, result: WorkflowResult) -> Dict[str, Optional[str]]:
+        """Best-effort fallback for a workflow without a writable SQLite store."""
+        if not self.notifiers:
+            logger.debug("未配置任何通知渠道，跳过")
+            return {}
+        if result.success and not self.settings.NOTIFY_ON_SUCCESS:
+            return {}
+        if not result.success and not self.settings.NOTIFY_ON_FAILURE:
+            return {}
+
+        outcomes: Dict[str, Optional[str]] = {}
+        for channel in self.configured_channels():
+            try:
+                self.send_workflow_result_to_channel(channel, result)
+                outcomes[channel] = None
+            except Exception as exc:
+                outcomes[channel] = str(exc)
+                logger.warning("长任务通知发送失败 (%s): %s", channel, exc)
+        return outcomes
+
+    def enqueue_workflow_result(self, store, run_id: str, result: WorkflowResult) -> int:
+        """Persist one consolidated large-task notification per channel.
+
+        The generic ``workflow_result`` event is shared by legacy imports,
+        automatic supplement workflows, and historical-report queues.  Its
+        uniqueness key keeps a retry/restart from sending a second summary.
+        """
+        if result.success and not self.settings.NOTIFY_ON_SUCCESS:
+            return 0
+        if not result.success and not self.settings.NOTIFY_ON_FAILURE:
+            return 0
+
+        payload = {"result": asdict(result)}
+        created = 0
+        for channel in self.configured_channels():
+            if store.enqueue_notification(run_id, "workflow_result", channel, payload):
+                created += 1
+        return created
+
+    def deliver_pending_workflow_results(self, store, limit: int = 100) -> Dict[str, int]:
+        """Deliver durable long-task summaries with the same retry policy as reports."""
+        rows = store.claim_due_notifications(event_type="workflow_result", limit=limit)
+        summary = {"claimed": len(rows), "sent": 0, "deferred": 0}
+        max_attempts = max(1, int(getattr(self.settings, "RETRY_MAX_ATTEMPTS", 3)))
+
+        for row in rows:
+            outbox_id = row["outbox_id"]
+            channel = row["channel"]
+            try:
+                payload = json.loads(row["payload_json"])
+                result = WorkflowResult(**payload["result"])
+            except Exception as exc:
+                store.reschedule_notification(
+                    outbox_id,
+                    f"长任务通知 payload 无法恢复: {exc}",
+                    self._retry_delay(max_attempts),
+                )
+                logger.error("长任务通知 outbox payload 无法恢复 (id=%s): %s", outbox_id, exc)
+                summary["deferred"] += 1
+                continue
+
+            if channel not in self.notifiers_by_channel:
+                delay = max(60, self._retry_delay(max_attempts))
+                store.reschedule_notification(
+                    outbox_id,
+                    f"通知渠道当前未配置: {channel}",
+                    delay,
+                )
+                logger.warning(
+                    "长任务通知 outbox 暂不发送 (id=%s, channel=%s)：渠道未配置，%ss 后重试",
+                    outbox_id,
+                    channel,
+                    delay,
+                )
+                summary["deferred"] += 1
+                continue
+
+            sent = False
+            last_error = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    self.send_workflow_result_to_channel(channel, result)
+                    store.mark_notification_sent(outbox_id)
+                    summary["sent"] += 1
+                    sent = True
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < max_attempts:
+                        wait_seconds = self._retry_delay(attempt)
+                        logger.warning(
+                            "长任务通知发送失败，将重试 (outbox=%s, channel=%s, %s/%s, %ss): %s",
+                            outbox_id,
+                            channel,
+                            attempt,
+                            max_attempts,
+                            wait_seconds,
+                            exc,
+                        )
+                        store.increment_notification_attempt(outbox_id)
+                        time.sleep(wait_seconds)
+
+            if not sent:
+                retry_after = self._retry_delay(max_attempts)
+                store.reschedule_notification(outbox_id, str(last_error), retry_after)
+                logger.error(
+                    "长任务通知多次发送失败，已保留待补发 (outbox=%s, channel=%s, %ss 后重试): %s",
+                    outbox_id,
+                    channel,
+                    retry_after,
+                    last_error,
+                )
+                summary["deferred"] += 1
+
+        return summary
+
     def _retry_delay(self, attempt: int) -> int:
         """Use the project's bounded exponential retry policy for outbox rows."""
         minimum = max(1, int(getattr(self.settings, "RETRY_MIN_WAIT", 2)))
@@ -748,6 +912,170 @@ class NotifierAgent:
             f'（输入 {tp:,} / 输出 {tc:,}）</p></td></tr>'
         )
 
+    @staticmethod
+    def _workflow_value_text(value: Any) -> str:
+        """Render a bounded, serializable workflow metric without leaking structure."""
+        if isinstance(value, (dict, list, tuple)):
+            try:
+                text = json.dumps(value, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                text = str(value)
+        else:
+            text = str(value)
+        text = " ".join(text.split())
+        return text[:600] + ("…" if len(text) > 600 else "")
+
+    def _workflow_summary_items(self, result: WorkflowResult) -> list[tuple[str, str]]:
+        """Return only meaningful, bounded workflow summary fields in input order."""
+        items: list[tuple[str, str]] = []
+        for raw_label, raw_value in result.summary.items():
+            if raw_value is None or raw_value == "":
+                continue
+            label = self._workflow_value_text(raw_label)
+            value = self._workflow_value_text(raw_value)
+            if label and value:
+                items.append((label, value))
+        return items[:20]
+
+    def _workflow_issues(self, result: WorkflowResult) -> list[str]:
+        """Keep actionable degraded-step details without turning a notice into a log."""
+        issues = []
+        for issue in result.issues:
+            text = self._workflow_value_text(issue)
+            if text:
+                issues.append(text)
+        return issues[:8] + ([f"另有 {len(issues) - 8} 项问题，详见运行日志"] if len(issues) > 8 else [])
+
+    def _format_workflow_subject(self, result: WorkflowResult) -> str:
+        status = "INTERRUPTED" if result.interrupted else ("SUCCESS" if result.success else "FAILED")
+        workflow = markdown_text(result.workflow, multiline=False)
+        timestamp = markdown_text(result.run_timestamp, multiline=False)
+        return f"ArXiv Daily Researcher - {workflow} {status} ({timestamp})"
+
+    def _format_workflow_body_for_platform(
+        self, result: WorkflowResult, platform: Optional[str]
+    ) -> str:
+        """Use Telegram-safe HTML there and compact Markdown everywhere else."""
+        if platform == "telegram":
+            status = "已中断" if result.interrupted else ("完成" if result.success else "失败")
+            lines = [
+                f"<b>{self._html_escape(result.workflow)}：{status}</b>",
+                f"时间：<code>{self._html_escape(result.run_timestamp)}</code>",
+            ]
+            for label, value in self._workflow_summary_items(result):
+                lines.append(
+                    f"<code>{self._html_escape(label)}</code>：{self._html_escape(value)}"
+                )
+            issues = self._workflow_issues(result)
+            if issues:
+                lines.extend(
+                    [
+                        "<b>注意事项</b>",
+                        f"<blockquote>{self._html_escape(chr(10).join('• ' + issue for issue in issues))}</blockquote>",
+                    ]
+                )
+            if result.error_message:
+                lines.extend(
+                    [
+                        "<b>错误摘要</b>",
+                        f"<blockquote>{self._html_escape(self._workflow_value_text(result.error_message))}</blockquote>",
+                    ]
+                )
+            return "\n".join(lines)
+
+        status = "已中断" if result.interrupted else ("完成" if result.success else "失败")
+        lines = [
+            f"## {markdown_text(result.workflow, multiline=False)}：{status}",
+            f"时间：{markdown_text(result.run_timestamp, multiline=False)}",
+        ]
+        for label, value in self._workflow_summary_items(result):
+            lines.append(
+                f"- **{markdown_text(label, multiline=False)}**："
+                f"{markdown_text(value, multiline=False)}"
+            )
+        issues = self._workflow_issues(result)
+        if issues:
+            lines.extend(["", "**注意事项**"])
+            lines.extend(f"- {markdown_text(issue, multiline=False)}" for issue in issues)
+        if result.error_message:
+            lines.extend(
+                [
+                    "",
+                    "**错误摘要**",
+                    f"> {markdown_text(self._workflow_value_text(result.error_message))}",
+                ]
+            )
+        return "\n".join(lines)
+
+    def _format_workflow_html_body(self, result: WorkflowResult) -> str:
+        """Build an email-safe HTML body without requiring one template per workflow."""
+        status = "已中断" if result.interrupted else ("完成" if result.success else "失败")
+        row_html = "".join(
+            f'<tr><th style="text-align:left;padding:8px 12px;background:#f8fafc;color:#334155;white-space:nowrap;">'
+            f"{self._html_escape(label)}</th>"
+            f'<td style="padding:8px 12px;color:#1f2937;word-break:break-word;">'
+            f"{self._html_escape(value)}</td></tr>"
+            for label, value in self._workflow_summary_items(result)
+        ) or (
+            '<tr><td style="padding:10px 12px;color:#64748b;">暂无额外统计</td></tr>'
+        )
+        error_html = ""
+        if result.error_message:
+            error_html = (
+                '<div style="margin-top:16px;padding:12px;border-left:4px solid #dc2626;'
+                'background:#fef2f2;color:#991b1b;white-space:pre-wrap;word-break:break-word;">'
+                f"<strong>错误摘要</strong><br>{self._html_escape(self._workflow_value_text(result.error_message))}"
+                "</div>"
+            )
+        issues = self._workflow_issues(result)
+        issues_html = ""
+        if issues:
+            issues_html = (
+                '<div style="margin-top:16px;padding:12px;border-left:4px solid #d97706;'
+                'background:#fffbeb;color:#92400e;word-break:break-word;">'
+                "<strong>注意事项</strong><ul style=\"margin:8px 0 0;padding-left:20px;\">"
+                + "".join(f"<li>{self._html_escape(issue)}</li>" for issue in issues)
+                + "</ul></div>"
+            )
+        return (
+            '<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1f2937;">'
+            f"<h2 style=\"margin-bottom:6px;\">{self._html_escape(result.workflow)}：{status}</h2>"
+            f'<p style="color:#64748b;margin-top:0;">时间：{self._html_escape(result.run_timestamp)}</p>'
+            '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #e2e8f0;width:100%;max-width:680px;">'
+            f"{row_html}</table>{issues_html}{error_html}</body></html>"
+        )
+
+    def _run_issues(self, result: RunResult) -> list[str]:
+        """Return a bounded list of retryable/degraded daily-report stages."""
+        issues = []
+        for issue in result.issues:
+            text = self._workflow_value_text(issue)
+            if text:
+                issues.append(text)
+        return issues[:8] + ([f"另有 {len(issues) - 8} 项问题，详见运行日志"] if len(issues) > 8 else [])
+
+    def _format_run_issues_markdown(self, result: RunResult) -> str:
+        issues = self._run_issues(result)
+        if not issues:
+            return ""
+        lines = ["**注意事项**"]
+        lines.extend(f"> {markdown_text(issue, multiline=False)}" for issue in issues)
+        return "\n".join(lines)
+
+    def _format_run_issues_html(self, result: RunResult) -> str:
+        issues = self._run_issues(result)
+        if not issues:
+            return ""
+        items = "".join(f"<li>{self._html_escape(issue)}</li>" for issue in issues)
+        return (
+            '<tr><td style="padding:24px 32px 0;">'
+            '<div style="padding:14px 16px;background:#fffbeb;border:1px solid #fde68a;'
+            'border-left:4px solid #d97706;border-radius:6px;color:#92400e;">'
+            '<p style="margin:0 0 6px;font-size:13px;font-weight:700;">注意事项</p>'
+            f'<ul style="margin:0;padding-left:20px;font-size:13px;line-height:1.6;">{items}</ul>'
+            "</div></td></tr>"
+        )
+
     def _format_subject(self, result: RunResult) -> str:
         status = "SUCCESS" if result.success else "FAILED"
         return (
@@ -826,6 +1154,7 @@ class NotifierAgent:
                 report_list=report_list,
                 top_papers=top_papers,
                 error_message=markdown_text(result.error_message or "无"),
+                issues_section=self._format_run_issues_markdown(result),
                 token_usage_section=self._format_token_section_md(result.token_usage),
             )
 
@@ -854,6 +1183,7 @@ class NotifierAgent:
                 report_list=report_list,
                 top_papers=top_papers,
                 error_message=markdown_text(result.error_message or "无"),
+                issues_section=self._format_run_issues_markdown(result),
                 token_usage_section=self._format_token_section_md(result.token_usage),
             )
 
@@ -926,6 +1256,15 @@ class NotifierAgent:
                 ]
             )
 
+        issues = self._run_issues(result)
+        if issues:
+            sections.extend(
+                [
+                    "<b>注意事项</b>",
+                    f"<blockquote>{self._html_escape(chr(10).join('• ' + issue for issue in issues))}</blockquote>",
+                ]
+            )
+
         if top_cards:
             sections.extend(["<b>Top 论文</b>", *top_cards])
 
@@ -948,6 +1287,12 @@ class NotifierAgent:
 
         if result.error_message:
             lines.append(f"Error: {markdown_text(result.error_message)}")
+            lines.append("")
+
+        issues = self._run_issues(result)
+        if issues:
+            lines.append("Issues:")
+            lines.extend(f"  - {markdown_text(issue, multiline=False)}" for issue in issues)
             lines.append("")
 
         lines.append("Papers Summary:")
@@ -1029,6 +1374,7 @@ class NotifierAgent:
             top_papers_html=top_papers_html,
             report_list_html=report_list_html,
             error_message=self._html_escape(result.error_message or "无"),
+            issues_html=self._format_run_issues_html(result),
             token_usage_html=self._format_token_section_html(result.token_usage),
         )
 

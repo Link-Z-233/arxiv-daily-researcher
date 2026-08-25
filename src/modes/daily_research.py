@@ -860,6 +860,43 @@ def _build_daily_run_result(
     return run_result
 
 
+def _notification_issue_messages(
+    stage_errors: List[Tuple[str, str, str]],
+    analysis_errors: List[Tuple[str, str, str]],
+    withheld_analysis: List[Tuple[str, str]],
+    *,
+    deferred_paper_count: int = 0,
+    supplement_fetch_failures: int = 0,
+) -> List[str]:
+    """Describe partial completion without embedding an unbounded execution log.
+
+    A report may be valid even when a few papers failed scoring, translation,
+    PDF analysis, or metadata recovery.  Those rows stay retryable in SQLite;
+    the notification needs the actionable paper/stage summary rather than an
+    opaque all-success message.
+    """
+    issues: List[str] = []
+    for stage_label, entries in (("评分/翻译", stage_errors), ("深度分析", analysis_errors)):
+        for source, paper_id, error in entries[:6]:
+            issues.append(
+                f"{stage_label}未完成：{source}:{paper_id}；{str(error)[:500]}"
+            )
+        if len(entries) > 6:
+            issues.append(f"{stage_label}另有 {len(entries) - 6} 篇失败，已保留供重试")
+
+    if withheld_analysis and not analysis_errors:
+        issues.append(f"{len(withheld_analysis)} 篇合格论文缺少可交付的深度分析，已保留供重试")
+    if supplement_fetch_failures:
+        issues.append(
+            f"{supplement_fetch_failures} 条旧历史补充数据暂时无法获取元数据，已保留供下次重试"
+        )
+    if deferred_paper_count > 0:
+        issues.append(
+            f"受本次最多处理论文数限制，仍有 {deferred_paper_count} 篇留待后续运行"
+        )
+    return issues
+
+
 class DailyResearchPipeline:
     """
     每日研究模式流水线。
@@ -936,6 +973,13 @@ class DailyResearchPipeline:
                             retry_summary["sent"],
                             retry_summary["deferred"],
                         )
+                    workflow_retry = notifier.deliver_pending_workflow_results(store)
+                    if workflow_retry["claimed"]:
+                        logger.info(
+                            "已补发待处理长任务通知: 发送 %s，延后 %s",
+                            workflow_retry["sent"],
+                            workflow_retry["deferred"],
+                        )
                 except Exception as exc:
                     # The report pipeline must remain available even if a
                     # notification provider or its templates are broken.
@@ -966,7 +1010,7 @@ class DailyResearchPipeline:
                     success=False,
                     error_message="未找到任何关键词，请在 configs/config.json 中配置主要关键词",
                 )
-                if settings.ENABLE_NOTIFICATIONS:
+                if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                     try:
                         NotifierAgent().notify(fail_result)
                     except Exception:
@@ -1013,6 +1057,7 @@ class DailyResearchPipeline:
 
             search_agent = None
             supplement_identities: List[Tuple[str, str, int]] = []
+            supplement_fetch_failures = 0
 
             if run_kind == "supplement":
                 # 补充运行不扫描：候选来自旧历史导入/时间段扫描写入的
@@ -1021,7 +1066,7 @@ class DailyResearchPipeline:
                 (
                     papers_by_source,
                     supplement_identities,
-                    fetch_failures,
+                    supplement_fetch_failures,
                 ) = _load_supplement_candidates(store, run_id)
                 registered_candidate_count = sum(
                     len(papers) for papers in papers_by_source.values()
@@ -1030,10 +1075,10 @@ class DailyResearchPipeline:
                 backlog_summary = store.supplement_backlog_summary()
                 pending_paper_count = backlog_summary["pending"]
                 deferred_paper_count = pending_paper_count - total_papers_count
-                if fetch_failures:
+                if supplement_fetch_failures:
                     logger.warning(
                         "补充积压 %s 条论文无法获取元数据，已记为失败（下次触发会重试）",
-                        fetch_failures,
+                        supplement_fetch_failures,
                     )
                 logger.info(
                     "补充运行：积压待处理 %s 篇，本次处理 %s 篇，留待后续 %s 篇（%s 个数据源）",
@@ -1164,7 +1209,7 @@ class DailyResearchPipeline:
                         success=False,
                         error_message=f"数据源扫描收据失败: {error_detail}",
                     )
-                    if settings.ENABLE_NOTIFICATIONS:
+                    if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                         try:
                             NotifierAgent().notify(receipt_fail_result)
                             NotifierAgent().notify_error(
@@ -1186,7 +1231,7 @@ class DailyResearchPipeline:
                         success=False,
                         error_message=f"ArXiv 抓取失败: {error_detail}",
                     )
-                    if settings.ENABLE_NOTIFICATIONS:
+                    if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                         try:
                             NotifierAgent().notify(fetch_fail_result)
                             NotifierAgent().notify_error(
@@ -1210,7 +1255,7 @@ class DailyResearchPipeline:
                         success=False,
                         error_message=f"Hugging Face Papers 抓取失败: {error_detail}",
                     )
-                    if settings.ENABLE_NOTIFICATIONS:
+                    if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                         try:
                             NotifierAgent().notify(fetch_fail_result)
                             NotifierAgent().notify_error(
@@ -1237,7 +1282,7 @@ class DailyResearchPipeline:
                         success=False,
                         error_message=f"OpenAlex 期刊抓取失败: {error_detail}",
                     )
-                    if settings.ENABLE_NOTIFICATIONS:
+                    if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                         try:
                             NotifierAgent().notify(fetch_fail_result)
                             NotifierAgent().notify_error(
@@ -1281,6 +1326,13 @@ class DailyResearchPipeline:
                     run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     success=True,
                     deferred_paper_count=deferred_paper_count,
+                    issues=_notification_issue_messages(
+                        [],
+                        [],
+                        [],
+                        deferred_paper_count=deferred_paper_count,
+                        supplement_fetch_failures=supplement_fetch_failures,
+                    ),
                 )
                 if store and run_id:
                     store.complete_run(run_id, {})
@@ -1289,7 +1341,7 @@ class DailyResearchPipeline:
                     # never turn an already completed no-paper run back into
                     # a failed run or reopen its recovery window.
                     report_delivery_committed = True
-                if settings.ENABLE_NOTIFICATIONS:
+                if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                     # No-paper runs do not have a report delivery to recover;
                     # retain the legacy best-effort behaviour for this status-only notice.
                     try:
@@ -1688,6 +1740,13 @@ class DailyResearchPipeline:
                 report_paths,
                 deferred_paper_count=deferred_paper_count,
             )
+            run_result.issues = _notification_issue_messages(
+                stage_errors,
+                analysis_errors,
+                withheld_analysis,
+                deferred_paper_count=run_result.deferred_paper_count,
+                supplement_fetch_failures=supplement_fetch_failures,
+            )
             if store and run_id:
                 delivered_papers_by_source = _delivered_papers_for_finalization(
                     reportable_papers_by_source, analyses_by_source
@@ -1704,8 +1763,15 @@ class DailyResearchPipeline:
                     run_result.deferred_paper_count = max(
                         0, pending_paper_count - delivered_count
                     )
+                    run_result.issues = _notification_issue_messages(
+                        stage_errors,
+                        analysis_errors,
+                        withheld_analysis,
+                        deferred_paper_count=run_result.deferred_paper_count,
+                        supplement_fetch_failures=supplement_fetch_failures,
+                    )
                 notification_entries = []
-                if settings.ENABLE_NOTIFICATIONS:
+                if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                     try:
                         notifier = notifier or NotifierAgent()
                         notification_entries = _run_result_notification_entries(notifier, run_result)
@@ -1828,7 +1894,7 @@ class DailyResearchPipeline:
             # ==================== 阶段8: 持久化并发送通知 ====================
             # 注意：run 在阶段6 交付提交时已完成（终态），这里不再写阶段
             # 心跳——record_run_phase 也会拒绝为非 running 的 run 写入。
-            if settings.ENABLE_NOTIFICATIONS:
+            if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                 logger.info(">>> 阶段8: 写入通知 outbox 并发送...")
                 notifier = notifier or NotifierAgent()
                 if store and run_id:
@@ -1839,6 +1905,13 @@ class DailyResearchPipeline:
                             delivery_summary["sent"],
                             delivery_summary["deferred"],
                         )
+                        workflow_delivery = notifier.deliver_pending_workflow_results(store)
+                        if workflow_delivery["claimed"]:
+                            logger.info(
+                                "长任务通知补发完成: 发送 %s，待补发 %s",
+                                workflow_delivery["sent"],
+                                workflow_delivery["deferred"],
+                            )
                     except Exception as exc:
                         logger.error("通知 outbox 派发异常，已保留待补发记录: %s", exc)
                 else:
@@ -1876,7 +1949,7 @@ class DailyResearchPipeline:
 
             traceback.print_exc()
 
-            if settings.ENABLE_NOTIFICATIONS:
+            if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                 try:
                     fail_result = RunResult(
                         run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

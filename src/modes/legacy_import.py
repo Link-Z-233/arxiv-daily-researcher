@@ -11,12 +11,14 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import settings
+from notifications import NotifierAgent, WorkflowResult
 from utils.daily_research_store import DailyResearchStore
 from utils.legacy_history import LEGACY_IMPORT_STATE_KEY, import_legacy_history
 from utils.legacy_range_scan import scan_legacy_range
@@ -80,10 +82,12 @@ def _load_summary(store: DailyResearchStore) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def run_import() -> int:
+def run_import() -> tuple[int, str, dict]:
+    """Run the import phase and keep enough state for one consolidated notice."""
     store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
     run_id = store.start_run(0, run_kind="legacy_import")
     store.record_run_phase(run_id, "legacy_import")
+    summary: dict = {}
     try:
         summary = import_legacy_history(
             store,
@@ -104,11 +108,16 @@ def run_import() -> int:
             store.fail_run(run_id, error)
         except Exception as finish_exc:
             logger.warning("旧历史导入中断状态写入失败: %s", finish_exc)
-        return 130
+        summary["error"] = error
+        _save_summary(store, summary)
+        return 130, run_id, summary
     except Exception as exc:
         logger.error("旧历史导入失败: %s", exc, exc_info=True)
-        store.fail_run(run_id, str(exc))
-        return 1
+        error = str(exc)
+        store.fail_run(run_id, error)
+        summary["error"] = error
+        _save_summary(store, summary)
+        return 1, run_id, summary
 
     try:
         store.complete_run(run_id, {})
@@ -139,7 +148,7 @@ def run_import() -> int:
         range_scan.get("papers_scanned"),
         range_scan.get("missed_found"),
     )
-    return 0
+    return 0, run_id, summary
 
 
 def _run_automatic_supplement() -> int:
@@ -300,6 +309,97 @@ def _run_automatic_supplement() -> int:
     return 0
 
 
+def _legacy_import_notification_summary(summary: dict) -> dict:
+    """Build a concise, user-facing summary for the one import notification."""
+    history_files = summary.get("history_files")
+    if isinstance(history_files, dict):
+        history_text = "，".join(
+            f"{source}: {count}" for source, count in sorted(history_files.items())
+        )
+    else:
+        history_text = None
+
+    range_scan = summary.get("range_scan")
+    supplement = summary.get("supplement")
+    fields = {
+        "旧历史文件": history_text,
+        "扫描 HTML 报告": summary.get("reports_scanned"),
+        "读取报告卡片": summary.get("cards_found"),
+        "写入 SQLite": summary.get("imported"),
+        "保留已有新数据": summary.get("skipped_existing_newer"),
+        "补充积压入队": summary.get("backlog_queued"),
+    }
+    if isinstance(range_scan, dict):
+        fields["漏扫时间段"] = (
+            f"{range_scan.get('range_start') or '—'} 至 {range_scan.get('range_end') or '—'}；"
+            f"扫描 {range_scan.get('papers_scanned') or 0} 篇，发现遗漏 {range_scan.get('missed_found') or 0} 篇"
+        )
+    if isinstance(supplement, dict):
+        fields["自动补充报告"] = (
+            f"{supplement.get('state') or 'unknown'}；"
+            f"处理 {supplement.get('processed') or 0} 篇，剩余 {supplement.get('pending_after', supplement.get('pending_before', 0)) or 0} 篇"
+        )
+    return fields
+
+
+def _legacy_import_issues(summary: dict) -> list[str]:
+    """Surface non-terminal import degradation in the one workflow notice."""
+    issues: list[str] = []
+    raw_errors = summary.get("errors")
+    if isinstance(raw_errors, list):
+        issues.extend(str(error) for error in raw_errors if error)
+
+    range_scan = summary.get("range_scan")
+    if isinstance(range_scan, dict) and range_scan.get("skipped_reason"):
+        issues.append(f"旧历史时间段扫描未完整执行：{range_scan['skipped_reason']}")
+
+    supplement = summary.get("supplement")
+    if isinstance(supplement, dict):
+        state = str(supplement.get("state") or "")
+        if state in {"failed", "interrupted", "retry_pending"}:
+            issues.append(
+                str(supplement.get("error") or f"自动补充报告状态：{state}")
+            )
+        pending_after = supplement.get("pending_after")
+        if isinstance(pending_after, int) and pending_after > 0:
+            issues.append(f"自动补充报告仍有 {pending_after} 篇待重试")
+    return issues
+
+
+def _notify_legacy_import_result(run_id: str, summary: dict, exit_code: int) -> None:
+    """Persist and send exactly one result notification for the whole workflow."""
+    if not settings.ENABLE_NOTIFICATIONS:
+        return
+
+    supplement = summary.get("supplement")
+    supplement_error = supplement.get("error") if isinstance(supplement, dict) else ""
+    error = str(summary.get("error") or supplement_error or "")
+    result = WorkflowResult(
+        workflow="旧历史导入",
+        run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        success=exit_code == 0,
+        interrupted=exit_code == 130,
+        summary=_legacy_import_notification_summary(summary),
+        issues=_legacy_import_issues(summary),
+        error_message=error or None,
+    )
+    try:
+        store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
+        notifier = NotifierAgent()
+        created = notifier.enqueue_workflow_result(store, run_id, result)
+        delivery = notifier.deliver_pending_workflow_results(store)
+        logger.info(
+            "旧历史导入通知：新建 %s，发送 %s，待补发 %s",
+            created,
+            delivery["sent"],
+            delivery["deferred"],
+        )
+    except Exception as exc:
+        # The import result is already safely persisted; notification delivery
+        # must never turn a completed import into a failed one.
+        logger.warning("旧历史导入通知写入/发送失败: %s", exc)
+
+
 def main() -> int:
     with run_lock("legacy_import"):
         # 先拿到本模式锁，重复点击会立刻以 skipped_busy 返回；随后由独占
@@ -311,12 +411,21 @@ def main() -> int:
             logger=logger,
             wait_note="旧历史导入等待每日研究及其他任务空闲",
         ):
-            import_exit_code = run_import()
+            import_exit_code, run_id, summary = run_import()
         if import_exit_code != 0:
+            _notify_legacy_import_result(run_id, summary, import_exit_code)
             return import_exit_code
         # 补充报告是“读取旧历史”的第二阶段，不再由 WebUI 单独触发。外层
         # mode lock 覆盖整个工作流，面板能持续显示运行状态和实际日志。
-        return _run_automatic_supplement()
+        supplement_exit_code = _run_automatic_supplement()
+        try:
+            summary = _load_summary(DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH))
+        except Exception:
+            # The detailed workflow result remains available in logs even if a
+            # non-critical summary reload happens to fail.
+            pass
+        _notify_legacy_import_result(run_id, summary, supplement_exit_code)
+        return supplement_exit_code
 
 
 if __name__ == "__main__":

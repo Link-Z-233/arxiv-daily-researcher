@@ -9,10 +9,11 @@ to pending so the next range request can resume it safely.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Callable, Optional
 
 from config import settings
+from notifications import NotifierAgent, WorkflowResult
 from utils.daily_research_store import DailyResearchStore
 
 logger = logging.getLogger("BackfillQueue")
@@ -119,6 +120,57 @@ def drain_backfill_queue(
     return 0 if failed == 0 else 1
 
 
+def _notify_backfill_result(
+    store: DailyResearchStore,
+    request: dict[str, Any],
+    batch: dict[str, Any],
+    exit_code: int,
+    error: str = "",
+) -> None:
+    """Send one durable summary for the whole user-selected date range."""
+    if not settings.ENABLE_NOTIFICATIONS:
+        return
+
+    first_error = str(batch.get("first_error") or error or "")
+    summary = {
+        "日期范围": f"{request['date_from']} 至 {request['date_to']}",
+        "排队天数": request.get("queued", 0),
+        "已完成日期": batch.get("completed", 0),
+        "失败日期": batch.get("failed", 0),
+        "仍待处理": batch.get("pending", 0),
+    }
+    if batch.get("first_failed_date"):
+        summary["首个失败日期"] = batch["first_failed_date"]
+    issues = []
+    if batch.get("failed"):
+        issues.append(f"{batch['failed']} 个日期未生成完整报告，已保留失败状态供后续补跑")
+    if batch.get("pending"):
+        issues.append(f"{batch['pending']} 个日期仍在队列中，下一次启动会继续处理")
+    result = WorkflowResult(
+        workflow="过去日报补跑",
+        run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        success=exit_code == 0,
+        interrupted=exit_code == 130,
+        summary=summary,
+        issues=issues,
+        error_message=first_error or None,
+    )
+    try:
+        notifier = NotifierAgent()
+        created = notifier.enqueue_workflow_result(store, request["batch_id"], result)
+        delivery = notifier.deliver_pending_workflow_results(store)
+        logger.info(
+            "过去日报队列通知：新建 %s，发送 %s，待补发 %s",
+            created,
+            delivery["sent"],
+            delivery["deferred"],
+        )
+    except Exception as exc:
+        # Queue state is already durable and must remain unaffected by a
+        # temporary webhook/email failure.
+        logger.warning("过去日报队列通知写入/发送失败: %s", exc)
+
+
 def enqueue_and_run_backfill_range(date_from: date | str, date_to: date | str) -> int:
     """Persist a requested range, then drain the durable queue in FIFO order."""
     store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
@@ -130,4 +182,22 @@ def enqueue_and_run_backfill_range(date_from: date | str, date_to: date | str) -
         request["date_to"],
         request["batch_id"],
     )
-    return drain_backfill_queue(store)
+    exit_code = 1
+    error = ""
+    try:
+        exit_code = drain_backfill_queue(store)
+    except KeyboardInterrupt:
+        exit_code = 130
+        error = "用户中断；未完成日期已保留在队列中"
+        logger.warning(error)
+    except Exception as exc:
+        error = str(exc)
+        logger.exception("过去日报队列异常终止")
+    finally:
+        try:
+            batch = store.backfill_batch_summary(request["batch_id"])
+        except Exception as exc:
+            batch = {}
+            error = error or f"无法读取过去日报队列状态: {exc}"
+        _notify_backfill_result(store, request, batch, exit_code, error)
+    return exit_code

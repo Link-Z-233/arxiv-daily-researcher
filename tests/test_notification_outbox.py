@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from notifications.notifier import (  # noqa: E402
     NotifierAgent,
     RunResult,
+    WorkflowResult,
     WebhookNotifier,
 )
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
@@ -136,6 +137,65 @@ class NotificationOutboxTests(unittest.TestCase):
         self.assertEqual(summary, {"claimed": 1, "sent": 1, "deferred": 0})
         send.assert_called_once_with("email", result)
 
+    def test_workflow_outbox_sends_one_consolidated_result_per_channel(self):
+        store = self._store()
+        notifier = self._notifier(["email", "telegram"])
+        result = WorkflowResult(
+            workflow="旧历史导入",
+            run_timestamp="2026-08-25 12:00:00",
+            success=False,
+            summary={"自动补充报告": "failed；处理 3 篇，剩余 1 篇"},
+            error_message="temporary LLM outage",
+        )
+
+        self.assertEqual(notifier.enqueue_workflow_result(store, "legacy-1", result), 2)
+        self.assertEqual(notifier.enqueue_workflow_result(store, "legacy-1", result), 0)
+        calls = []
+
+        def send(channel, delivered_result):
+            calls.append((channel, delivered_result))
+            if channel == "telegram":
+                raise RuntimeError("chat unavailable")
+
+        with patch.object(notifier, "send_workflow_result_to_channel", side_effect=send), patch(
+            "notifications.notifier.time.sleep"
+        ):
+            summary = notifier.deliver_pending_workflow_results(store)
+
+        self.assertEqual(summary, {"claimed": 2, "sent": 1, "deferred": 1})
+        self.assertEqual(calls.count(("email", result)), 1)
+        self.assertEqual(calls.count(("telegram", result)), 2)
+        with store._connect() as conn:
+            rows = conn.execute(
+                "SELECT channel, status, attempt_count FROM notification_outbox "
+                "WHERE event_type = 'workflow_result' ORDER BY channel"
+            ).fetchall()
+        self.assertEqual(rows[0]["status"], "sent")
+        self.assertEqual(rows[1]["status"], "pending")
+        self.assertEqual(rows[1]["attempt_count"], 2)
+
+    def test_workflow_format_uses_the_same_summary_on_markdown_telegram_and_email(self):
+        notifier = self._notifier([])
+        result = WorkflowResult(
+            workflow="过去日报补跑",
+            run_timestamp="2026-08-25 12:00:00",
+            success=False,
+            summary={"日期范围": "2026-08-01 至 2026-08-03"},
+            issues=["OpenAlex 扫描跳过：rate limited"],
+            error_message="bad <response>",
+        )
+
+        markdown = notifier._format_workflow_body_for_platform(result, None)
+        telegram = notifier._format_workflow_body_for_platform(result, "telegram")
+        email = notifier._format_workflow_html_body(result)
+
+        self.assertIn("过去日报补跑：失败", markdown)
+        self.assertIn("日期范围", markdown)
+        self.assertIn("OpenAlex 扫描跳过", markdown)
+        self.assertIn("注意事项", telegram)
+        self.assertIn("bad &lt;response&gt;", telegram)
+        self.assertIn("bad &lt;response&gt;", email)
+
     def test_webhook_application_errors_are_not_accepted_as_success(self):
         with self.assertRaisesRegex(RuntimeError, "errcode=93000"):
             WebhookNotifier("wechat_work", "https://example.invalid")._validate_platform_response(
@@ -241,6 +301,26 @@ class NotificationOutboxTests(unittest.TestCase):
         self.assertIn("Ranking:", email_cards)
         self.assertIn("Score: 8.0", markdown_top)
         self.assertIn("Score: 8.0", fallback)
+
+    def test_daily_success_notification_includes_retryable_stage_issues(self):
+        notifier = self._notifier([])
+        notifier.settings.TOKEN_TRACKING_ENABLED = False
+        result = RunResult(
+            run_timestamp="2026-08-12 12:00:00",
+            success=True,
+            issues=["深度分析未完成：arxiv:2608.1v1；LLM 未返回可用正文"],
+        )
+
+        markdown = notifier._format_body(result)
+        telegram = notifier._format_telegram_body(result)
+        fallback = notifier._format_body_fallback(result)
+        email = notifier._format_html_body(result)
+
+        self.assertIn("注意事项", markdown)
+        self.assertIn("深度分析未完成", markdown)
+        self.assertIn("注意事项", telegram)
+        self.assertIn("深度分析未完成", fallback)
+        self.assertIn("注意事项", email)
 
 
 if __name__ == "__main__":

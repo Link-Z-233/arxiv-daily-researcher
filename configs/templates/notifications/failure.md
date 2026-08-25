@@ -10,6 +10,7 @@
 #   {report_list}      — 报告路径列表（已格式化）
 #   {top_papers}       — Top-N 论文列表（已格式化）
 #   {error_message}    — 错误信息
+#   {issues_section}   — 已完成步骤中的降级/待重试摘要
 #
 # 修改此文件即可自定义失败通知的样式和内容。
 
@@ -24,3 +25,5 @@
 > 抓取 **{total_fetched}** 篇 | 及格 **{total_qualified}** 篇 | 深度分析 **{total_analyzed}** 篇
 
 {source_summary}
+
+{issues_section}

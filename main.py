@@ -9,7 +9,7 @@
 import sys
 import argparse
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional, Sequence
 
 # 将 src 目录加入 Python 模块搜索路径
@@ -124,6 +124,57 @@ def _result_exit_code(result: Any) -> int:
     return 1
 
 
+def _notify_standalone_supplement_result(
+    workflow_id: str,
+    result: Any,
+    exit_code: int,
+    error: str = "",
+) -> None:
+    """Send one summary when the CLI-only supplement mode is used directly.
+
+    Automatic supplement processing remains part of the legacy-import notice;
+    this branch only covers an explicit ``--mode supplement_run`` invocation.
+    """
+    if not settings.ENABLE_NOTIFICATIONS:
+        return
+    try:
+        from notifications import NotifierAgent, WorkflowResult
+        from utils.daily_research_store import DailyResearchStore
+
+        result_error = str(getattr(result, "error_message", "") or error or "")
+        summary = {
+            "处理论文": int(getattr(result, "total_papers_fetched", 0) or 0),
+            "合格论文": int(getattr(result, "total_qualified", 0) or 0),
+            "深度分析": int(getattr(result, "total_analyzed", 0) or 0),
+            "生成报告": len(getattr(result, "report_paths", {}) or {}),
+            "剩余待重试": int(getattr(result, "deferred_paper_count", 0) or 0),
+        }
+        issues = list(getattr(result, "issues", []) or [])
+        if summary["剩余待重试"] and not any("留待后续" in str(item) for item in issues):
+            issues.append(f"仍有 {summary['剩余待重试']} 篇留待后续补充运行")
+        workflow_result = WorkflowResult(
+            workflow="补充报告",
+            run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            success=exit_code == 0,
+            interrupted=exit_code == 130,
+            summary=summary,
+            issues=issues,
+            error_message=result_error or None,
+        )
+        store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
+        notifier = NotifierAgent()
+        created = notifier.enqueue_workflow_result(store, workflow_id, workflow_result)
+        delivery = notifier.deliver_pending_workflow_results(store)
+        logger.info(
+            "补充报告通知：新建 %s，发送 %s，待补发 %s",
+            created,
+            delivery["sent"],
+            delivery["deferred"],
+        )
+    except Exception as exc:
+        logger.warning("补充报告通知写入/发送失败: %s", exc)
+
+
 def _backfill_date_range_from_args(args: argparse.Namespace) -> tuple[date, date]:
     """Normalize a legacy single day or a user-selected inclusive date range."""
     target = args.target_date
@@ -228,15 +279,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         from modes.daily_research import DailyResearchPipeline
 
-        with run_lock("supplement_run"):
-            with daily_workflow_gate(
-                logger=logger, wait_note="补充运行等待每日研究/过去日报完成"
-            ):
-                with legacy_import_activity_gate(
-                    logger=logger, wait_note="补充运行等待旧历史导入完成"
+        workflow_id = f"supplement_run_{datetime.now():%Y%m%d_%H%M%S_%f}"
+        result = None
+        exit_code = 1
+        error = ""
+        try:
+            with run_lock("supplement_run"):
+                with daily_workflow_gate(
+                    logger=logger, wait_note="补充运行等待每日研究/过去日报完成"
                 ):
-                    result = DailyResearchPipeline().run(run_kind="supplement")
-        return _result_exit_code(result)
+                    with legacy_import_activity_gate(
+                        logger=logger, wait_note="补充运行等待旧历史导入完成"
+                    ):
+                        result = DailyResearchPipeline().run(run_kind="supplement")
+            exit_code = _result_exit_code(result)
+        except KeyboardInterrupt:
+            exit_code = 130
+            error = "用户中断补充报告；未完成论文会保留供后续重试"
+            logger.warning(error)
+        except Exception as exc:
+            error = str(exc)
+            logger.exception("补充报告异常终止")
+        finally:
+            _notify_standalone_supplement_result(workflow_id, result, exit_code, error)
+        return exit_code
 
     if args.mode == "backfill_run":
         # 过去时间段每日报告：把用户选中的每个过去日期持久化进队列，

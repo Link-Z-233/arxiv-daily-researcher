@@ -1717,6 +1717,49 @@ class DailyResearchStore:
             "next_date": next_row["target_date"] if next_row else None,
         }
 
+    def backfill_batch_summary(self, batch_id: str) -> Dict[str, Any]:
+        """Return one requested range's completion counts and first safe error.
+
+        The WebUI needs only the global queue state, while a result
+        notification must describe the exact range the user asked to run.
+        Error text is deliberately bounded and stays in a notification only
+        when that request itself failed.
+        """
+        batch = str(batch_id or "").strip()
+        if not batch:
+            raise ValueError("backfill batch_id 不能为空")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT status, COUNT(*) AS n
+                FROM backfill_queue
+                WHERE batch_id = ?
+                GROUP BY status
+                """,
+                (batch,),
+            ).fetchall()
+            first_failure = conn.execute(
+                """
+                SELECT target_date, error
+                FROM backfill_queue
+                WHERE batch_id = ? AND status = 'failed'
+                ORDER BY target_date ASC, backfill_id ASC
+                LIMIT 1
+                """,
+                (batch,),
+            ).fetchone()
+        counts = {str(row["status"]): int(row["n"] or 0) for row in rows}
+        return {
+            "batch_id": batch,
+            "pending": counts.get("pending", 0),
+            "running": counts.get("running", 0),
+            "completed": counts.get("completed", 0),
+            "failed": counts.get("failed", 0),
+            "total": sum(counts.values()),
+            "first_failed_date": first_failure["target_date"] if first_failure else None,
+            "first_error": first_failure["error"] if first_failure else None,
+        }
+
     # ─── 小型键值状态（跨运行决策） ─────────────────────────────────────
 
     def get_app_state(self, key: str) -> Optional[str]:
