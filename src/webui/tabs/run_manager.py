@@ -37,6 +37,7 @@ _IS_DOCKER_WEBUI = not _MAIN_PY.exists()
 # session_state 键（日志查看器）
 _LOG_ACTIVE = "rm_log_active_path"    # 当前展示的日志路径（str）
 _LOG_CLOSED = "rm_log_viewer_closed"  # 是否关闭内容区
+_LOG_VIEWER_HEIGHT_PX = 800
 # 进度面板用的配置快照：fragment 无法接收参数，经 session_state 传递
 _PROGRESS_CONFIG_KEY = "rm_status_config_values"
 
@@ -699,6 +700,16 @@ def _refresh_latest_log() -> None:
         st.session_state[_LOG_CLOSED] = False
 
 
+def _render_log_content(active_path: Path) -> None:
+    """Render the selected log in a fixed-height native scroll viewport."""
+    with st.container(height=_LOG_VIEWER_HEIGHT_PX, border=True):
+        st.code(
+            _read_log_tail(active_path, max_lines=300),
+            language="",
+            line_numbers=True,
+        )
+
+
 def _render_log_section() -> None:
     """
     三列并排的日志选择器 + 共享内容区。
@@ -805,7 +816,7 @@ def _render_log_section() -> None:
             st.session_state[_LOG_CLOSED] = True
             st.rerun()
 
-    st.code(_read_log_tail(active_path, max_lines=300), language="", line_numbers=True)
+    _render_log_content(active_path)
 
 
 # ─── 主渲染 ─────────────────────────────────────────────────────────────────
