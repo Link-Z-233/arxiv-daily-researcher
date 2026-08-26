@@ -782,9 +782,13 @@ def _render_daily_report(report: ReportFile, config_values: dict) -> bool:
     from webui.tabs.run_manager import _daily_db_path_from_config
 
     db_path = _daily_db_path_from_config(config_values or {})
-    if not db_path.exists():
-        return False
     try:
+        # A restored v3.2 report can be opened before the user runs the
+        # history importer.  Initialising the small SQLite store here gives
+        # that report the same persistent 👍/👎 controls immediately; the
+        # later importer simply enriches the very same database with its
+        # delivery ledger.  If the configured path is genuinely unavailable,
+        # the existing raw, read-only preview remains the safe fallback.
         store = DailyResearchStore(db_path)
     except Exception:
         return False

@@ -485,6 +485,47 @@ class DailyReportInlineMarkTests(unittest.TestCase):
             self.assertIn('data-paper="2401.00001"', rendered[0][0])
             self.assertIn("arxiv-mark-btn", rendered[0][0])
 
+    def test_legacy_report_gets_marks_before_history_import_creates_sqlite(self):
+        """Opening a valid v3.2 report must initialise preference storage itself."""
+        from webui.tabs import reports as reports_tab
+        import webui.tabs.run_manager as rm
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "daily_research.db"
+            self.assertFalse(db_path.exists())
+            report_path = Path(temp_dir) / "ARXIV_Report_2026-03-03_16-10-08.html"
+            report_path.write_text(self.REPORT_HTML, encoding="utf-8")
+            report = reports_tab.ReportFile(
+                path=report_path,
+                display="2026-03-03 16:10:08",
+                source="arxiv",
+                report_type="daily",
+                date_key="2026-03-03",
+            )
+            rendered = []
+
+            class FakeST:
+                session_state = {}
+
+                def __getattr__(self, _name):
+                    return lambda *args, **kwargs: None
+
+            def _component(report_html, states, _key):
+                rendered.append((report_html, states))
+                return None
+
+            with (
+                patch.object(reports_tab, "st", FakeST()),
+                patch.object(rm, "_daily_db_path_from_config", lambda _cfg: db_path),
+                patch.object(reports_tab, "_render_report_component", side_effect=_component),
+            ):
+                self.assertTrue(reports_tab._render_daily_report(report, {}))
+
+            self.assertTrue(db_path.exists())
+            self.assertEqual(len(rendered), 1)
+            self.assertIn('data-paper="2401.00001"', rendered[0][0])
+            self.assertEqual(rendered[0][1]["2401.00001"], "none")
+
     def test_missing_store_falls_back_to_raw_html(self):
         import tempfile
 
