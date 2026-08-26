@@ -55,7 +55,15 @@ _RANGE_DAYS = [
 
 
 def components_html(html: str, *, height: int) -> None:
-    """components.html 的薄封装，便于测试替换。"""
+    """在固定高度 iframe 中展示内部生成的可视化 HTML。
+
+    新版 Streamlit 使用原生 iframe，避免 ``components.v1.html`` 的弃用
+    警告；保留旧版 Streamlit 的兼容路径，避免已有部署升级时中断。
+    """
+    iframe = getattr(st, "iframe", None)
+    if callable(iframe):
+        iframe(html, height=height)
+        return
     components.html(html, height=height, scrolling=False)
 
 

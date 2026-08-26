@@ -21,6 +21,12 @@ def _row(prompt: int, completion: int, runs: int = 1) -> dict:
 
 
 class NiceCeilingTests(unittest.TestCase):
+    def test_embedded_visualizations_use_native_streamlit_iframe(self):
+        with patch.object(analytics.st, "iframe", create=True) as iframe:
+            analytics.components_html("<p>chart</p>", height=160)
+
+        iframe.assert_called_once_with("<p>chart</p>", height=160)
+
     def test_ceiling_is_rounded_up_to_nice_steps(self):
         self.assertEqual(analytics._nice_ceiling(0), 1.0)
         self.assertEqual(analytics._nice_ceiling(3), 5.0)

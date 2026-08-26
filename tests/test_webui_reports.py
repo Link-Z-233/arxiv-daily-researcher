@@ -9,12 +9,14 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from webui.tabs.reports import (  # noqa: E402
+    ReportFile,
     _build_sandboxed_preview_html,
     _configured_reports_dir,
     _discover_reports,
     _filter_visible_reports,
     _fmt_daily,
     _latest_visible_report,
+    _render_html_iframe,
     _strip_legacy_title_badges,
 )
 
@@ -87,6 +89,20 @@ class WebUiReportPreviewTests(unittest.TestCase):
         parser = _IframeAttributeParser()
         parser.feed(wrapper)
         self.assertEqual(parser.attributes["srcdoc"], payload)
+
+    def test_raw_preview_uses_native_fixed_height_iframe(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "ARXIV_Report_2026-08-26_12-00-00.html"
+            report_path.write_text("<html><body>safe</body></html>", encoding="utf-8")
+            report = ReportFile(report_path, "report", "arxiv", "daily", "2026-08-26")
+
+            with patch("webui.tabs.reports.st.iframe", create=True) as iframe:
+                _render_html_iframe(report)
+
+        iframe.assert_called_once()
+        rendered, = iframe.call_args.args
+        self.assertIn('sandbox="allow-scripts allow-popups"', rendered)
+        self.assertEqual(iframe.call_args.kwargs, {"height": 800})
 
     def test_custom_non_arxiv_source_is_auto_discovered_and_filterable(self):
         with tempfile.TemporaryDirectory() as temp_dir:

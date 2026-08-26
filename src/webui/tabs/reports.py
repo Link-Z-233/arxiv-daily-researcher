@@ -403,10 +403,9 @@ def _build_sandboxed_preview_html(report_html: str) -> str:
     """Wrap a saved report in an origin-isolated iframe for WebUI preview.
 
     Reports are generated locally, but can also be restored from WebDAV or be
-    edited outside this application.  ``components.html`` runs its contents in
-    a Streamlit component iframe which may share an origin with the WebUI, so
-    rendering report HTML there directly would let a compromised historical
-    report execute in that context.
+    edited outside this application.  Streamlit's native iframe can share an
+    origin with the WebUI, so rendering report HTML there directly would let a
+    compromised historical report execute in that context.
 
     The report is therefore encoded into an inner ``srcdoc`` iframe.  It keeps
     scripts enabled for existing KaTeX-based reports, while deliberately not
@@ -441,11 +440,17 @@ def _render_html_iframe(report: ReportFile) -> None:
         html_content = _strip_legacy_title_badges(
             report.path.read_text(encoding="utf-8")
         )
-        components.html(
-            _build_sandboxed_preview_html(html_content),
-            height=800,
-            scrolling=False,
-        )
+        # The outer document is application-generated and only contains the
+        # escaped report in an inner, origin-isolated sandbox.  This retains
+        # the prior security boundary while avoiding Streamlit's deprecated
+        # ``components.v1.html`` API on current deployments.  The fallback
+        # keeps existing installations on Streamlit < 1.62 usable.
+        preview_html = _build_sandboxed_preview_html(html_content)
+        iframe = getattr(st, "iframe", None)
+        if callable(iframe):
+            iframe(preview_html, height=800)
+        else:
+            components.html(preview_html, height=800, scrolling=False)
     except Exception as e:
         st.error(f"{t('reports_load_error')}: {e}")
 
