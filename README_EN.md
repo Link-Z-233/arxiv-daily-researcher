@@ -26,7 +26,7 @@ The current release includes:
 
 - **Daily research**: a fixed three-day lookback for new papers and revisions
 - **Trend research**: topic, date-range, and category-based research reports
-- **Legacy import and supplement reports**: imports v3.2 JSON history and HTML reports into SQLite
+- **Legacy import and supplement reports**: indexes legacy HTML deliveries by default, with an optional complete repair path
 - **Past daily-report queues**: replays full daily workflows over a selected date range
 - **Streamlit configuration panel**: configuration, execution, reports, data management, and diagnostics
 
@@ -88,7 +88,7 @@ Papers enter SQLite before downstream processing. Source, canonical identity, an
 
 ### 📜 Legacy Import and Past Daily Reports
 
-Import v3.2 JSON history and HTML reports in one workflow. It merges repeated analyses, records incomplete data, scans for missed papers, and starts supplement reporting. Past daily reports use a durable date-range queue and run the complete research pipeline day by day.
+Legacy HTML reports can be indexed into the SQLite delivery ledger in one click, preventing future daily runs from repeating those papers. Complete repair additionally migrates compatible JSON and keyword data, fills missing fields, patches original reports, and produces calendar-week supplement reports for omissions. Past daily reports use a durable date-range queue and run the complete research pipeline day by day.
 
 </td>
 </tr>
@@ -529,7 +529,9 @@ Use one project directory for the worker, WebUI, SQLite database, reports, and l
 
 | Mode | Entry and coordination | Result |
 | :--- | :--------------------- | :----- |
-| <code>legacy_import</code> | Data Management → Read Legacy History; waits for related work to become idle | Merges v3.2 JSON/HTML, records missing data, scans omissions, and starts supplements |
+| <code>legacy_import</code> | Data Management → Read Legacy History; waits for related work to become idle | By default indexes existing arXiv HTML deliveries; complete repair also migrates JSON / <code>keywords.db</code> and runs follow-up maintenance |
+| <code>history_data_repair</code> | Data Management → Check and Repair History | Uses SQLite to fill missing scores, TLDRs, translations, or deep analyses and patches original reports |
+| <code>history_omission_scan</code> | Data Management → Scan Omissions and Build Supplements | Scans the SQLite-covered ArXiv period and creates capped supplements by ISO calendar week |
 | <code>supplement_run</code> | Automatically after import or manually through CLI | Processes supplement backlog and produces supplement reports |
 | <code>backfill_run</code> | Daily Push date range or CLI date range | Queues one complete daily workflow per past date |
 
@@ -610,7 +612,7 @@ Reference-PDF keyword extraction has its own switch. Disabled extraction stays o
 | :------- | :----------- |
 | Daily research | <code>daily_research.lock</code> and the daily-workflow gate |
 | Trend research | A parameter-hashed trend-research lock |
-| Legacy import | Exclusive legacy activity gate that waits for daily, trend, and maintenance tasks |
+| Legacy import, history repair, and omission scan | Exclusive legacy activity gate that waits for daily, trend, and maintenance tasks |
 | Supplement and past daily reports | Shared daily-workflow gate for the SQLite queue and delivery ledger |
 
 Kernel file locks are authoritative. PID and time data serve diagnostics. The WebUI presents active tasks, phase heartbeats, queues, and stop requests.
@@ -625,6 +627,8 @@ Paths:
 - <code>data/reports/daily_research/html/&lt;source&gt;/</code>
 
 Reports include run summaries, paper lists, scores, translations, deep analysis, keywords, and token statistics. Supplement reports carry a supplement label. Past daily reports retain the target date and the actual runtime in their filenames for stable same-day ordering.
+
+When a legacy HTML report is opened in **Reports**, the preview injects persistent 👍 / 👎 controls. Archive files remain unchanged, so opening the HTML file directly from disk does not add those controls.
 
 #### Trend research reports
 
@@ -661,7 +665,7 @@ Large workflows send one consolidated outcome notification. Partial completion, 
 | Local SQLite backup | A consistent gzip snapshot after each daily run; all copies from today and the newest copy per older day |
 | Retention | Any non-negative number in WebUI; default 7 days, with <code>0</code> for permanent retention |
 | WebDAV archive | Incremental upload when database content changes; remote snapshots remain available |
-| Sync scope | Configuration, SQLite, keywords, and reports can be selected independently |
+| Sync scope | Configuration, SQLite history, keywords, and reports can be selected independently |
 | Restore | Data Management imports/exports zip, gz, and db archives after validation |
 
 Stop SQLite-writing tasks and create a current export before restoring a historical archive.
@@ -713,6 +717,8 @@ Open **Analytics → LLM Health** to review recent final outcomes, consecutive f
 - 429, 5xx, timeouts, and empty responses: the shared retry/backoff policy retains incomplete stages
 - After the provider or network recovers: run daily research or a supplement run to reuse completed stages
 
+For a Chat-Completions-only compatible gateway, the first confirmed unsupported <code>/responses</code> route is stored as an endpoint capability and later requests skip that fallback. The run log keeps one redacted diagnostic. If neither route is usable, correct the service address, model, or gateway configuration.
+
 SQLite queues and the delivery ledger are maintained by the application. Use the WebUI or CLI to continue recovery work.
 </details>
 
@@ -741,13 +747,15 @@ For a fixed DNS policy, create a local <code>docker-compose.override.yml</code> 
 
 Legacy import takes exclusive SQLite access. During daily research, trend research, keyword maintenance, supplement runs, or past daily reports, the request stays in the trigger queue and the worker claims it after related work becomes idle.
 
-Check **Daily Push → Status Panel / Run Logs** and <code>legacy_import_*.log</code>. One import request at a time is sufficient.
+Check **Daily Push → Status Panel / Run Logs** and <code>legacy_import_*.log</code>. Independent maintenance tasks use <code>history_data_repair_*.log</code> and <code>history_omission_scan_*.log</code>. One request of each kind is sufficient.
 </details>
 
 <details>
 <summary><b>4. How does legacy import handle repeated analyses, missing data, and missed papers?</b></summary>
 
-Import merges records by stable paper identity and selects the newest report analysis. Missing cards, translations, deep analysis, and papers found during range scans enter <code>supplement_backlog</code>. After import, the supplement workflow processes the backlog within the run cap; completed entries leave the backlog and remaining entries continue in later batches.
+The default **Read Legacy History** action parses only ArXiv cards already present in legacy HTML and creates delivery-ledger rows. It makes no LLM calls and does not scan for omissions, which is useful immediately after an upgrade.
+
+**Fully repair legacy history** merges records by stable paper identity and selects the newest report analysis. It also migrates compatible JSON and <code>data/keywords/keywords.db</code>. The legacy keyword database preserves per-paper terms, original dates, and normalized aliases; keywords found in HTML cards are also written to the paper score record. **Check and Repair History** fills missing TLDRs, translations, or deep analyses from SQLite and patches original reports. Range-scan omissions enter the supplement queue by ISO calendar week. Each report follows the configured run cap, and remaining rows stay retryable.
 
 Complete v4 records have a higher completeness priority, so their existing content remains available during import.
 </details>
