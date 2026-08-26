@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -8,10 +9,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agents.analysis_agent import (  # noqa: E402
     AnalysisAgent,
+    LLMEndpointUnsupportedError,
     LLMResponseError,
     validate_deep_analysis_payload,
 )
 from config import settings  # noqa: E402
+from utils.llm_endpoint_capabilities import (  # noqa: E402
+    clear_endpoint_capability_cache_for_tests,
+    endpoint_is_known_unsupported,
+)
 
 
 def _chat_response(content):
@@ -126,6 +132,63 @@ class LLMResponseCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(chat_call.call_count, 2)
         self.assertEqual(responses_call.call_count, 2)
+
+    def test_unsupported_responses_endpoint_is_cached_and_not_retried(self):
+        """A Chat-only gateway must not receive repeated /responses probes."""
+        class _EndpointNotFound(RuntimeError):
+            status_code = 404
+
+        agent = AnalysisAgent.__new__(AnalysisAgent)
+        agent.cheap_client = SimpleNamespace(
+            responses=SimpleNamespace(create=lambda **_: None)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            endpoint_base = "https://chat-only.example.test/v1"
+            with (
+                patch.object(settings, "DATA_DIR", Path(temp_dir)),
+                patch.object(settings.CHEAP_LLM, "base_url", endpoint_base),
+                patch.object(settings, "LLM_RETRY_MAX_ATTEMPTS", 5),
+                patch.object(settings, "TOKEN_TRACKING_ENABLED", False),
+                patch(
+                    "agents.analysis_agent.call_chat_completion",
+                    return_value=_chat_response(None),
+                ) as chat_call,
+                patch(
+                    "agents.analysis_agent.call_responses",
+                    side_effect=_EndpointNotFound("404 not found or method not allowed"),
+                ) as responses_call,
+            ):
+                clear_endpoint_capability_cache_for_tests()
+                with self.assertRaises(LLMEndpointUnsupportedError):
+                    agent._call_cheap_llm("prompt")
+                self.assertTrue(
+                    endpoint_is_known_unsupported(endpoint_base, "responses")
+                )
+                # The second request still tries the provider's primary Chat
+                # API once, but the failed Responses route is never called.
+                with self.assertRaises(LLMEndpointUnsupportedError):
+                    agent._call_cheap_llm("prompt")
+
+            self.assertEqual(chat_call.call_count, 2)
+            self.assertEqual(responses_call.call_count, 1)
+            clear_endpoint_capability_cache_for_tests()
+
+    def test_non_endpoint_chat_failure_does_not_probe_responses(self):
+        """Connection/auth failures stay on Chat Completions for retry logic."""
+        agent = AnalysisAgent.__new__(AnalysisAgent)
+        agent.cheap_client = SimpleNamespace(
+            responses=SimpleNamespace(create=lambda **_: None)
+        )
+        with patch.object(settings, "LLM_RETRY_MAX_ATTEMPTS", 1), patch.object(
+            settings, "TOKEN_TRACKING_ENABLED", False
+        ), patch(
+            "agents.analysis_agent.call_chat_completion",
+            side_effect=RuntimeError("temporary relay failure"),
+        ), patch("agents.analysis_agent.call_responses") as responses_call:
+            with self.assertRaisesRegex(LLMResponseError, "temporary relay failure"):
+                agent._call_cheap_llm("prompt")
+
+        responses_call.assert_not_called()
 
     def test_provider_connection_failure_is_preserved_without_leaking_a_key(self):
         agent = AnalysisAgent.__new__(AnalysisAgent)

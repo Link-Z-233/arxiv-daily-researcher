@@ -16,6 +16,14 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+
+class LLMEndpointCapabilityError(RuntimeError):
+    """A provider has no usable API endpoint for this request shape.
+
+    Retrying a confirmed route mismatch only delays the same 404/405 failure,
+    so this marker lets the common retry policy stop immediately.
+    """
+
 # 网络层瞬态错误：总是值得重试
 from openai import APIConnectionError, APITimeoutError  # noqa: E402
 
@@ -41,6 +49,18 @@ _TRANSIENT_OPENAI_ERRORS = (APITimeoutError, APIConnectionError)
 
 def is_retryable_llm_error(exc: BaseException) -> bool:
     """Classify an LLM failure as transient (retry) or fatal (fail fast)."""
+    seen = set()
+    current: BaseException | None = exc
+    # Wrapper errors retain provider failures as ``__cause__``. Inspect that
+    # short chain so an OpenAI-compatible relay's 404 does not turn into a
+    # generic retryable ``LLMResponseError`` at the outer tenacity boundary.
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, LLMEndpointCapabilityError):
+            return False
+        if isinstance(current, _FATAL_OPENAI_ERRORS):
+            return False
+        current = current.__cause__ or current.__context__
     if isinstance(exc, _FATAL_OPENAI_ERRORS):
         return False
     if isinstance(exc, _TRANSIENT_OPENAI_ERRORS):

@@ -15,7 +15,16 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 from config import settings
 from parsers.mineru_parser import MineruParser
 from utils.llm_request_pool import call_chat_completion, call_responses
-from utils.llm_resilience import build_llm_client, llm_retry
+from utils.llm_resilience import (
+    LLMEndpointCapabilityError,
+    build_llm_client,
+    llm_retry,
+)
+from utils.llm_endpoint_capabilities import (
+    endpoint_is_known_unsupported,
+    is_unsupported_endpoint_error,
+    record_endpoint_capability,
+)
 from utils.llm_health import LLMHealthRecorder
 from utils.safe_download import download_external_bytes
 from utils.deep_analysis_contract import (
@@ -46,6 +55,10 @@ class ScoreValidationError(ValueError):
 
 class LLMResponseError(RuntimeError):
     """Raised when an LLM provider returned no usable response text."""
+
+
+class LLMEndpointUnsupportedError(LLMResponseError, LLMEndpointCapabilityError):
+    """Raised when a compatible gateway exposes neither usable request route."""
 
 
 def _safe_llm_failure_detail(exc: Optional[BaseException]) -> str:
@@ -405,13 +418,17 @@ class AnalysisAgent:
         temperature: Optional[float],
         response_format: Optional[Dict[str, str]] = None,
     ) -> tuple[str, Any]:
-        """Call chat completions, then an optional Responses API.
+        """Call the provider's supported endpoint without blind route fallback.
 
-        Provider-specific response shapes are normalized here.  A provider
-        that returns no text remains a hard failure so the surrounding retry
-        policy can persist a failed stage instead of accepting a placeholder.
+        Chat Completions remains the portable first choice.  A Responses call
+        is attempted only after a *successful but empty* chat response or an
+        explicitly unsupported Chat route, and a 404/405/501 is cached by
+        base URL.  That turns an OpenAI-SDK attribute check into actual
+        endpoint detection: gateways such as qnaigc that expose no Responses
+        API stop receiving the same failing fallback for every paper/retry.
         """
         last_error: Optional[BaseException] = None
+        chat_returned_empty = False
         chat_kwargs = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
@@ -421,17 +438,60 @@ class AnalysisAgent:
         if response_format is not None:
             chat_kwargs["response_format"] = response_format
 
-        try:
-            response = call_chat_completion(client, **chat_kwargs)
-            text = self._extract_chat_text(response)
-            if text:
-                return text, self._response_usage(response)
-            last_error = LLMResponseError("chat.completions 返回空正文")
-        except Exception as exc:
-            last_error = exc
+        # ``client.base_url`` is an httpx URL in newer SDKs; preserve the
+        # configured string as the stable compatibility key.
+        configured_base_url = str(
+            getattr(client, "base_url", None) or ""
+        )
+        if not configured_base_url:
+            configured_base_url = ""
+
+        # The caller supplies one concrete client/model pair. Infer its base
+        # URL from identity only as a last resort; AnalysisAgent always builds
+        # clients from these two settings, while unit-test doubles need no URL.
+        if client is getattr(self, "cheap_client", None):
+            base_url = settings.CHEAP_LLM.base_url
+        elif client is getattr(self, "smart_client", None):
+            base_url = settings.SMART_LLM.base_url
+        else:
+            base_url = configured_base_url
+        chat_is_unavailable = endpoint_is_known_unsupported(base_url, "chat_completions")
+
+        if not chat_is_unavailable:
+            try:
+                response = call_chat_completion(client, **chat_kwargs)
+                text = self._extract_chat_text(response)
+                if text:
+                    record_endpoint_capability(base_url, "chat_completions", "supported")
+                    return text, self._response_usage(response)
+                # A 2xx response with no usable text can legitimately be a
+                # Responses-only gateway, so it is the one safe fallback case.
+                last_error = LLMResponseError("chat.completions 返回空正文")
+                chat_returned_empty = True
+            except Exception as exc:
+                if is_unsupported_endpoint_error(exc):
+                    record_endpoint_capability(
+                        base_url, "chat_completions", "unsupported", reason=exc
+                    )
+                    chat_is_unavailable = True
+                    last_error = exc
+                else:
+                    # Authentication, schema, rate-limit and network failures
+                    # belong to the original route. Trying another endpoint
+                    # would duplicate work or mask the real diagnosis.
+                    detail = _safe_llm_failure_detail(exc)
+                    message = "Chat Completions 调用失败"
+                    if detail:
+                        message += f"（{detail}）"
+                    raise LLMResponseError(message) from exc
 
         responses = getattr(client, "responses", None)
-        if responses is not None and callable(getattr(responses, "create", None)):
+        responses_is_unavailable = endpoint_is_known_unsupported(base_url, "responses")
+        if (
+            not responses_is_unavailable
+            and responses is not None
+            and callable(getattr(responses, "create", None))
+        ):
             response_kwargs = {"model": model, "input": prompt}
             if temperature is not None:
                 response_kwargs["temperature"] = temperature
@@ -443,6 +503,7 @@ class AnalysisAgent:
                 response = call_responses(client, **response_kwargs)
                 text = self._extract_responses_text(response)
                 if text:
+                    record_endpoint_capability(base_url, "responses", "supported")
                     return text, self._response_usage(response)
                 last_error = LLMResponseError("Responses API 返回空正文")
             except TypeError as exc:
@@ -461,12 +522,42 @@ class AnalysisAgent:
                         response = call_responses(client, **minimal_response_kwargs)
                         text = self._extract_responses_text(response)
                         if text:
+                            record_endpoint_capability(base_url, "responses", "supported")
                             return text, self._response_usage(response)
                         last_error = LLMResponseError("Responses API 返回空正文")
                     except Exception as retry_exc:
+                        if is_unsupported_endpoint_error(retry_exc):
+                            record_endpoint_capability(
+                                base_url, "responses", "unsupported", reason=retry_exc
+                            )
                         last_error = retry_exc
             except Exception as exc:
+                if is_unsupported_endpoint_error(exc):
+                    record_endpoint_capability(
+                        base_url, "responses", "unsupported", reason=exc
+                    )
                 last_error = exc
+
+        # A provider that has already rejected Responses and has just returned
+        # no usable Chat text has no viable route for this request. Mark it
+        # fatal so tenacity does not spend several exponential-backoff cycles
+        # reissuing the same Chat request without any possible fallback.
+        if chat_returned_empty and endpoint_is_known_unsupported(base_url, "responses"):
+            detail = _safe_llm_failure_detail(last_error)
+            message = "Chat Completions 未返回可用正文，且 Responses API 已确认不受此服务支持"
+            if detail:
+                message += f"（{detail}）"
+            raise LLMEndpointUnsupportedError(message) from last_error
+
+        if chat_is_unavailable and (
+            responses_is_unavailable
+            or endpoint_is_known_unsupported(base_url, "responses")
+        ):
+            detail = _safe_llm_failure_detail(last_error)
+            message = "LLM 服务未提供可用的 Chat Completions 或 Responses 端点"
+            if detail:
+                message += f"（最后错误：{detail}）"
+            raise LLMEndpointUnsupportedError(message) from last_error
 
         detail = _safe_llm_failure_detail(last_error)
         message = "LLM 未返回可用正文"
