@@ -25,7 +25,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,32 @@ _ANALYSIS_SECTION_RE = re.compile(r"^深度分析")
 _ANALYSIS_PARAGRAPH_RE = re.compile(r"<p><strong>(?P<label>[^<]+):</strong>\s*(?P<value>.*?)</p>", re.DOTALL)
 _ANALYSIS_LIST_RE = re.compile(r"\s*<ul>(?P<items>.*?)</ul>", re.DOTALL)
 _LIST_ITEM_RE = re.compile(r"<li>(?P<item>.*?)</li>", re.DOTALL)
+
+# A progress callback is deliberately best-effort.  Importing an archive must
+# not fail just because a WebUI heartbeat update cannot be persisted for a
+# moment (for example while a mounted SQLite volume is briefly busy).
+LegacyProgressCallback = Callable[..., None]
+
+
+def _emit_progress(
+    callback: Optional[LegacyProgressCallback],
+    phase: str,
+    detail: str = "",
+    current: Optional[int] = None,
+    total: Optional[int] = None,
+) -> None:
+    """Report one user-visible import checkpoint without affecting import data."""
+    if callback is None:
+        return
+    try:
+        callback(
+            phase=phase,
+            detail=detail,
+            current=current,
+            total=total,
+        )
+    except Exception as exc:  # pragma: no cover - observer failures are non-fatal
+        logger.debug("[LegacyImport] 进度回调失败: %s", exc)
 
 # 深度分析卡片里的展示标签 → 字段 id。旧报告使用英文标签，新模板使用
 # name/label；模板映射在导入时动态补充，这里只兜底历史固定值。
@@ -218,16 +244,44 @@ def _parse_history_key(source: str, key: str) -> Optional[Tuple[str, int]]:
     return normalize_doi_key(text), 0
 
 
-def load_legacy_history_files(history_dir: Path) -> Dict[str, Dict[Tuple[str, int], str]]:
-    """读取旧 JSON 历史：{source: {(canonical, version): delivered_at ISO}}."""
+def load_legacy_history_files(
+    history_dir: Path,
+    *,
+    progress_callback: Optional[LegacyProgressCallback] = None,
+) -> Dict[str, Dict[Tuple[str, int], str]]:
+    """读取旧 JSON 历史：{source: {(canonical, version): delivered_at ISO}}.
+
+    ``progress_callback`` 仅供完整旧历史导入显示当前文件；时间段扫描等
+    复用读取逻辑的调用方无需提供它。
+    """
     result: Dict[str, Dict[Tuple[str, int], str]] = {}
     directory = Path(history_dir)
     if not directory.is_dir():
+        _emit_progress(progress_callback, "legacy_history", "未找到旧 JSON 历史目录", 0, 0)
         return result
-    for item in sorted(directory.glob("*_history.json")):
+    files = [
+        item
+        for item in sorted(directory.glob("*_history.json"))
+        if not item.name.lower().startswith("history_old")
+    ]
+    _emit_progress(
+        progress_callback,
+        "legacy_history",
+        f"发现 {len(files)} 个旧 JSON 历史文件",
+        0,
+        len(files),
+    )
+    for index, item in enumerate(files, start=1):
         if item.name.lower().startswith("history_old"):
             # v1.0 存档文件，不属于 v3.2 活跃历史。
             continue
+        _emit_progress(
+            progress_callback,
+            "legacy_history",
+            f"读取 {item.name}",
+            index - 1,
+            len(files),
+        )
         match = _HISTORY_FILE_RE.match(item.name)
         source = match.group("source").strip().lower() if match else "unknown"
         try:
@@ -247,6 +301,13 @@ def load_legacy_history_files(history_dir: Path) -> Dict[str, Dict[Tuple[str, in
             entries[identity] = delivered_at.strip()
         result[source] = entries
         logger.info("[LegacyImport] 历史文件 %s: %s 条", item.name, len(entries))
+        _emit_progress(
+            progress_callback,
+            "legacy_history",
+            f"已读取 {item.name}（{len(entries)} 条）",
+            index,
+            len(files),
+        )
     return result
 
 
@@ -344,10 +405,15 @@ def _parse_score_details(content: str) -> Dict[str, Any]:
     }
 
 
-def parse_legacy_report_cards(html_root: Path) -> List[Dict[str, Any]]:
+def parse_legacy_report_cards(
+    html_root: Path,
+    *,
+    progress_callback: Optional[LegacyProgressCallback] = None,
+) -> List[Dict[str, Any]]:
     """解析所有旧 HTML 日报，按报告时间升序返回卡片记录（新报告在后）。"""
     root = Path(html_root)
     if not root.is_dir():
+        _emit_progress(progress_callback, "legacy_reports", "未找到旧 HTML 报告目录", 0, 0)
         return []
     files: List[Tuple[datetime, Path, str]] = []
     for path in root.rglob("*.html"):
@@ -361,9 +427,39 @@ def parse_legacy_report_cards(html_root: Path) -> List[Dict[str, Any]]:
         files.append((stamp, path, source))
     files.sort(key=lambda item: item[0])
 
+    _emit_progress(
+        progress_callback,
+        "legacy_reports",
+        f"发现 {len(files)} 份旧 HTML 报告",
+        0,
+        len(files),
+    )
+
     cards: List[Dict[str, Any]] = []
-    for stamp, path, source in files:
-        cards.extend(_parse_report_file(path, source, stamp))
+    for index, (stamp, path, source) in enumerate(files, start=1):
+        _emit_progress(
+            progress_callback,
+            "legacy_reports",
+            f"解析 {path.name}",
+            index - 1,
+            len(files),
+        )
+        report_cards = _parse_report_file(path, source, stamp)
+        cards.extend(report_cards)
+        logger.info(
+            "[LegacyImport] HTML 报告 %s/%s: %s，解析 %s 张卡片",
+            index,
+            len(files),
+            path.name,
+            len(report_cards),
+        )
+        _emit_progress(
+            progress_callback,
+            "legacy_reports",
+            f"已解析 {path.name}（{len(report_cards)} 张卡片）",
+            index,
+            len(files),
+        )
     return cards
 
 
@@ -573,8 +669,14 @@ def import_legacy_history(
     delivery_run_id: str,
     legacy_keywords_db_path: Optional[Path] = None,
     progress_logger: Optional[Any] = None,
+    progress_callback: Optional[LegacyProgressCallback] = None,
 ) -> Dict[str, Any]:
-    """把旧 JSON 历史与 HTML 日报卡片合并进 SQLite，返回汇总。"""
+    """把旧 JSON 历史与 HTML 日报卡片合并进 SQLite，返回汇总。
+
+    导入可能包含数百份归档报告。每个主要阶段和报告文件都会写入普通
+    运行日志；``progress_callback`` 同步给 WebUI 一个有节流能力的持久化
+    心跳，因而刷新页面或容器日志滚动时仍可看到实际进度。
+    """
     log = progress_logger or logger
     summary: Dict[str, Any] = {
         "finished_at": None,
@@ -593,7 +695,11 @@ def import_legacy_history(
         "errors": [],
     }
 
-    histories = load_legacy_history_files(history_dir)
+    log.info("[LegacyImport] 开始读取 v3.2 历史：JSON、HTML 报告与关键词库")
+    _emit_progress(progress_callback, "legacy_history", "开始读取旧 JSON 历史")
+    histories = load_legacy_history_files(
+        history_dir, progress_callback=progress_callback
+    )
     summary["history_files"] = {
         source: len(entries) for source, entries in histories.items()
     }
@@ -606,12 +712,21 @@ def import_legacy_history(
     if not keyword_db_path.is_file():
         summary["legacy_keywords"] = {"state": "not_found", "records_imported": 0}
         log.info("[LegacyKeywordImport] 未找到旧 keywords.db，跳过关键词库迁移")
+        _emit_progress(
+            progress_callback,
+            "legacy_keywords",
+            "未找到旧 keywords.db，已跳过",
+            0,
+            0,
+        )
     else:
         try:
             from keyword_tracker.database import KeywordDatabase
 
             keyword_summary = KeywordDatabase(store.db_path).import_legacy_database(
-                keyword_db_path, progress_logger=log
+                keyword_db_path,
+                progress_logger=log,
+                progress_callback=progress_callback,
             )
             summary["legacy_keywords"] = keyword_summary
             if keyword_summary.get("state") in {"failed", "unreadable", "unsupported_schema"}:
@@ -623,8 +738,15 @@ def import_legacy_history(
             log.warning("[LegacyImport] 旧 keywords.db 迁移初始化失败: %s", exc)
             summary["legacy_keywords"] = {"state": "failed", "error": str(exc)}
             summary["errors"].append(f"旧 keywords.db 迁移初始化失败: {exc}")
+            _emit_progress(
+                progress_callback,
+                "legacy_keywords",
+                "旧关键词库迁移初始化失败，继续导入其他历史",
+            )
 
-    cards = parse_legacy_report_cards(reports_html_dir)
+    cards = parse_legacy_report_cards(
+        reports_html_dir, progress_callback=progress_callback
+    )
     summary["cards_found"] = len(cards)
     summary["reports_scanned"] = len({card["report_path"] for card in cards})
 
@@ -659,7 +781,24 @@ def import_legacy_history(
                 return fallback
         return card["report_at"].isoformat()
 
-    for key, card in sorted(card_index.items(), key=lambda item: item[1]["report_at"]):
+    cards_to_write = sorted(
+        card_index.items(), key=lambda item: item[1]["report_at"]
+    )
+    _emit_progress(
+        progress_callback,
+        "legacy_write",
+        f"准备写入 {len(cards_to_write)} 张最新报告卡片",
+        0,
+        len(cards_to_write),
+    )
+    for index, (key, card) in enumerate(cards_to_write, start=1):
+        _emit_progress(
+            progress_callback,
+            "legacy_write",
+            f"写入 {card['source']}:{card['paper_id']}",
+            index - 1,
+            len(cards_to_write),
+        )
         try:
             has_score = bool(card["score_payload"])
             needs_translation = bool(card["abstract"].strip())
@@ -730,9 +869,26 @@ def import_legacy_history(
                 for reason in reasons:
                     if reason in summary:
                         summary[reason] += 1
+            if index == len(cards_to_write) or index % 25 == 0:
+                log.info(
+                    "[LegacyImport] 卡片写入 %s/%s：已导入 %s，保留新数据 %s，补充积压候选 %s",
+                    index,
+                    len(cards_to_write),
+                    summary["imported"],
+                    summary["skipped_existing_newer"],
+                    len(backlog_entries),
+                )
         except Exception as exc:  # 单卡片失败不终止整个导入
             log.warning("[LegacyImport] 导入卡片失败 %s: %s", key, exc)
             summary["errors"].append(f"{key}: {exc}")
+        finally:
+            _emit_progress(
+                progress_callback,
+                "legacy_write",
+                f"已处理 {card['source']}:{card['paper_id']}",
+                index,
+                len(cards_to_write),
+            )
 
     # 旧历史里有记录、但任何报告卡片都找不到的论文。
     arxiv_card_canonicals = {
@@ -774,12 +930,34 @@ def import_legacy_history(
         )
         summary["missing_cards"] += 1
 
+    _emit_progress(
+        progress_callback,
+        "legacy_backlog",
+        f"整理 {len(backlog_entries)} 条缺失或遗漏数据",
+        0,
+        len(backlog_entries),
+    )
     if backlog_entries:
         try:
             summary["backlog_queued"] = store.record_supplement_backlog(backlog_entries)
+            log.info(
+                "[LegacyImport] 缺失/遗漏数据已写入补充积压：候选 %s 条，新增或更新 %s 条",
+                len(backlog_entries),
+                summary["backlog_queued"],
+            )
         except Exception as exc:
             log.warning("[LegacyImport] 补充积压写入失败: %s", exc)
             summary["errors"].append(f"backlog: {exc}")
+        finally:
+            _emit_progress(
+                progress_callback,
+                "legacy_backlog",
+                f"补充积压完成（新增或更新 {summary['backlog_queued']} 条）",
+                len(backlog_entries),
+                len(backlog_entries),
+            )
+    else:
+        _emit_progress(progress_callback, "legacy_backlog", "没有待补全的旧历史数据", 0, 0)
 
     summary["finished_at"] = datetime.now().isoformat()
     log.info(

@@ -54,11 +54,27 @@ def drain_backfill_queue(
 
         target_date = date.fromisoformat(job["target_date"])
         processed += 1
+        try:
+            batch_progress = store.backfill_batch_summary(job["batch_id"])
+            batch_total = int(batch_progress.get("total", 0) or 0)
+            # This row has already been claimed as running. Completed +
+            # failed + running is the visible ordinal in this user request.
+            batch_current = (
+                int(batch_progress.get("completed", 0) or 0)
+                + int(batch_progress.get("failed", 0) or 0)
+                + int(batch_progress.get("running", 0) or 0)
+            )
+        except Exception as exc:
+            batch_total = 0
+            batch_current = processed
+            logger.warning("过去日报队列无法读取批次进度: %s", exc)
         logger.info(
-            "过去日报队列处理第 %s 天：%s（批次 %s）",
+            "[Backfill] 批次 %s：处理第 %s/%s 天（本次第 %s 个任务）：%s",
+            job["batch_id"],
+            batch_current,
+            batch_total or "?",
             processed,
             target_date.isoformat(),
-            job["batch_id"],
         )
         try:
             result = pipeline_factory().run(
@@ -92,13 +108,19 @@ def drain_backfill_queue(
                     f"当日仍有 {remaining} 篇论文，已自动续跑下一批",
                 )
                 logger.info(
-                    "过去日报 %s 本批完成，仍有 %s 篇待处理；已自动续跑同一天",
+                    "[Backfill] 日期 %s 本批完成，仍有 %s 篇待处理；已自动续跑同一天",
                     target_date,
                     remaining,
                 )
                 continue
             store.complete_backfill_job(job["backfill_id"])
-            logger.info("过去日报 %s 已完成", target_date)
+            logger.info(
+                "[Backfill] 日期 %s 已完成（批次 %s 当前 %s/%s 天）",
+                target_date,
+                job["batch_id"],
+                batch_current,
+                batch_total or "?",
+            )
             continue
 
         failed += 1

@@ -83,6 +83,20 @@ class RunProgressRenderTests(unittest.TestCase):
         fake_st = self._render(_progress(phase="score", registered=0, scored=0))
         self.assertEqual(fake_st.progress_values, [])
 
+    def test_legacy_detail_uses_its_own_progress_ratio(self):
+        fake_st = self._render(
+            _progress(
+                phase="legacy_reports",
+                detail="解析旧 HTML 报告",
+                current=3,
+                total=8,
+                registered=0,
+            )
+        )
+        self.assertIn("rm_progress_phase_legacy_reports", fake_st.captions[0])
+        self.assertIn("解析旧 HTML 报告 (3/8)", fake_st.captions[0])
+        self.assertEqual(fake_st.progress_values, [0.375])
+
     def test_elapsed_from_started_at_is_formatted(self):
         fake_st = self._render(
             _progress(phase="scan", started_at="2026-08-23T12:00:00")

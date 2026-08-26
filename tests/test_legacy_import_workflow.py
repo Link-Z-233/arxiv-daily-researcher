@@ -67,7 +67,7 @@ class LegacyImportWorkflowTests(unittest.TestCase):
                 patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
                 patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
                 patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
                 patch.object(legacy_import, "run_lock", side_effect=_no_lock),
                 patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
                 patch.object(
@@ -124,7 +124,7 @@ class LegacyImportWorkflowTests(unittest.TestCase):
                 patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
                 patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
                 patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
                 patch.object(legacy_import, "run_lock", side_effect=_no_lock),
                 patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
                 patch.object(
@@ -174,7 +174,7 @@ class LegacyImportWorkflowTests(unittest.TestCase):
                 patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
                 patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
                 patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
                 patch.object(legacy_import, "run_lock", side_effect=_no_lock),
                 patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
                 patch.object(
@@ -211,7 +211,7 @@ class LegacyImportWorkflowTests(unittest.TestCase):
                 patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
                 patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
                 patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
                 patch.object(legacy_import, "run_lock", side_effect=_no_lock),
                 patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
                 patch.object(
@@ -258,7 +258,7 @@ class LegacyImportWorkflowTests(unittest.TestCase):
                 patch.object(legacy_import.settings, "ENABLE_NOTIFICATIONS", True),
                 patch.object(legacy_import, "NotifierAgent", _Notifier),
                 patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
                 patch.object(legacy_import, "run_lock", side_effect=_no_lock),
                 patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
                 patch.object(
@@ -317,7 +317,7 @@ class LegacyImportWorkflowTests(unittest.TestCase):
                 patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
                 patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
                 patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary: summary),
+                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
                 patch.object(legacy_import, "run_lock", side_effect=_no_lock),
                 patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
                 patch.object(

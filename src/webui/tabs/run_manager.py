@@ -38,6 +38,8 @@ _IS_DOCKER_WEBUI = not _MAIN_PY.exists()
 _LOG_ACTIVE = "rm_log_active_path"    # 当前展示的日志路径（str）
 _LOG_CLOSED = "rm_log_viewer_closed"  # 是否关闭内容区
 _LOG_VIEWER_HEIGHT_PX = 800
+_LIVE_LOG_TAIL_LINES = 80
+_LIVE_LOG_TAIL_HEIGHT_PX = 360
 # 进度面板用的配置快照：fragment 无法接收参数，经 session_state 传递
 _PROGRESS_CONFIG_KEY = "rm_status_config_values"
 
@@ -49,7 +51,33 @@ _PHASE_LABEL_KEYS = {
     "analyze": "rm_progress_phase_analyze",
     "report": "rm_progress_phase_report",
     "legacy_import": "rm_progress_phase_legacy_import",
+    "legacy_history": "rm_progress_phase_legacy_history",
+    "legacy_keywords": "rm_progress_phase_legacy_keywords",
+    "legacy_reports": "rm_progress_phase_legacy_reports",
+    "legacy_write": "rm_progress_phase_legacy_write",
+    "legacy_backlog": "rm_progress_phase_legacy_backlog",
     "legacy_scan": "rm_progress_phase_legacy_scan",
+}
+
+# The Docker trigger watcher writes a tiny outer ``manual_*.log`` around every
+# request. The real worker creates a mode-specific log after ``main.py`` has
+# validated and started it. Use the held task lock to select that real log for
+# the live panel; only use ``manual_`` during the short startup hand-off.
+_LIVE_LOG_PREFIXES_BY_LOCK = {
+    "daily_research.lock": ("daily_", "cron_", "startup_"),
+    "legacy_import.lock": ("legacy_import_",),
+    "supplement_run.lock": ("supplement_run_", "supplement_"),
+    "backfill_run.lock": ("backfill_run_", "backfill_"),
+    "keyword_maintenance.lock": ("keyword_",),
+}
+_RUN_KIND_LOCK_NAMES = {
+    "daily": "daily_research.lock",
+    "daily_research": "daily_research.lock",
+    "legacy_import": "legacy_import.lock",
+    "supplement": "supplement_run.lock",
+    "supplement_run": "supplement_run.lock",
+    "backfill": "backfill_run.lock",
+    "backfill_run": "backfill_run.lock",
 }
 
 
@@ -254,8 +282,70 @@ def _enqueue_worker_trigger(mode: str, **args) -> tuple[bool, str]:
         return False, str(e)
 
 
-def _latest_run_log() -> Optional[Path]:
-    """最新一次运行日志（手动/定时/趋势任一），用于运行中实时尾部。"""
+def _primary_running_lock(
+    active_locks: list[tuple[Path, Optional[int]]],
+    progress: Optional[dict] = None,
+) -> tuple[Path, Optional[int]]:
+    """Choose the lock that owns the visible active run, when known.
+
+    An old-history import deliberately takes its lock before waiting for a
+    daily-style worker to become idle. During that wait two locks can be held;
+    the SQLite run kind tells us which one is actually doing work so the live
+    panel does not attach the daily progress to the import's waiting log.
+    """
+    if progress:
+        expected = _RUN_KIND_LOCK_NAMES.get(str(progress.get("run_kind") or ""))
+        if expected:
+            for lock in active_locks:
+                if lock[0].name == expected:
+                    return lock
+    # Before a daily/trend run has opened its SQLite ledger, there is no
+    # ``progress`` payload yet. If an import lock and another visible lock
+    # coexist, the import is normally waiting at its exclusive idle gate;
+    # show the already-running task's actual log in that hand-off window.
+    if len(active_locks) > 1 and any(
+        lock_path.name == "legacy_import.lock" for lock_path, _ in active_locks
+    ):
+        for lock in active_locks:
+            if lock[0].name != "legacy_import.lock":
+                return lock
+    return active_locks[0]
+
+
+def _newest_log_with_prefixes(prefixes: tuple[str, ...]) -> Optional[Path]:
+    if not _LOGS_DIR.exists():
+        return None
+    try:
+        matches = [
+            path
+            for path in _LOGS_DIR.glob("**/*.log")
+            if path.name.lower().startswith(prefixes)
+        ]
+        return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
+    except OSError:
+        return None
+
+
+def _latest_run_log(
+    active_locks: Optional[list[tuple[Path, Optional[int]]]] = None,
+    progress: Optional[dict] = None,
+) -> Optional[Path]:
+    """Return the useful log for a running task, with a safe generic fallback.
+
+    In Docker, the watcher-level manual log normally has only request claim,
+    child launch and exit lines. Looking it up first made long v4 jobs appear
+    to stop after three lines even while their true logs continued to grow.
+    """
+    if active_locks:
+        lock_path, _pid = _primary_running_lock(active_locks, progress)
+        prefixes = _LIVE_LOG_PREFIXES_BY_LOCK.get(lock_path.name)
+        if prefixes is None and lock_path.name.startswith("trend_research_"):
+            prefixes = ("trend_",)
+        if prefixes:
+            selected = _newest_log_with_prefixes(prefixes)
+            if selected is not None:
+                return selected
+
     groups = _scan_all_logs()
     for key in ("manual", "daily", "trend"):
         if groups.get(key):
@@ -316,6 +406,13 @@ def _render_run_progress(progress: dict) -> None:
     analyzed = int(progress.get("analyzed") or 0)
     completed = int(progress.get("completed") or 0)
     failed = int(progress.get("failed") or 0)
+    detail = str(progress.get("detail") or "").strip()
+    current = progress.get("current")
+    total = progress.get("total")
+    if not isinstance(current, int) or isinstance(current, bool) or current < 0:
+        current = None
+    if not isinstance(total, int) or isinstance(total, bool) or total < 0:
+        total = None
 
     started_at = progress.get("started_at")
     elapsed_text = ""
@@ -328,20 +425,32 @@ def _render_run_progress(progress: dict) -> None:
         except ValueError:
             elapsed_text = ""
 
-    st.caption(
-        t("rm_progress_caption").format(
-            phase=phase,
-            registered=registered,
-            scored=scored,
-            analyzed=analyzed,
-            completed=completed,
-            failed=failed,
-            elapsed=elapsed_text or "-",
-        )
+    caption = t("rm_progress_caption").format(
+        phase=phase,
+        registered=registered,
+        scored=scored,
+        analyzed=analyzed,
+        completed=completed,
+        failed=failed,
+        elapsed=elapsed_text or "-",
     )
+    if detail:
+        suffix = f"{detail[:240]}"
+        if current is not None and total is not None:
+            suffix += f" ({current}/{total})"
+        caption += f" · {suffix}"
+    st.caption(caption)
     # 评分阶段分母精确（登记数），深度分析用 已分析/(已分析+待分析) 近似。
     phase_value = progress.get("phase")
-    if phase_value == "score" and registered > 0:
+    if (
+        isinstance(phase_value, str)
+        and phase_value.startswith("legacy_")
+        and current is not None
+        and total is not None
+        and total > 0
+    ):
+        st.progress(min(1.0, current / total))
+    elif phase_value == "score" and registered > 0:
         st.progress(min(1.0, scored / registered))
     elif phase_value == "analyze":
         pending = int(progress.get("awaiting_analysis") or 0)
@@ -359,25 +468,36 @@ def _render_live_status_body() -> None:
     is_running = bool(active_locks)
 
     if is_running:
-        f, pid = active_locks[0]
+        progress = _active_run_progress()
+        f, pid = _primary_running_lock(active_locks, progress)
         pid_info = f" · PID {pid}" if pid is not None else ""
         st.markdown(f"**🟢 {t('rm_status_running')}** · `{f.name}`{pid_info}")
-        progress = _active_run_progress()
         if progress is not None:
             _render_run_progress(progress)
+        if len(active_locks) > 1:
+            related = ", ".join(
+                lock_path.name for lock_path, _ in active_locks if lock_path != f
+            )
+            if related:
+                st.caption(t("rm_status_related_locks").format(locks=related))
         # 停止控件放在自动刷新的 fragment 里：整页脚本不会自动重跑，
         # 只有这里能随运行状态自动出现/消失。
         with st.popover("⏹ " + t("rm_stop_btn")):
             st.warning(t("rm_stop_confirm_hint"))
             if st.button(t("rm_stop_confirm"), key="rm_stop_confirm", type="primary"):
                 _request_worker_stop(active_locks)
-        log = _latest_run_log()
+        log = _latest_run_log(active_locks, progress)
         if log is not None:
-            tail = _read_log_tail(log, max_lines=12)
+            tail = _read_log_tail(log, max_lines=_LIVE_LOG_TAIL_LINES)
             with st.expander(
                 f"📜 {log.name} · {t('rm_live_tail_hint')}", expanded=True
             ):
-                st.code(tail)
+                try:
+                    st.code(tail, language="", height=_LIVE_LOG_TAIL_HEIGHT_PX)
+                except TypeError:
+                    # Streamlit < 1.40 has no ``height`` on st.code; the
+                    # full 800px log viewer remains available below.
+                    st.code(tail)
         return
 
     trigger_age = _trigger_age_seconds()

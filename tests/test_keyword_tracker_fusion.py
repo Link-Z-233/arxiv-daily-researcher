@@ -229,6 +229,22 @@ class KeywordFusionTests(unittest.TestCase):
         self.assertEqual(summary["state"], "not_found")
         self.assertEqual(summary["records_imported"], 0)
 
+    def test_v32_migration_emits_bounded_progress(self):
+        legacy_path = Path(self._tmp.name) / "keywords.db"
+        _create_v32_keyword_database(legacy_path)
+        events = []
+
+        KeywordDatabase(self.db_path).import_legacy_database(
+            legacy_path,
+            progress_callback=lambda **event: events.append(event),
+        )
+
+        self.assertTrue(events)
+        self.assertTrue(all(event["phase"] == "legacy_keywords" for event in events))
+        self.assertTrue(
+            any(event.get("current") == 3 and event.get("total") == 3 for event in events)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

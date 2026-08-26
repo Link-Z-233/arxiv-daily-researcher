@@ -12,10 +12,30 @@ import sqlite3
 import logging
 from pathlib import Path
 from datetime import date, timedelta
-from typing import Any, List, Dict, Optional, Tuple
+from typing import Any, Callable, List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_legacy_progress(
+    callback: Optional[Callable[..., None]],
+    detail: str,
+    current: Optional[int] = None,
+    total: Optional[int] = None,
+) -> None:
+    """Best-effort bridge from legacy keyword migration to WebUI progress."""
+    if callback is None:
+        return
+    try:
+        callback(
+            phase="legacy_keywords",
+            detail=detail,
+            current=current,
+            total=total,
+        )
+    except Exception as exc:  # pragma: no cover - diagnostics never block data import
+        logger.debug("[LegacyKeywordImport] 进度回调失败: %s", exc)
 
 
 @dataclass
@@ -173,6 +193,7 @@ class KeywordDatabase:
         legacy_db_path: Path,
         *,
         progress_logger: Optional[Any] = None,
+        progress_callback: Optional[Callable[..., None]] = None,
     ) -> Dict[str, Any]:
         """Merge a v3.2 ``keywords.db`` into the v4 daily SQLite database.
 
@@ -194,12 +215,14 @@ class KeywordDatabase:
         }
         if not source_path.is_file():
             log.info("[LegacyKeywordImport] 未找到旧 keywords.db，跳过关键词库迁移")
+            _emit_legacy_progress(progress_callback, "未找到旧 keywords.db，已跳过", 0, 0)
             return summary
 
         try:
             if source_path.resolve() == self.db_path.resolve():
                 summary["state"] = "same_database"
                 log.warning("[LegacyKeywordImport] 旧关键词库与目标 SQLite 相同，已跳过")
+                _emit_legacy_progress(progress_callback, "旧关键词库与目标 SQLite 相同，已跳过", 0, 0)
                 return summary
         except OSError:
             # Let the read-only open below report the concrete filesystem
@@ -214,6 +237,7 @@ class KeywordDatabase:
         except (OSError, sqlite3.Error) as exc:
             summary.update({"state": "unreadable", "error": str(exc)})
             log.warning("[LegacyKeywordImport] 无法读取旧 keywords.db: %s", exc)
+            _emit_legacy_progress(progress_callback, "无法读取旧 keywords.db，已跳过")
             return summary
 
         try:
@@ -245,71 +269,122 @@ class KeywordDatabase:
             ):
                 summary["state"] = "unsupported_schema"
                 log.warning("[LegacyKeywordImport] 旧 keywords.db 缺少 v3.2 关键词表，已跳过")
+                _emit_legacy_progress(progress_callback, "旧 keywords.db 格式不受支持，已跳过")
                 return summary
 
             log.info("[LegacyKeywordImport] 开始迁移旧 keywords.db")
+            _emit_legacy_progress(progress_callback, "开始读取旧 keywords.db")
             normalized_id_map: Dict[int, int] = {}
             with self._get_connection() as target:
                 if {"id", "canonical_keyword"}.issubset(normalized_columns):
+                    normalized_total = int(
+                        source.execute("SELECT COUNT(*) FROM normalized_keywords").fetchone()[0]
+                    )
+                    _emit_legacy_progress(
+                        progress_callback,
+                        f"迁移规范关键词（共 {normalized_total} 条）",
+                        0,
+                        normalized_total,
+                    )
                     category_expr = "category" if "category" in normalized_columns else "NULL"
                     rows = source.execute(
                         "SELECT id, canonical_keyword, " + category_expr + " AS category "
                         "FROM normalized_keywords ORDER BY rowid"
                     )
-                    for row in rows:
+                    for index, row in enumerate(rows, start=1):
                         canonical = str(row["canonical_keyword"] or "").strip().lower()
-                        if not canonical:
-                            continue
-                        existing = target.execute(
-                            "SELECT id FROM normalized_keywords WHERE canonical_keyword = ?",
-                            (canonical,),
-                        ).fetchone()
-                        if existing is None:
-                            target.execute(
-                                "INSERT INTO normalized_keywords (canonical_keyword, category) VALUES (?, ?)",
-                                (canonical, row["category"]),
-                            )
+                        if canonical:
                             existing = target.execute(
                                 "SELECT id FROM normalized_keywords WHERE canonical_keyword = ?",
                                 (canonical,),
                             ).fetchone()
-                            summary["normalized_terms_imported"] += 1
-                        normalized_id_map[int(row["id"])] = int(existing["id"])
+                            if existing is None:
+                                target.execute(
+                                    "INSERT INTO normalized_keywords (canonical_keyword, category) VALUES (?, ?)",
+                                    (canonical, row["category"]),
+                                )
+                                existing = target.execute(
+                                    "SELECT id FROM normalized_keywords WHERE canonical_keyword = ?",
+                                    (canonical,),
+                                ).fetchone()
+                                summary["normalized_terms_imported"] += 1
+                            normalized_id_map[int(row["id"])] = int(existing["id"])
+                        if index == normalized_total or index % 100 == 0:
+                            log.info(
+                                "[LegacyKeywordImport] 规范关键词迁移 %s/%s",
+                                index,
+                                normalized_total,
+                            )
+                            _emit_legacy_progress(
+                                progress_callback,
+                                f"迁移规范关键词 {index}/{normalized_total}",
+                                index,
+                                normalized_total,
+                            )
 
                 if {"raw_keyword", "normalized_keyword_id"}.issubset(alias_columns):
+                    alias_total = int(
+                        source.execute("SELECT COUNT(*) FROM keyword_aliases").fetchone()[0]
+                    )
+                    _emit_legacy_progress(
+                        progress_callback,
+                        f"迁移关键词别名（共 {alias_total} 条）",
+                        0,
+                        alias_total,
+                    )
                     confidence_expr = "confidence" if "confidence" in alias_columns else "1.0"
                     rows = source.execute(
                         "SELECT raw_keyword, normalized_keyword_id, " + confidence_expr
                         + " AS confidence FROM keyword_aliases ORDER BY rowid"
                     )
-                    for row in rows:
+                    for index, row in enumerate(rows, start=1):
                         raw_keyword = str(row["raw_keyword"] or "").strip().lower()
                         target_id = normalized_id_map.get(int(row["normalized_keyword_id"] or 0))
-                        if not raw_keyword or target_id is None:
-                            continue
-                        existing = target.execute(
-                            "SELECT normalized_keyword_id FROM keyword_aliases WHERE raw_keyword = ?",
-                            (raw_keyword,),
-                        ).fetchone()
-                        if existing is not None:
-                            summary["aliases_preserved"] += 1
-                            continue
-                        try:
-                            confidence = float(row["confidence"] or 1.0)
-                        except (TypeError, ValueError):
-                            confidence = 1.0
-                        target.execute(
-                            "INSERT INTO keyword_aliases (raw_keyword, normalized_keyword_id, confidence) "
-                            "VALUES (?, ?, ?)",
-                            (raw_keyword, target_id, confidence),
-                        )
-                        summary["aliases_imported"] += 1
+                        if raw_keyword and target_id is not None:
+                            existing = target.execute(
+                                "SELECT normalized_keyword_id FROM keyword_aliases WHERE raw_keyword = ?",
+                                (raw_keyword,),
+                            ).fetchone()
+                            if existing is not None:
+                                summary["aliases_preserved"] += 1
+                            else:
+                                try:
+                                    confidence = float(row["confidence"] or 1.0)
+                                except (TypeError, ValueError):
+                                    confidence = 1.0
+                                target.execute(
+                                    "INSERT INTO keyword_aliases (raw_keyword, normalized_keyword_id, confidence) "
+                                    "VALUES (?, ?, ?)",
+                                    (raw_keyword, target_id, confidence),
+                                )
+                                summary["aliases_imported"] += 1
+                        if index == alias_total or index % 100 == 0:
+                            log.info(
+                                "[LegacyKeywordImport] 关键词别名迁移 %s/%s",
+                                index,
+                                alias_total,
+                            )
+                            _emit_legacy_progress(
+                                progress_callback,
+                                f"迁移关键词别名 {index}/{alias_total}",
+                                index,
+                                alias_total,
+                            )
 
                 if required_keyword_columns.issubset(keyword_columns):
+                    record_total = int(
+                        source.execute("SELECT COUNT(*) FROM keywords").fetchone()[0]
+                    )
+                    _emit_legacy_progress(
+                        progress_callback,
+                        f"迁移逐论文关键词（共 {record_total} 条）",
+                        0,
+                        record_total,
+                    )
                     rows = source.execute(
                         "SELECT keyword, paper_id, source, extracted_date FROM keywords ORDER BY rowid"
                     )
-                    for row in rows:
+                    for index, row in enumerate(rows, start=1):
                         summary["records_scanned"] += 1
                         keyword = str(row["keyword"] or "").strip().lower()
                         paper_id = str(row["paper_id"] or "").strip()
@@ -317,14 +392,27 @@ class KeywordDatabase:
                         extracted_date = self._normalize_legacy_date(row["extracted_date"])
                         if not keyword or not paper_id or not source_name or not extracted_date:
                             summary["records_invalid"] += 1
-                            continue
-                        cursor = target.execute(
-                            "INSERT OR IGNORE INTO legacy_keyword_records "
-                            "(source, paper_id, keyword, extracted_date) VALUES (?, ?, ?, ?)",
-                            (source_name, paper_id, keyword, extracted_date),
-                        )
-                        if cursor.rowcount:
-                            summary["records_imported"] += 1
+                        else:
+                            cursor = target.execute(
+                                "INSERT OR IGNORE INTO legacy_keyword_records "
+                                "(source, paper_id, keyword, extracted_date) VALUES (?, ?, ?, ?)",
+                                (source_name, paper_id, keyword, extracted_date),
+                            )
+                            if cursor.rowcount:
+                                summary["records_imported"] += 1
+                        if index == record_total or index % 100 == 0:
+                            log.info(
+                                "[LegacyKeywordImport] 逐论文关键词迁移 %s/%s（新增 %s）",
+                                index,
+                                record_total,
+                                summary["records_imported"],
+                            )
+                            _emit_legacy_progress(
+                                progress_callback,
+                                f"迁移逐论文关键词 {index}/{record_total}",
+                                index,
+                                record_total,
+                            )
 
             self.update_daily_counts()
             summary["state"] = "imported"
@@ -338,10 +426,17 @@ class KeywordDatabase:
                 summary["aliases_preserved"],
                 summary["records_invalid"],
             )
+            _emit_legacy_progress(
+                progress_callback,
+                f"旧关键词库迁移完成（新增 {summary['records_imported']} 条）",
+                summary["records_scanned"],
+                summary["records_scanned"],
+            )
             return summary
         except (OSError, sqlite3.Error) as exc:
             summary.update({"state": "failed", "error": str(exc)})
             log.warning("[LegacyKeywordImport] 旧关键词库迁移失败: %s", exc)
+            _emit_legacy_progress(progress_callback, "旧关键词库迁移失败，继续导入其他历史")
             return summary
         finally:
             source.close()

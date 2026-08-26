@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -30,7 +31,13 @@ from utils.run_lock import (
 
 logger = logging.getLogger("LegacyImport")
 
-def _scan_phase(store: DailyResearchStore, summary: dict) -> dict:
+
+def _scan_phase(
+    store: DailyResearchStore,
+    summary: dict,
+    *,
+    progress_callback=None,
+) -> dict:
     """扫描旧历史涉及的时间段，寻找被漏掉的 arXiv 论文。"""
     try:
         from sources.arxiv_source import ArxivSource
@@ -39,6 +46,11 @@ def _scan_phase(store: DailyResearchStore, summary: dict) -> dict:
     except Exception as exc:  # pragma: no cover - 环境缺依赖时跳过扫描
         logger.warning("时间段扫描初始化失败: %s", exc)
         summary["range_scan"] = {"skipped_reason": f"初始化失败: {exc}"}
+        if progress_callback is not None:
+            progress_callback(
+                phase="legacy_scan",
+                detail="时间段扫描初始化失败，已保留已导入数据",
+            )
         return summary
 
     source = ArxivSource(
@@ -50,14 +62,30 @@ def _scan_phase(store: DailyResearchStore, summary: dict) -> dict:
         load_legacy_history=False,
     )
     domains = list(getattr(settings, "TARGET_DOMAINS", []) or [])
-    scan_summary = scan_legacy_range(
-        store,
-        history_dir=settings.HISTORY_DIR,
-        fetch_between=lambda start, end: source.fetch_domain_papers_between(
-            start, end, domains
-        ),
-        logger_override=logger,
-    )
+    try:
+        scan_summary = scan_legacy_range(
+            store,
+            history_dir=settings.HISTORY_DIR,
+            fetch_between=lambda start, end: source.fetch_domain_papers_between(
+                start, end, domains
+            ),
+            logger_override=logger,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        # Archive import has already committed by this point. Keep its data
+        # and allow automatic supplements to run even if an unexpected scan
+        # integration failure prevents part of the optional range check.
+        logger.exception("旧历史时间段扫描异常，已保留导入结果与可重试积压")
+        scan_summary = {
+            "skipped_reason": f"扫描异常: {exc}",
+            "errors": [str(exc)],
+        }
+        if progress_callback is not None:
+            progress_callback(
+                phase="legacy_scan",
+                detail="时间段扫描异常，已记录并将在下次读取旧历史时重试",
+            )
     summary["range_scan"] = scan_summary
     return summary
 
@@ -82,11 +110,50 @@ def _load_summary(store: DailyResearchStore) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _make_progress_callback(store: DailyResearchStore, run_id: str):
+    """Build a throttled durable heartbeat for the status panel.
+
+    Parser-level checkpoints can be frequent for a large archive. The full
+    detail is always written to the run log; this heartbeat is intentionally
+    limited to phase changes, completed units and one write per second so it
+    cannot contend with the import's actual SQLite writes.
+    """
+    last_phase = None
+    last_write_at = 0.0
+
+    def report(*, phase: str, detail: str = "", current=None, total=None) -> None:
+        nonlocal last_phase, last_write_at
+        now = time.monotonic()
+        complete = (
+            isinstance(current, int)
+            and isinstance(total, int)
+            and total >= 0
+            and current >= total
+        )
+        if phase == last_phase and not complete and now - last_write_at < 1.0:
+            return
+        try:
+            store.record_run_phase(
+                run_id,
+                phase,
+                detail=detail,
+                current=current,
+                total=total,
+            )
+            last_phase = phase
+            last_write_at = now
+        except Exception as exc:  # pragma: no cover - diagnostics are non-critical
+            logger.debug("旧历史导入进度写入失败: %s", exc)
+
+    return report
+
+
 def run_import() -> tuple[int, str, dict]:
     """Run the import phase and keep enough state for one consolidated notice."""
     store = DailyResearchStore(settings.DAILY_RESEARCH_DB_PATH)
     run_id = store.start_run(0, run_kind="legacy_import")
-    store.record_run_phase(run_id, "legacy_import")
+    progress_callback = _make_progress_callback(store, run_id)
+    progress_callback(phase="legacy_import", detail="开始读取旧版本历史")
     summary: dict = {}
     try:
         summary = import_legacy_history(
@@ -96,9 +163,14 @@ def run_import() -> tuple[int, str, dict]:
             delivery_run_id=run_id,
             legacy_keywords_db_path=settings.KEYWORD_DB_PATH,
             progress_logger=logger,
+            progress_callback=progress_callback,
         )
-        store.record_run_phase(run_id, "legacy_scan")
-        summary = _scan_phase(store, summary)
+        progress_callback(phase="legacy_scan", detail="开始扫描旧历史涉及的时间段")
+        summary = _scan_phase(
+            store,
+            summary,
+            progress_callback=progress_callback,
+        )
     except KeyboardInterrupt:
         # WebUI 的“停止运行”会向该子进程发送 SIGINT。导入/扫描已经
         # 写入的数据保持可恢复，但这条 daily_runs 记录必须离开 running，
@@ -191,6 +263,8 @@ def _run_automatic_supplement() -> int:
     try:
         from modes.daily_research import DailyResearchPipeline
 
+        batch_index = 0
+
         # The outer legacy-import mode lock remains held for this second phase
         # (see ``main``).  Acquire both gates once for every capped batch, in
         # the same order as normal daily work.  This preserves the importer as
@@ -215,6 +289,13 @@ def _run_automatic_supplement() -> int:
                         })
                         break
 
+                    batch_index += 1
+                    logger.info(
+                        "[LegacySupplement] 开始第 %s 批：当前积压 %s 篇，每批上限 %s 篇",
+                        batch_index,
+                        batch_pending_before,
+                        getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0) or "不限",
+                    )
                     result = DailyResearchPipeline().run(run_kind="supplement")
                     batch = {
                         "pending_before": batch_pending_before,
@@ -236,6 +317,10 @@ def _run_automatic_supplement() -> int:
                             }
                         )
                         _save_summary(store, summary)
+                        logger.warning(
+                            "[LegacySupplement] 第 %s 批被中断；剩余积压保留供下次重试",
+                            batch_index,
+                        )
                         return 130
                     if getattr(result, "success", None) is not True:
                         supplement.update(
@@ -247,7 +332,11 @@ def _run_automatic_supplement() -> int:
                             }
                         )
                         _save_summary(store, summary)
-                        logger.error("自动补充报告未成功完成；积压仍保留供下次重试")
+                        logger.error(
+                            "[LegacySupplement] 第 %s 批未成功完成：%s；积压仍保留供下次重试",
+                            batch_index,
+                            supplement["error"],
+                        )
                         return 1
 
                     batch_pending_after = int(
@@ -256,6 +345,13 @@ def _run_automatic_supplement() -> int:
                     batch["pending_after"] = batch_pending_after
                     supplement["pending_after"] = batch_pending_after
                     _save_summary(store, summary)
+                    logger.info(
+                        "[LegacySupplement] 第 %s 批完成：处理 %s 篇，剩余积压 %s 篇，报告 %s 份",
+                        batch_index,
+                        batch["processed"],
+                        batch_pending_after,
+                        len(batch["report_paths"]),
+                    )
 
                     if batch_pending_after >= batch_pending_before:
                         # Most commonly a missing-data row could not be fetched
@@ -353,6 +449,14 @@ def _legacy_import_issues(summary: dict) -> list[str]:
     range_scan = summary.get("range_scan")
     if isinstance(range_scan, dict) and range_scan.get("skipped_reason"):
         issues.append(f"旧历史时间段扫描未完整执行：{range_scan['skipped_reason']}")
+    if isinstance(range_scan, dict):
+        raw_scan_errors = range_scan.get("errors")
+        if isinstance(raw_scan_errors, list):
+            issues.extend(
+                f"旧历史时间段扫描：{error}"
+                for error in raw_scan_errors
+                if error
+            )
 
     supplement = summary.get("supplement")
     if isinstance(supplement, dict):

@@ -172,6 +172,29 @@ class LegacyCardParsingTests(unittest.TestCase):
         self.assertAlmostEqual(model.total_score, 2.4)
         self.assertEqual(model.keyword_scores, {"Entanglement": 2.4})
 
+    def test_report_parser_emits_file_level_progress(self):
+        _write_report(
+            self.root,
+            "arxiv",
+            "2026-03-03_16-10-08",
+            _card_fail(1, "2603.00845v1", "Three-Qubit State Preparation"),
+        )
+        events = []
+
+        parse_legacy_report_cards(
+            self.root / "html",
+            progress_callback=lambda **event: events.append(event),
+        )
+
+        self.assertTrue(events)
+        self.assertEqual(events[0]["phase"], "legacy_reports")
+        self.assertTrue(
+            any(
+                event["current"] == 1 and event["total"] == 1
+                for event in events
+            )
+        )
+
 
 class LegacyHistoryLoadingTests(unittest.TestCase):
     def setUp(self):

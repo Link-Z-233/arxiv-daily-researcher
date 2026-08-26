@@ -16,6 +16,7 @@ import os
 import re
 import signal
 import sys
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -207,12 +208,21 @@ def _activity_gate(
     gate_file = gate_path.open("a+")
     acquired = False
     try:
-        try:
-            fcntl.flock(gate_file.fileno(), operation | fcntl.LOCK_NB)
-        except (IOError, OSError):
-            if logger is not None:
-                logger.info("%s", wait_note or default_wait_note)
-            fcntl.flock(gate_file.fileno(), operation)
+        waiting_message = wait_note or default_wait_note
+        next_wait_log_at = 0.0
+        while True:
+            try:
+                fcntl.flock(gate_file.fileno(), operation | fcntl.LOCK_NB)
+                break
+            except (IOError, OSError):
+                now = time.monotonic()
+                if logger is not None and now >= next_wait_log_at:
+                    logger.info("%s（仍在等待，每 30 秒更新一次）", waiting_message)
+                    next_wait_log_at = now + 30.0
+                # Do not block indefinitely inside flock: a short retry makes
+                # waiting visible in the run log and remains interruptible by
+                # the WebUI stop request.
+                time.sleep(1.0)
         acquired = True
         yield
     finally:

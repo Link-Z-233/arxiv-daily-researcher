@@ -68,6 +68,7 @@ def scan_legacy_range(
     fetch_between: Callable[[date, date], List[Any]],
     logger_override: Optional[Any] = None,
     idle_check: Optional[Callable[[], None]] = None,
+    progress_callback: Optional[Callable[..., None]] = None,
 ) -> Dict[str, Any]:
     """扫描旧历史时间段，返回遗漏论文汇总并写入补充积压。
 
@@ -85,28 +86,79 @@ def scan_legacy_range(
         "missed_found": 0,
         "backlog_queued": 0,
         "skipped_reason": None,
+        "failed_chunks": 0,
+        "errors": [],
     }
+
+    def emit(detail: str, current: Optional[int] = None, total: Optional[int] = None) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(
+                phase="legacy_scan",
+                detail=detail,
+                current=current,
+                total=total,
+            )
+        except Exception as exc:  # pragma: no cover - UI observation is optional
+            log.debug("[LegacyScan] 进度回调失败: %s", exc)
 
     date_range = _history_date_range(history_dir)
     if date_range is None:
         summary["skipped_reason"] = "旧历史为空，无法确定扫描时间段"
         log.info("[LegacyScan] %s", summary["skipped_reason"])
+        emit(summary["skipped_reason"], 0, 0)
         return summary
     start, end = date_range
     summary["range_start"] = start.isoformat()
     summary["range_end"] = end.isoformat()
 
     known = _known_arxiv_identities(store)
+    chunks = _month_chunks(start, end)
     log.info(
-        "[LegacyScan] 扫描 %s 至 %s（SQLite 已知身份 %s 个）",
-        start, end, len(known),
+        "[LegacyScan] 扫描 %s 至 %s（共 %s 个分块，SQLite 已知身份 %s 个）",
+        start,
+        end,
+        len(chunks),
+        len(known),
+    )
+    emit(
+        f"扫描 {start} 至 {end}（共 {len(chunks)} 个分块）",
+        0,
+        len(chunks),
     )
 
     missed: List[Dict[str, Any]] = []
-    for chunk_start, chunk_end in _month_chunks(start, end):
+    for chunk_index, (chunk_start, chunk_end) in enumerate(chunks, start=1):
         if idle_check is not None:
             idle_check()
-        papers = fetch_between(chunk_start, chunk_end)
+        emit(
+            f"扫描第 {chunk_index}/{len(chunks)} 个分块：{chunk_start} 至 {chunk_end}",
+            chunk_index - 1,
+            len(chunks),
+        )
+        try:
+            papers = fetch_between(chunk_start, chunk_end)
+        except Exception as exc:
+            # A historical range can span years. One temporary DNS/API outage
+            # should not discard the already imported archive or prevent its
+            # automatically queued supplement reports. Keep failed chunks
+            # explicit so the next import click can retry the missing range.
+            summary["failed_chunks"] += 1
+            error = f"{chunk_start} 至 {chunk_end}: {exc}"
+            summary["errors"].append(error)
+            log.exception(
+                "[LegacyScan] 分块 %s/%s 失败（%s），继续后续分块",
+                chunk_index,
+                len(chunks),
+                error,
+            )
+            emit(
+                f"第 {chunk_index}/{len(chunks)} 个分块失败，已记录待下次重试",
+                chunk_index,
+                len(chunks),
+            )
+            continue
         summary["chunks_scanned"] += 1
         summary["papers_scanned"] += len(papers)
         chunk_missed = 0
@@ -129,8 +181,18 @@ def scan_legacy_range(
                 }
             )
         log.info(
-            "[LegacyScan] 分块 %s~%s: %s 篇，本块遗漏 %s 篇",
-            chunk_start, chunk_end, len(papers), chunk_missed,
+            "[LegacyScan] 分块 %s/%s（%s~%s）: %s 篇，本块遗漏 %s 篇",
+            chunk_index,
+            len(chunks),
+            chunk_start,
+            chunk_end,
+            len(papers),
+            chunk_missed,
+        )
+        emit(
+            f"已完成第 {chunk_index}/{len(chunks)} 个分块（{len(papers)} 篇，遗漏 {chunk_missed} 篇）",
+            chunk_index,
+            len(chunks),
         )
 
     summary["missed_found"] = len(missed)
@@ -141,7 +203,22 @@ def scan_legacy_range(
             log.warning("[LegacyScan] 遗漏论文写入积压失败: %s", exc)
             summary["backlog_queued"] = 0
     log.info(
-        "[LegacyScan] 扫描完成: %s 篇论文中遗漏 %s 篇，新入积压 %s 篇",
-        summary["papers_scanned"], summary["missed_found"], summary["backlog_queued"],
+        "[LegacyScan] 扫描完成: 成功分块 %s/%s，失败 %s；%s 篇论文中遗漏 %s 篇，新入积压 %s 篇",
+        summary["chunks_scanned"],
+        len(chunks),
+        summary["failed_chunks"],
+        summary["papers_scanned"],
+        summary["missed_found"],
+        summary["backlog_queued"],
+    )
+    if summary["failed_chunks"]:
+        summary["skipped_reason"] = (
+            f"{summary['failed_chunks']} 个时间段扫描失败，已记录，后续读取旧历史会重试"
+        )
+    emit(
+        f"时间段扫描完成：遗漏 {summary['missed_found']} 篇，积压 {summary['backlog_queued']} 条"
+        + (f"，失败分块 {summary['failed_chunks']} 个" if summary["failed_chunks"] else ""),
+        len(chunks),
+        len(chunks),
     )
     return summary

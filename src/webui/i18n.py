@@ -71,8 +71,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "When enabled, status, queue, and live log tail refresh every 5 seconds while a task runs; it briefly watches a newly submitted launch, then stops automatically when work ends.",
     },
     "rm_live_tail_hint": {
-        "zh": "日志尾部 12 行",
-        "en": "last 12 log lines",
+        "zh": "日志尾部 80 行（可滚动）",
+        "en": "last 80 log lines (scrollable)",
     },
     "rm_queue_pending": {"zh": "待处理队列", "en": "Pending queue"},
     "rm_queue_failed": {"zh": "失败待重试", "en": "Awaiting retry"},
@@ -407,10 +407,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_progress_phase_analyze": {"zh": "深度分析", "en": "Deep analysis"},
     "rm_progress_phase_report": {"zh": "生成报告", "en": "Writing reports"},
     "rm_progress_phase_legacy_import": {"zh": "导入旧历史", "en": "Importing legacy history"},
+    "rm_progress_phase_legacy_history": {"zh": "读取旧 JSON 历史", "en": "Reading legacy JSON history"},
+    "rm_progress_phase_legacy_keywords": {"zh": "迁移旧关键词库", "en": "Migrating legacy keyword database"},
+    "rm_progress_phase_legacy_reports": {"zh": "解析旧 HTML 报告", "en": "Parsing legacy HTML reports"},
+    "rm_progress_phase_legacy_write": {"zh": "写入历史报告数据", "en": "Writing imported report data"},
+    "rm_progress_phase_legacy_backlog": {"zh": "整理待补全数据", "en": "Preparing repair backlog"},
     "rm_progress_phase_legacy_scan": {"zh": "扫描旧历史时间段", "en": "Scanning legacy date range"},
     "rm_progress_caption": {
         "zh": "{phase} · 登记 {registered} · 已评分 {scored} · 深度分析 {analyzed} · 交付 {completed} · 失败 {failed} · 已运行 {elapsed}",
         "en": "{phase} · registered {registered} · scored {scored} · analyzed {analyzed} · delivered {completed} · failed {failed} · elapsed {elapsed}",
+    },
+    "rm_status_related_locks": {
+        "zh": "同时持有的任务锁：{locks}。若为旧历史导入，表示它正在等待相关任务空闲或执行自动补充报告。",
+        "en": "Other held task locks: {locks}. A legacy import may be waiting for related work to become idle or running its automatic supplement phase.",
     },
     "rm_process_running_label": {
         "zh": "面板触发的进程正在运行",

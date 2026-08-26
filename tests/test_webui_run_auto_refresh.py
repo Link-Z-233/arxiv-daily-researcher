@@ -198,5 +198,45 @@ class ConfiguredRunLockPathTests(unittest.TestCase):
                     configured_data_dir / "run",
                 )
 
+
+class LiveWorkerLogSelectionTests(unittest.TestCase):
+    def test_legacy_lock_selects_real_import_log_over_outer_manual_log(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs = Path(temp_dir)
+            outer = logs / "manual_20260826_120000.log"
+            actual = logs / "legacy_import_20260826_120001.log"
+            outer.write_text("watcher only\n", encoding="utf-8")
+            actual.write_text("import progress\n", encoding="utf-8")
+
+            with patch.object(run_manager, "_LOGS_DIR", logs):
+                chosen = run_manager._latest_run_log(
+                    [(Path("/run/legacy_import.lock"), 123)],
+                    {"run_kind": "legacy_import"},
+                )
+
+            self.assertEqual(chosen, actual)
+
+    def test_visible_active_run_beats_waiting_import_lock(self):
+        locks = [
+            (Path("/run/legacy_import.lock"), 10),
+            (Path("/run/daily_research.lock"), 20),
+        ]
+
+        chosen = run_manager._primary_running_lock(
+            locks, {"run_kind": "daily"}
+        )
+
+        self.assertEqual(chosen, locks[1])
+
+    def test_import_wait_without_database_heartbeat_shows_other_active_task(self):
+        locks = [
+            (Path("/run/legacy_import.lock"), 10),
+            (Path("/run/trend_research_123.lock"), 20),
+        ]
+
+        chosen = run_manager._primary_running_lock(locks, None)
+
+        self.assertEqual(chosen, locks[1])
+
 if __name__ == "__main__":
     unittest.main()

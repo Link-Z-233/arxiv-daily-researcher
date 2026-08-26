@@ -52,6 +52,26 @@ class RunPhaseHeartbeatTests(unittest.TestCase):
             self.assertIsNone(store.active_run_progress())
             self.assertIsNone(store.get_app_state("daily_run_phase"))
 
+    def test_heartbeat_exposes_long_task_detail_and_progress(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "daily.db")
+            run_id = store.start_run(0, run_kind="legacy_import")
+            store.record_run_phase(
+                run_id,
+                "legacy_reports",
+                detail="已解析 ARXIV_Report_2026-08-20_12-00-00.html",
+                current=3,
+                total=9,
+            )
+
+            progress = store.active_run_progress()
+
+            self.assertEqual(progress["run_kind"], "legacy_import")
+            self.assertEqual(progress["phase"], "legacy_reports")
+            self.assertEqual(progress["detail"], "已解析 ARXIV_Report_2026-08-20_12-00-00.html")
+            self.assertEqual(progress["current"], 3)
+            self.assertEqual(progress["total"], 9)
+
     def test_fail_run_clears_heartbeat_and_other_run_heartbeat_survives(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "daily.db")

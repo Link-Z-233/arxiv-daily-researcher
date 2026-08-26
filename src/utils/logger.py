@@ -16,6 +16,39 @@ except ImportError:
     LOG_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
 
 
+# ``setup_logger`` intentionally gives the main pipelines their own console
+# and system-log handlers with ``propagate=False``. Keep track of those named
+# loggers so a per-run log can receive their records too; otherwise a
+# ``daily_*.log`` only contains child loggers that happened to propagate to
+# root, while the useful pipeline stage messages stay in ``system.log``.
+_CONFIGURED_LOGGER_NAMES: set[str] = set()
+_ACTIVE_RUN_HANDLERS: list[logging.Handler] = []
+
+
+def _attach_active_run_handlers(logger: logging.Logger) -> None:
+    """Attach the current run handlers to one dedicated non-propagating logger."""
+    for handler in _ACTIVE_RUN_HANDLERS:
+        if handler not in logger.handlers:
+            logger.addHandler(handler)
+
+
+def _clear_active_run_handlers() -> None:
+    """Detach tracked per-run handlers before a later run in the same process."""
+    if not _ACTIVE_RUN_HANDLERS:
+        return
+    targets = [logging.getLogger()]
+    targets.extend(logging.getLogger(name) for name in _CONFIGURED_LOGGER_NAMES)
+    for handler in _ACTIVE_RUN_HANDLERS:
+        for target in targets:
+            if handler in target.handlers:
+                target.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
+    _ACTIVE_RUN_HANDLERS.clear()
+
+
 def _get_log_config():
     """从 settings 获取日志配置，失败时返回默认值。"""
     try:
@@ -56,9 +89,11 @@ def setup_logger(name: str = "ArxivResearcher"):
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     logger.propagate = False
+    _CONFIGURED_LOGGER_NAMES.add(name)
 
     # 防止重复添加Handler（Jupyter或多次调用时稀有问题）
     if logger.handlers:
+        _attach_active_run_handlers(logger)
         return logger
 
     # 2. 定义日志格式
@@ -98,6 +133,8 @@ def setup_logger(name: str = "ArxivResearcher"):
     except OSError as exc:
         logger.warning("无法写入系统日志 %s，已降级为仅控制台日志: %s", log_file_path, exc)
 
+    _attach_active_run_handlers(logger)
+
     return logger
 
 
@@ -131,10 +168,17 @@ def setup_run_log(mode: str = "daily_research") -> Optional[Path]:
         handler.setFormatter(formatter)
         handler.setLevel(logging.INFO)
 
-        # 添加到根 logger，这样所有子 logger 的输出都会写入此文件
+        # Add to root for ordinary child loggers, then explicitly attach it
+        # to pipeline loggers created by ``setup_logger``. Those loggers use
+        # propagate=False to avoid duplicating system logs, so root alone is
+        # insufficient for a complete per-run diagnostic file.
+        _clear_active_run_handlers()
         root = logging.getLogger()
         root.setLevel(logging.INFO)
         root.addHandler(handler)
+        _ACTIVE_RUN_HANDLERS.append(handler)
+        for logger_name in _CONFIGURED_LOGGER_NAMES:
+            _attach_active_run_handlers(logging.getLogger(logger_name))
     except OSError as exc:
         logging.getLogger("Main").warning(
             "无法创建本次运行日志 %s，已继续执行并仅输出到控制台: %s", log_file, exc

@@ -116,6 +116,31 @@ class LegacyRangeScanTests(unittest.TestCase):
         self.assertEqual(summary["missed_found"], 0)
         self.assertEqual(self.store.supplement_backlog_summary()["pending"], 1)
 
+    def test_failed_chunk_is_recorded_while_later_chunks_continue(self):
+        self._write_history({
+            "2601.00001v1": "2026-01-01T10:00:00",
+            "2602.00001v1": "2026-02-15T10:00:00",
+        })
+        calls = []
+
+        def fetch(start, _end):
+            calls.append(start)
+            if len(calls) == 1:
+                raise RuntimeError("temporary upstream outage")
+            return [_paper("2602.00999v1")]
+
+        summary = scan_legacy_range(
+            self.store,
+            history_dir=self.history_dir,
+            fetch_between=fetch,
+        )
+
+        self.assertEqual(summary["failed_chunks"], 1)
+        self.assertEqual(summary["chunks_scanned"], 1)
+        self.assertEqual(summary["missed_found"], 1)
+        self.assertEqual(summary["backlog_queued"], 1)
+        self.assertIn("后续读取旧历史会重试", summary["skipped_reason"])
+
 
 class FetchBetweenTests(unittest.TestCase):
     def test_fetch_domain_papers_between_dedupes_and_maps_metadata(self):

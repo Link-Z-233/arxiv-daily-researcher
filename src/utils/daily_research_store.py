@@ -1099,22 +1099,39 @@ class DailyResearchStore:
                 (key, value, now),
             )
 
-    def record_run_phase(self, run_id: str, phase: str) -> None:
+    def record_run_phase(
+        self,
+        run_id: str,
+        phase: str,
+        *,
+        detail: Optional[str] = None,
+        current: Optional[int] = None,
+        total: Optional[int] = None,
+    ) -> None:
         """写入当前活跃 run 的阶段心跳，供 WebUI 的长任务进度反馈读取。
 
         只在 run 仍处于 running 状态时写入：交付提交后的收尾步骤
         （通知派发等）不再产生新心跳，避免终态 run 留下陈旧阶段。
         心跳在 run 完成/失败时清理（见 ``_clear_run_phase``）；一个陈旧的
         心跳（如进程被 SIGKILL）只会让进度视图回退到状态推断，不会误报。
+
+        ``detail/current/total`` 是可选的、面向操作者的长任务进度。它们
+        保存在既有 ``app_state`` 心跳中，不改变任何论文或交付账本语义；
+        因而旧数据库无需迁移也能显示旧历史导入、时间段扫描等非论文阶段。
         """
-        payload = json.dumps(
-            {
-                "run_id": run_id,
-                "phase": phase,
-                "updated_at": datetime.now().isoformat(),
-            },
-            ensure_ascii=False,
-        )
+        payload_data: Dict[str, Any] = {
+            "run_id": run_id,
+            "phase": str(phase or ""),
+            "updated_at": datetime.now().isoformat(),
+        }
+        if isinstance(detail, str) and detail.strip():
+            # Keep the small shared state bounded even if an upstream service
+            # returned a verbose error or an unusually long file name.
+            payload_data["detail"] = detail.strip()[:500]
+        for key, value in (("current", current), ("total", total)):
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                payload_data[key] = value
+        payload = json.dumps(payload_data, ensure_ascii=False)
         now = datetime.now().isoformat()
         with self._lock, self._connect() as conn:
             row = conn.execute(
@@ -1169,7 +1186,7 @@ class DailyResearchStore:
             conn.row_factory = sqlite3.Row
             run = conn.execute(
                 """
-                SELECT run_id, started_at, scan_days
+                SELECT run_id, started_at, scan_days, run_kind
                 FROM daily_runs
                 WHERE completed_at IS NULL
                 ORDER BY started_at DESC
@@ -1200,8 +1217,20 @@ class DailyResearchStore:
         registered = int(counts["registered"] or 0)
         heartbeat = self._run_phase_payload()
         phase = None
+        detail = None
+        current = None
+        total = None
         if heartbeat and heartbeat.get("run_id") == run["run_id"]:
             phase = heartbeat.get("phase")
+            raw_detail = heartbeat.get("detail")
+            if isinstance(raw_detail, str) and raw_detail.strip():
+                detail = raw_detail.strip()
+            raw_current = heartbeat.get("current")
+            raw_total = heartbeat.get("total")
+            if isinstance(raw_current, int) and not isinstance(raw_current, bool):
+                current = raw_current
+            if isinstance(raw_total, int) and not isinstance(raw_total, bool):
+                total = raw_total
         if not isinstance(phase, str) or not phase:
             # 兜底推断：与主流程的阶段顺序一致。
             if registered == 0 or int(counts["awaiting_score"] or 0) > 0:
@@ -1213,9 +1242,13 @@ class DailyResearchStore:
 
         return {
             "run_id": run["run_id"],
+            "run_kind": run["run_kind"],
             "started_at": run["started_at"],
             "scan_days": run["scan_days"],
             "phase": phase,
+            "detail": detail,
+            "current": current,
+            "total": total,
             "registered": registered,
             "scored": int(counts["scored"] or 0),
             "analyzed": int(counts["analyzed"] or 0),
