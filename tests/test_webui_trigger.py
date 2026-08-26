@@ -46,14 +46,31 @@ class WebUITriggerTests(unittest.TestCase):
             self.assertEqual(oct(request_path.stat().st_mode & 0o777), "0o600")
 
 
-    def test_legacy_import_request_has_no_arguments(self):
+    def test_legacy_import_accepts_optional_full_repair_switch(self):
         payload = build_trigger_payload("legacy_import")
         self.assertEqual(payload["mode"], "legacy_import")
         self.assertEqual(payload["args"], {})
         command = build_main_command(payload, Path("/worker"))
         self.assertEqual(command[:4], [sys.executable, "/worker/main.py", "--mode", "legacy_import"])
+        full = build_trigger_payload("legacy_import", full_repair=True)
+        self.assertEqual(full["args"], {"full_repair": True})
+        self.assertIn("--legacy-full-repair", build_main_command(full, Path("/worker")))
+        light = build_trigger_payload("legacy_import", full_repair=False)
+        self.assertEqual(light["args"], {"full_repair": False})
+        self.assertIn("--no-legacy-full-repair", build_main_command(light, Path("/worker")))
+        with self.assertRaises(TriggerValidationError):
+            build_trigger_payload("legacy_import", full_repair="yes")
         with self.assertRaises(TriggerValidationError):
             build_trigger_payload("legacy_import", anything=1)
+
+    def test_sqlite_history_maintenance_modes_have_no_arguments(self):
+        for mode in ("history_data_repair", "history_omission_scan"):
+            payload = build_trigger_payload(mode)
+            self.assertEqual(payload["args"], {})
+            command = build_main_command(payload, Path("/worker"))
+            self.assertEqual(command[-1], mode)
+            with self.assertRaises(TriggerValidationError):
+                build_trigger_payload(mode, unsafe=True)
 
     def test_trend_request_uses_argument_list_and_preserves_quoted_phrase(self):
         payload = build_trigger_payload(

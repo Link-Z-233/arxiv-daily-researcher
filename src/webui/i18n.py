@@ -413,6 +413,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "rm_progress_phase_legacy_write": {"zh": "写入历史报告数据", "en": "Writing imported report data"},
     "rm_progress_phase_legacy_backlog": {"zh": "整理待补全数据", "en": "Preparing repair backlog"},
     "rm_progress_phase_legacy_scan": {"zh": "扫描旧历史时间段", "en": "Scanning legacy date range"},
+    "rm_progress_phase_legacy_supplement": {"zh": "生成无报告历史补充", "en": "Building cardless-history supplements"},
+    "rm_progress_phase_history_repair": {"zh": "补全历史数据", "en": "Repairing historical data"},
+    "rm_progress_phase_history_omission_scan": {"zh": "扫描 SQLite 历史遗漏", "en": "Scanning SQLite historical omissions"},
+    "rm_progress_phase_history_omission_week": {"zh": "按自然周生成补充报告", "en": "Building supplements by calendar week"},
     "rm_progress_caption": {
         "zh": "{phase} · 登记 {registered} · 已评分 {scored} · 深度分析 {analyzed} · 交付 {completed} · 失败 {failed} · 已运行 {elapsed}",
         "en": "{phase} · registered {registered} · scored {scored} · analyzed {analyzed} · delivered {completed} · failed {failed} · elapsed {elapsed}",
@@ -1294,10 +1298,36 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # 旧版本（v3.2）历史导入
     "dm_legacy_title": {"zh": "旧版本历史导入（v3.2）", "en": "Legacy History Import (v3.2)"},
     "dm_legacy_hint": {
-        "zh": "一键读取 v3.2 的 JSON 历史、全部 HTML 日报和旧关键词库，把完整数据写入 SQLite：重复分析以最新报告为准；数据缺失或时间段扫描发现的遗漏论文会自动按每份报告上限分批生成补充报告。暂时无法处理的数据会保留，后续读取旧历史时重试。本流程会等待每日研究、趋势分析及其他相关任务空闲后运行。",
-        "en": "Read the v3.2 JSON history, HTML reports, and keyword database into SQLite in one click: duplicated analyses resolve to the newest report; incomplete and range-scan-missed papers automatically produce capped supplement reports in batches. Temporarily unavailable data remains retryable on a later legacy import. The workflow waits for daily, trend, and related work to become idle.",
+        "zh": "旧 HTML 报告会解析为 SQLite 历史账本。重复卡片以最新报告为准；所有维护任务均会等待每日研究、补充报告、过去日报和趋势分析空闲后执行。",
+        "en": "Legacy HTML reports are indexed into the SQLite history ledger. Duplicate cards use the newest report. Every maintenance task waits for daily research, supplements, backfills, and trend work to become idle.",
     },
+    "dm_legacy_full_repair_toggle": {
+        "zh": "完整修复旧历史",
+        "en": "Fully repair legacy history",
+    },
+    "dm_legacy_full_repair_help": {
+        "zh": "关闭时仅登记旧 HTML 中已有的 arXiv 论文，避免后续日报重复处理。开启时还会迁移旧 JSON 与 keywords.db、补全缺失字段、扫描遗漏论文并生成补充报告。",
+        "en": "Off: index only arXiv papers already present in legacy HTML so future daily runs do not repeat them. On: also migrate legacy JSON and keywords.db, repair missing fields, scan omissions, and generate supplements.",
+    },
+    "dm_legacy_full_repair_off_hint": {
+        "zh": "轻量建账：不调用 LLM、不读取旧 JSON 或关键词库、不扫描遗漏论文。",
+        "en": "Lightweight indexing: no LLM calls, JSON/keyword migration, or omission scan.",
+    },
+    "dm_legacy_full_repair_on_hint": {
+        "zh": "完整修复：会读取旧 JSON 与 keywords.db，导入后自动补全 SQLite 中的缺失字段、修补原报告，并按自然周生成遗漏论文补充报告。",
+        "en": "Full repair: reads legacy JSON and keywords.db, repairs missing SQLite fields and original reports, then creates omission supplements by calendar week.",
+    },
+    "dm_legacy_mode_light": {"zh": "轻量建账", "en": "Lightweight indexing"},
+    "dm_legacy_mode_full": {"zh": "完整修复", "en": "Full repair"},
     "dm_legacy_import_btn": {"zh": "📜 读取旧历史", "en": "📜 Read Legacy History"},
+    "dm_history_maintenance_title": {"zh": "历史数据维护", "en": "Historical Data Maintenance"},
+    "dm_history_repair_btn": {"zh": "🩹 检查并补全历史数据", "en": "🩹 Check and Repair History"},
+    "dm_history_omission_btn": {"zh": "🗓️ 扫描遗漏并生成补充报告", "en": "🗓️ Scan Omissions and Build Supplements"},
+    "dm_history_repair_queued": {"zh": "已加入队列：空闲后检查并补全历史数据。", "en": "Queued: historical data will be checked and repaired when idle."},
+    "dm_history_omission_queued": {"zh": "已加入队列：空闲后扫描遗漏并按自然周生成补充报告。", "en": "Queued: omissions will be scanned and supplemented by calendar week when idle."},
+    "dm_history_repair_short": {"zh": "历史数据补全", "en": "history repair"},
+    "dm_history_omission_short": {"zh": "历史遗漏扫描", "en": "omission scan"},
+    "dm_history_task_running_hint": {"zh": "{tasks} 正在排队或运行中，请在“每日推送 → 状态面板/运行日志”查看进度。", "en": "{tasks} is queued or running. See Daily Push → status panel/run logs for progress."},
     "dm_supplement_btn": {"zh": "🧾 生成补充报告", "en": "🧾 Build Supplement Report"},
     "dm_supplement_help": {
         "zh": "把补充积压中的论文（缺数据/遗漏）按「本次最多处理论文数」重跑评分/翻译/分析并生成一份补充报告；会消耗 LLM 额度，任务在空闲时自动运行。",
@@ -1308,8 +1338,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Queued: the worker will build the supplement report when idle.",
     },
     "dm_legacy_queued": {
-        "zh": "已加入触发队列：worker 空闲时自动读取旧历史，并在需要时分批生成补充报告。",
-        "en": "Queued: the worker will import legacy history when idle and generate supplement reports in batches when needed.",
+        "zh": "已加入触发队列：worker 空闲时自动读取旧历史，并按当前完整修复开关执行后续维护。",
+        "en": "Queued: the worker will import legacy history when idle and follow the selected full-repair setting.",
     },
     "dm_legacy_running_hint": {
         "zh": "旧历史导入流程正在排队或运行中，请在“每日推送 → 运行状态/运行日志”查看实时进度。",
@@ -1322,8 +1352,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "dm_legacy_summary_title": {"zh": "最近一次导入结果", "en": "Last import result"},
     "dm_legacy_summary_line": {
-        "zh": "{finished} · 报告 {reports} 份 · 卡片 {cards} 张 · 交付账本 {delivered} 条 · 缺卡片 {missing_cards} · 缺翻译 {missing_translation} · 缺分析 {missing_analysis} · 积压 {backlog} 条",
-        "en": "{finished} · {reports} reports · {cards} cards · {delivered} deliveries · missing cards {missing_cards} · missing translations {missing_translation} · missing analyses {missing_analysis} · backlog {backlog}",
+        "zh": "{finished} · {mode} · 报告 {reports} 份 · 卡片 {cards} 张 · 交付账本 {delivered} 条 · 缺卡片 {missing_cards} · 缺 TL;DR {missing_tldr} · 缺翻译 {missing_translation} · 缺分析 {missing_analysis} · 积压 {backlog} 条",
+        "en": "{finished} · {mode} · {reports} reports · {cards} cards · {delivered} deliveries · missing cards {missing_cards} · missing TL;DR {missing_tldr} · missing translations {missing_translation} · missing analyses {missing_analysis} · backlog {backlog}",
     },
     "dm_legacy_supplement_line": {
         "zh": "自动补充报告：{state} · 本次处理 {processed} 篇 · 剩余积压 {pending} 条",
@@ -1339,10 +1369,19 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_legacy_keywords_state_unreadable": {"zh": "无法读取", "en": "unreadable"},
     "dm_legacy_keywords_state_unsupported_schema": {"zh": "格式不受支持", "en": "unsupported schema"},
     "dm_legacy_keywords_state_failed": {"zh": "迁移失败", "en": "failed"},
+    "dm_legacy_keywords_state_skipped_lightweight": {"zh": "轻量模式已跳过", "en": "skipped in lightweight mode"},
+    "dm_history_repair_line": {
+        "zh": "历史数据补全：{state} · 检查 {candidates} 篇 · TL;DR {tldr} · 翻译 {translation} · 分析 {analysis} · 待重试 {pending}",
+        "en": "History repair: {state} · checked {candidates} · TL;DR {tldr} · translations {translation} · analyses {analysis} · retry pending {pending}",
+    },
+    "dm_history_omission_line": {
+        "zh": "历史遗漏扫描：{state} · 发现 {found} 篇 · 自然周 {weeks} 个 · 待处理 {pending}",
+        "en": "History omission scan: {state} · found {found} · weeks {weeks} · pending {pending}",
+    },
     "dm_legacy_backlog_title": {"zh": "补充运行积压", "en": "Supplement backlog"},
     "dm_legacy_backlog_line": {
-        "zh": "待处理 {pending} 条（缺数据 {missing} · 遗漏 {missed}）；下次读取旧历史会自动继续重试",
-        "en": "{pending} pending ({missing} incomplete · {missed} missed); the next legacy import automatically retries them",
+        "zh": "待处理 {pending} 条（缺数据 {missing} · 遗漏 {missed}）；下次完整修复或对应维护任务会继续重试",
+        "en": "{pending} pending ({missing} incomplete · {missed} missed); the next full repair or matching maintenance task will retry them",
     },
     "ps_title": {"zh": "论文检索", "en": "Paper Search"},
     "ps_hint": {"zh": "在已处理论文的标题、作者、摘要、TLDR 与提取关键词中检索。", "en": "Search titles, authors, abstracts, TLDRs and extracted keywords of processed papers."},

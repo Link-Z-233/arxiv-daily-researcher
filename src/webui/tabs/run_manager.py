@@ -57,6 +57,10 @@ _PHASE_LABEL_KEYS = {
     "legacy_write": "rm_progress_phase_legacy_write",
     "legacy_backlog": "rm_progress_phase_legacy_backlog",
     "legacy_scan": "rm_progress_phase_legacy_scan",
+    "legacy_supplement": "rm_progress_phase_legacy_supplement",
+    "history_repair": "rm_progress_phase_history_repair",
+    "history_omission_scan": "rm_progress_phase_history_omission_scan",
+    "history_omission_week": "rm_progress_phase_history_omission_week",
 }
 
 # The Docker trigger watcher writes a tiny outer ``manual_*.log`` around every
@@ -66,6 +70,8 @@ _PHASE_LABEL_KEYS = {
 _LIVE_LOG_PREFIXES_BY_LOCK = {
     "daily_research.lock": ("daily_", "cron_", "startup_"),
     "legacy_import.lock": ("legacy_import_",),
+    "history_data_repair.lock": ("history_data_repair_",),
+    "history_omission_scan.lock": ("history_omission_scan_",),
     "supplement_run.lock": ("supplement_run_", "supplement_"),
     "backfill_run.lock": ("backfill_run_", "backfill_"),
     "keyword_maintenance.lock": ("keyword_",),
@@ -74,6 +80,8 @@ _RUN_KIND_LOCK_NAMES = {
     "daily": "daily_research.lock",
     "daily_research": "daily_research.lock",
     "legacy_import": "legacy_import.lock",
+    "history_data_repair": "history_data_repair.lock",
+    "history_omission_scan": "history_omission_scan.lock",
     "supplement": "supplement_run.lock",
     "supplement_run": "supplement_run.lock",
     "backfill": "backfill_run.lock",
@@ -166,7 +174,7 @@ def _scan_all_logs() -> dict[str, list[Path]]:
     扫描 logs/ 目录下所有 *.log，按类型分组（最新在前）。
 
     分组：
-      manual  → manual_/legacy_import_/supplement_/backfill_*.log（面板触发）
+      manual  → manual_/legacy_import_/history_*_/supplement_/backfill_*.log（面板触发）
       daily   → daily_*.log / cron_*.log / startup_*.log（定时/启动触发）
       trend   → trend_*.log
       system  → system*.log / arxiv_researcher*.log
@@ -186,7 +194,8 @@ def _scan_all_logs() -> dict[str, list[Path]]:
     for p in all_logs:
         name = p.name.lower()
         if name.startswith((
-            "manual_", "legacy_import_", "supplement_", "backfill_"
+            "manual_", "legacy_import_", "history_data_repair_",
+            "history_omission_scan_", "supplement_", "backfill_"
         )):
             groups["manual"].append(p)
         elif name.startswith(("daily_", "cron_", "startup_")):
@@ -444,7 +453,7 @@ def _render_run_progress(progress: dict) -> None:
     phase_value = progress.get("phase")
     if (
         isinstance(phase_value, str)
-        and phase_value.startswith("legacy_")
+        and (phase_value.startswith("legacy_") or phase_value.startswith("history_"))
         and current is not None
         and total is not None
         and total > 0

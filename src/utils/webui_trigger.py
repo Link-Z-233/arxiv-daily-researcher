@@ -32,12 +32,16 @@ SUPPORTED_MODES = frozenset(
         "daily_research",
         "trend_research",
         "legacy_import",
+        "history_data_repair",
+        "history_omission_scan",
         "supplement_run",
         "backfill_run",
     }
 )
 # 面板触发的后台作业：不接受任何参数。
-_NO_ARGS_MODES = frozenset({"daily_research", "legacy_import", "supplement_run"})
+_NO_ARGS_MODES = frozenset(
+    {"daily_research", "history_data_repair", "history_omission_scan", "supplement_run"}
+)
 # 最早可补跑的日期（arXiv 上线年份）。
 _BACKFILL_EARLIEST = date(1991, 1, 1)
 _CATEGORY_RE = re.compile(r"^[A-Za-z0-9.-]{1,64}$")
@@ -178,6 +182,22 @@ def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
             raise TriggerValidationError(f"{mode} does not accept trigger arguments")
         return normalized
 
+    if mode == "legacy_import":
+        unexpected = set(args).difference({"full_repair"})
+        if unexpected:
+            raise TriggerValidationError("legacy_import contains unsupported arguments")
+        # Empty arguments retain compatibility with queued requests created by
+        # earlier v4 releases and let the worker use its saved configuration.
+        # The current WebUI always sends an explicit value so a click honors
+        # an unsaved toggle state as well.
+        if "full_repair" not in args:
+            return normalized
+        enabled = args.get("full_repair")
+        if not isinstance(enabled, bool):
+            raise TriggerValidationError("legacy_import.full_repair must be a boolean")
+        normalized["args"] = {"full_repair": enabled}
+        return normalized
+
     if mode == "backfill_run":
         allowed = {"target_date", "date_from", "date_to"}
         unexpected = set(args).difference(allowed)
@@ -301,6 +321,13 @@ def build_main_command(payload: Mapping[str, Any], project_root: Path) -> list[s
     """Build a list-only command; untrusted request text is never shell-expanded."""
     request = validate_trigger_payload(payload)
     command = [sys.executable, str(Path(project_root) / "main.py"), "--mode", request["mode"]]
+    if request["mode"] == "legacy_import":
+        if "full_repair" in request["args"]:
+            command.append(
+                "--legacy-full-repair"
+                if request["args"]["full_repair"]
+                else "--no-legacy-full-repair"
+            )
     if request["mode"] == "backfill_run":
         args = request["args"]
         if args.get("target_date"):

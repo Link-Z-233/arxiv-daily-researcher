@@ -315,8 +315,8 @@ def _legacy_import_store(config_values: dict):
         return None
 
 
-def _legacy_import_already_queued(queue_dir: Path) -> bool:
-    """Return whether this specific workflow already has a durable request.
+def _history_task_already_queued(queue_dir: Path, mode: str) -> bool:
+    """Return whether one specific history task already has a durable request.
 
     Other WebUI jobs are intentionally allowed to remain ahead of a legacy
     import.  The worker's FIFO trigger queue plus the importer gates make that
@@ -340,13 +340,18 @@ def _legacy_import_already_queued(queue_dir: Path) -> bool:
             # not turn an unrelated legacy-import action into a permanent
             # disabled control.
             continue
-        if payload.get("mode") == "legacy_import":
+        if payload.get("mode") == mode:
             return True
     return False
 
 
+def _legacy_import_already_queued(queue_dir: Path) -> bool:
+    """Backward-compatible helper used by existing callers/tests."""
+    return _history_task_already_queued(queue_dir, "legacy_import")
+
+
 def _render_legacy_import_section(config_values: dict) -> None:
-    """旧版本（v3.2）历史导入：按钮 + 最近结果 + 补充积压概览。"""
+    """v3.2 importer plus independent SQLite repair/omission workflows."""
     import json as json_module
 
     st.divider()
@@ -363,20 +368,61 @@ def _render_legacy_import_section(config_values: dict) -> None:
 
     queue_dir = trigger_directory(_PROJECT_ROOT / "data")
     legacy_pending = _legacy_import_already_queued(queue_dir)
+    full_repair_enabled = st.toggle(
+        t("dm_legacy_full_repair_toggle"),
+        value=bool(config_values.get("legacy_import_full_repair_enabled", False)),
+        key="legacy_import_full_repair_enabled",
+        help=t("dm_legacy_full_repair_help"),
+    )
+    st.caption(
+        t(
+            "dm_legacy_full_repair_on_hint"
+            if full_repair_enabled
+            else "dm_legacy_full_repair_off_hint"
+        )
+    )
 
-    # 补充报告是读取旧历史后的自动第二阶段，不再暴露一个会让用户误以为
-    # 必须单独点击的按钮。一个导入请求覆盖导入、时间段扫描和受上限控制的补充报告分批续跑；
-    # 其他每日类任务运行时仍可排队，等工作器空闲后自动接手。
+    # Full repair is deliberately opt-in. The button passes the live toggle
+    # instead of relying on a separate Save click, so its one-time behavior is
+    # never surprising when the user has just changed the switch.
     if st.button(
         t("dm_legacy_import_btn"),
         width="stretch",
         disabled=legacy_pending,
         type="primary",
     ):
-        _enqueue_legacy_import()
+        _enqueue_legacy_import(full_repair_enabled)
 
     if legacy_pending:
         st.info(t("dm_legacy_running_hint"))
+
+    st.caption(f"**{t('dm_history_maintenance_title')}**")
+    repair_pending = _history_task_already_queued(queue_dir, "history_data_repair")
+    omission_pending = _history_task_already_queued(queue_dir, "history_omission_scan")
+    col_repair, col_omission = st.columns(2)
+    with col_repair:
+        if st.button(
+            t("dm_history_repair_btn"),
+            key="dm_history_repair",
+            width="stretch",
+            disabled=repair_pending,
+        ):
+            _enqueue_history_task("history_data_repair", "dm_history_repair_queued")
+    with col_omission:
+        if st.button(
+            t("dm_history_omission_btn"),
+            key="dm_history_omission",
+            width="stretch",
+            disabled=omission_pending,
+        ):
+            _enqueue_history_task("history_omission_scan", "dm_history_omission_queued")
+    if repair_pending or omission_pending:
+        active = []
+        if repair_pending:
+            active.append(t("dm_history_repair_short"))
+        if omission_pending:
+            active.append(t("dm_history_omission_short"))
+        st.info(t("dm_history_task_running_hint").format(tasks="、".join(active)))
 
     store = _legacy_import_store(config_values)
     if store is None:
@@ -394,18 +440,37 @@ def _render_legacy_import_section(config_values: dict) -> None:
         if isinstance(summary, dict):
             st.caption(f"**{t('dm_legacy_summary_title')}**")
             finished = str(summary.get("finished_at") or "")[:19].replace("T", " ")
+            mode_label = t(
+                "dm_legacy_mode_full"
+                if summary.get("full_repair_enabled")
+                else "dm_legacy_mode_light"
+            )
             st.caption(
                 t("dm_legacy_summary_line").format(
                     finished=finished or "—",
+                    mode=mode_label,
                     reports=summary.get("reports_scanned", 0),
-                    cards=summary.get("cards_found", 0),
+                    cards=summary.get("cards_selected", summary.get("cards_found", 0)),
                     delivered=summary.get("delivered_ledger_rows", 0),
                     missing_cards=summary.get("missing_cards", 0),
+                    missing_tldr=summary.get("missing_tldr", 0),
                     missing_translation=summary.get("missing_translation", 0),
                     missing_analysis=summary.get("missing_analysis", 0),
                     backlog=summary.get("backlog_queued", 0),
                 )
             )
+            repair = summary.get("history_repair")
+            if isinstance(repair, dict):
+                st.caption(
+                    t("dm_history_repair_line").format(
+                        state=repair.get("state", "—"),
+                        candidates=repair.get("candidates", 0),
+                        tldr=(repair.get("repaired") or {}).get("tldr", 0),
+                        translation=(repair.get("repaired") or {}).get("translation", 0),
+                        analysis=(repair.get("repaired") or {}).get("analysis", 0),
+                        pending=repair.get("pending_after", 0),
+                    )
+                )
             supplement = summary.get("supplement")
             if isinstance(supplement, dict):
                 st.caption(
@@ -415,6 +480,17 @@ def _render_legacy_import_section(config_values: dict) -> None:
                         pending=supplement.get(
                             "pending_after", supplement.get("pending_before", 0)
                         ),
+                    )
+                )
+            omission = summary.get("omission_scan")
+            if isinstance(omission, dict):
+                scan = omission.get("scan") if isinstance(omission.get("scan"), dict) else {}
+                st.caption(
+                    t("dm_history_omission_line").format(
+                        state=omission.get("state", "—"),
+                        found=scan.get("missed_found", 0),
+                        weeks=len(omission.get("weeks") or []),
+                        pending=omission.get("pending_after", 0),
                     )
                 )
             legacy_keywords = summary.get("legacy_keywords")
@@ -427,6 +503,7 @@ def _render_legacy_import_section(config_values: dict) -> None:
                     "unreadable": "dm_legacy_keywords_state_unreadable",
                     "unsupported_schema": "dm_legacy_keywords_state_unsupported_schema",
                     "failed": "dm_legacy_keywords_state_failed",
+                    "skipped_lightweight": "dm_legacy_keywords_state_skipped_lightweight",
                 }.get(state)
                 state_label = t(state_key) if state_key else state
                 st.caption(
@@ -466,14 +543,14 @@ def _render_legacy_import_section(config_values: dict) -> None:
         )
 
 
-def _enqueue_legacy_import() -> None:
-    """Queue the complete legacy-import workflow (including auto supplement)."""
+def _enqueue_legacy_import(full_repair: bool) -> None:
+    """Queue the selected lightweight or complete legacy-import workflow."""
     mode = "legacy_import"
     queued_key = "dm_legacy_queued"
     main_py = _PROJECT_ROOT / "main.py"
     if not main_py.exists():
         try:
-            enqueue_trigger(_PROJECT_ROOT / "data", mode)
+            enqueue_trigger(_PROJECT_ROOT / "data", mode, full_repair=full_repair)
         except Exception as e:
             st.error(f"{t('dm_legacy_failed')}: {e}")
             return
@@ -487,7 +564,13 @@ def _enqueue_legacy_import() -> None:
     try:
         with open(log_file, "w") as lf:
             subprocess.Popen(
-                [sys.executable, str(main_py), "--mode", mode],
+                [
+                    sys.executable,
+                    str(main_py),
+                    "--mode",
+                    mode,
+                    "--legacy-full-repair" if full_repair else "--no-legacy-full-repair",
+                ],
                 cwd=str(_PROJECT_ROOT),
                 stdout=lf,
                 stderr=lf,
@@ -497,6 +580,32 @@ def _enqueue_legacy_import() -> None:
         st.rerun()
     except Exception as e:
         st.error(f"{t('dm_legacy_failed')}: {e}")
+
+
+def _enqueue_history_task(mode: str, queued_key: str) -> None:
+    """Queue one independent SQLite maintenance task through the same worker."""
+    if mode not in {"history_data_repair", "history_omission_scan"}:
+        raise ValueError(f"unsupported history task: {mode}")
+    main_py = _PROJECT_ROOT / "main.py"
+    try:
+        if not main_py.exists():
+            enqueue_trigger(_PROJECT_ROOT / "data", mode)
+        else:
+            logs_dir = _PROJECT_ROOT / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_file = logs_dir / f"{mode}_{datetime.now():%Y%m%d_%H%M%S}.log"
+            with open(log_file, "w") as lf:
+                subprocess.Popen(
+                    [sys.executable, str(main_py), "--mode", mode],
+                    cwd=str(_PROJECT_ROOT),
+                    stdout=lf,
+                    stderr=lf,
+                    start_new_session=True,
+                )
+        st.toast(t(queued_key), icon="🗂️")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"{t('dm_legacy_failed')}: {exc}")
 
 
 def collect(env_values: dict, _config_values: dict) -> tuple:
@@ -535,6 +644,9 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         "backup_enabled": current_cfg("backup_enabled", True),
         "backup_local_retention_days": current_cfg(
             "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
+        ),
+        "legacy_import_full_repair_enabled": current_cfg(
+            "legacy_import_full_repair_enabled", False
         ),
     }
 
