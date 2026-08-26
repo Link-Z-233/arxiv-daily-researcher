@@ -121,6 +121,14 @@ def validate_config_document(config: object) -> Dict[str, Any]:
             from utils.backup import validate_local_backup_retention_days
 
             validate_local_backup_retention_days(backup["local_retention_days"])
+    legacy_history = config.get("legacy_history")
+    if legacy_history is not None:
+        if not isinstance(legacy_history, dict):
+            raise ValueError("legacy_history 配置段必须是对象")
+        if "full_repair_enabled" in legacy_history and not isinstance(
+            legacy_history["full_repair_enabled"], bool
+        ):
+            raise ValueError("legacy_history.full_repair_enabled 必须是布尔值")
     data_sources = config.get("data_sources")
     if data_sources is not None:
         if not isinstance(data_sources, dict):
@@ -228,6 +236,7 @@ SECTION_COMMENTS = {
     "proxy": "Network Proxy Configuration",
     "webdav": "WebDAV Sync Configuration",
     "backup": "Database Backup Configuration",
+    "legacy_history": "Legacy History Import Configuration",
     "trend_research": "Trend Research Mode Configuration",
 }
 
@@ -673,6 +682,7 @@ def build_config_dict(
     daily_max_papers_per_run: int = 200,
     daily_run_time: str = "12:00",
     daily_enable_deep_analysis: bool = True,
+    legacy_import_full_repair_enabled: bool = False,
     data_dir: str = "data",
     reference_pdfs: str = "data/reference_pdfs",
     reports: str = "data/reports",
@@ -932,6 +942,9 @@ def build_config_dict(
             "max_papers_per_run": daily_max_papers_per_run,
             "run_time": daily_run_time,
             "db_path": daily_research_db_path,
+        },
+        "legacy_history": {
+            "full_repair_enabled": legacy_import_full_repair_enabled,
         },
         "pdf_parser": {
             "mode": pdf_parser_mode,
@@ -1248,6 +1261,14 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["daily_run_time"] = dr.get("run_time", "12:00")
     flat["daily_research_db_path"] = dr.get(
         "db_path", "data/daily_research/daily_research.db"
+    )
+
+    # Legacy history import
+    legacy_history = config.get("legacy_history", {})
+    if not isinstance(legacy_history, dict):
+        legacy_history = {}
+    flat["legacy_import_full_repair_enabled"] = legacy_history.get(
+        "full_repair_enabled", False
     )
 
     # PDF parser

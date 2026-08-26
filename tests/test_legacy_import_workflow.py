@@ -1,17 +1,16 @@
-"""The WebUI legacy-import action includes its automatic supplement phase."""
+"""Legacy import mode: lightweight ledger path and opt-in full repair path."""
 
 import json
 import sys
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from modes import legacy_import  # noqa: E402
-from notifications.notifier import RunResult  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from utils.legacy_history import LEGACY_IMPORT_STATE_KEY  # noqa: E402
 
@@ -21,217 +20,117 @@ def _no_lock(*_args, **_kwargs):
     yield
 
 
+def _base_import_summary(full_repair: bool) -> dict:
+    return {
+        "finished_at": "2026-08-24T12:00:00",
+        "full_repair_enabled": full_repair,
+        "reports_scanned": 1,
+        "cards_found": 1,
+        "cards_selected": 1,
+        "delivered_ledger_rows": 1,
+        "backlog_queued": 0,
+        "errors": [],
+    }
+
+
 class LegacyImportWorkflowTests(unittest.TestCase):
-    def test_successful_import_automatically_runs_a_supplement_batch(self):
+    def _patch_environment(self, root: Path):
+        return (
+            patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", root / "daily.db"),
+            patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
+            patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
+            patch.object(legacy_import, "run_lock", side_effect=_no_lock),
+            patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
+            patch.object(legacy_import, "legacy_import_activity_gate", side_effect=_no_lock),
+        )
+
+    @contextmanager
+    def _environment(self, root: Path):
+        with ExitStack() as stack:
+            for context in self._patch_environment(root):
+                stack.enter_context(context)
+            yield
+
+    def test_lightweight_import_only_builds_html_delivery_ledger(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            db_path = root / "daily.db"
-            pipeline_calls = []
+            calls = []
 
-            def fake_import(store, **_kwargs):
-                store.record_supplement_backlog(
-                    [
-                        {
-                            "source": "arxiv",
-                            "canonical_id": "2608.1",
-                            "version": 1,
-                            "paper_id": "2608.1v1",
-                            "reason": "missing_analysis",
-                        }
-                    ]
+            def fake_import(_store, **kwargs):
+                calls.append(kwargs)
+                return _base_import_summary(False)
+
+            with (
+                self._environment(root),
+                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
+            ):
+                self.assertEqual(legacy_import.main(full_repair=False), 0)
+
+            self.assertEqual(len(calls), 1)
+            self.assertFalse(calls[0]["full_repair"])
+            store = DailyResearchStore(root / "daily.db")
+            summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
+            self.assertFalse(summary["full_repair_enabled"])
+            self.assertEqual(summary["history_repair"]["state"], "skipped")
+            self.assertEqual(summary["supplement"]["state"], "skipped")
+            self.assertEqual(summary["omission_scan"]["state"], "skipped")
+            with store._connect() as conn:
+                self.assertEqual(
+                    conn.execute("SELECT status FROM daily_runs").fetchone()["status"],
+                    "completed",
                 )
-                return {
-                    "finished_at": "2026-08-24T12:00:00",
-                    "reports_scanned": 1,
-                    "cards_found": 1,
-                    "delivered_ledger_rows": 0,
-                    "backlog_queued": 1,
+
+    def test_full_import_runs_repair_then_cardless_and_weekly_workflows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            call_order = []
+
+            def fake_import(_store, **kwargs):
+                call_order.append(("import", kwargs["full_repair"]))
+                return _base_import_summary(True)
+
+            def fake_repair(*, store, notify):
+                call_order.append(("repair", notify))
+                return 0, "repair-run", {
+                    "candidates": 2,
+                    "pending_after": 0,
+                    "repaired": {"tldr": 1, "translation": 1, "analysis": 0},
                 }
 
-            class _Pipeline:
-                def run(self, *, run_kind):
-                    pipeline_calls.append(run_kind)
-                    DailyResearchStore(db_path).resolve_supplement_backlog(
-                        "fake-supplement",
-                        [("arxiv", "2608.1", 1)],
-                        status="delivered",
-                    )
-                    return RunResult(
-                        success=True,
-                        total_papers_fetched=1,
-                        report_paths={"arxiv_html": "supplement.html"},
-                    )
+            def fake_supplement(_store, _summary, **_kwargs):
+                call_order.append(("cardless", None))
+                return 0
 
-            with (
-                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
-                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
-                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
-                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
-                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
-                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
-                patch.object(
-                    legacy_import,
-                    "legacy_import_activity_gate",
-                    side_effect=_no_lock,
-                ),
-                patch("modes.daily_research.DailyResearchPipeline", _Pipeline),
-            ):
-                self.assertEqual(legacy_import.main(), 0)
-
-            self.assertEqual(pipeline_calls, ["supplement"])
-            store = DailyResearchStore(db_path)
-            summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
-            self.assertEqual(summary["supplement"]["state"], "completed")
-            self.assertEqual(summary["supplement"]["processed"], 1)
-            self.assertEqual(summary["supplement"]["pending_before"], 1)
-
-    def test_successful_import_drains_multiple_capped_supplement_batches(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            db_path = root / "daily.db"
-            pipeline_calls = []
-
-            def fake_import(store, **_kwargs):
-                store.record_supplement_backlog(
-                    [
-                        {
-                            "source": "arxiv",
-                            "canonical_id": f"2608.{index}",
-                            "version": 1,
-                            "paper_id": f"2608.{index}v1",
-                            "reason": "missed_scan",
-                        }
-                        for index in range(1, 4)
-                    ]
-                )
-                return {"finished_at": "2026-08-24T12:00:00"}
-
-            class _CappedPipeline:
-                def run(self, *, run_kind):
-                    pipeline_calls.append(run_kind)
-                    store = DailyResearchStore(db_path)
-                    row = store.claim_supplement_backlog(1)[0]
-                    store.resolve_supplement_backlog(
-                        "fake-supplement",
-                        [(row["source"], row["canonical_id"], row["version"])],
-                        status="delivered",
-                    )
-                    return RunResult(success=True, total_papers_fetched=1)
-
-            with (
-                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
-                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
-                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
-                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
-                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
-                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
-                patch.object(
-                    legacy_import,
-                    "legacy_import_activity_gate",
-                    side_effect=_no_lock,
-                ),
-                patch("modes.daily_research.DailyResearchPipeline", _CappedPipeline),
-            ):
-                self.assertEqual(legacy_import.main(), 0)
-
-            self.assertEqual(pipeline_calls, ["supplement", "supplement", "supplement"])
-            store = DailyResearchStore(db_path)
-            self.assertEqual(store.supplement_backlog_summary()["pending"], 0)
-            summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
-            self.assertEqual(summary["supplement"]["state"], "completed")
-            self.assertEqual(summary["supplement"]["processed"], 3)
-            self.assertEqual(len(summary["supplement"]["batches"]), 3)
-
-    def test_unfetchable_batch_remains_retryable_without_looping_forever(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            db_path = root / "daily.db"
-            pipeline_calls = []
-
-            def fake_import(store, **_kwargs):
-                store.record_supplement_backlog(
-                    [
-                        {
-                            "source": "arxiv",
-                            "canonical_id": "2608.99",
-                            "version": 1,
-                            "paper_id": "2608.99v1",
-                            "reason": "missing_data",
-                        }
-                    ]
-                )
-                return {"finished_at": "2026-08-24T12:00:00"}
-
-            class _NoProgressPipeline:
-                def run(self, *, run_kind):
-                    pipeline_calls.append(run_kind)
-                    return RunResult(success=True)
-
-            with (
-                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
-                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
-                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
-                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
-                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
-                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
-                patch.object(
-                    legacy_import,
-                    "legacy_import_activity_gate",
-                    side_effect=_no_lock,
-                ),
-                patch("modes.daily_research.DailyResearchPipeline", _NoProgressPipeline),
-            ):
-                self.assertEqual(legacy_import.main(), 0)
-
-            self.assertEqual(pipeline_calls, ["supplement"])
-            store = DailyResearchStore(db_path)
-            self.assertEqual(store.supplement_backlog_summary()["pending"], 1)
-            summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
-            self.assertEqual(summary["supplement"]["state"], "retry_pending")
-
-    def test_complete_import_skips_the_unneeded_supplement_phase(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            db_path = root / "daily.db"
-
-            def fake_import(_store, **_kwargs):
-                return {
-                    "finished_at": "2026-08-24T12:00:00",
-                    "reports_scanned": 1,
-                    "cards_found": 1,
-                    "delivered_ledger_rows": 1,
-                    "backlog_queued": 0,
+            def fake_omission(*, store, notify):
+                call_order.append(("omission", notify))
+                return 0, "omission-run", {
+                    "scan": {"missed_found": 3},
+                    "weeks": [{"week_start": "2026-08-24", "batches": 1}],
+                    "pending_after": 0,
                 }
 
             with (
-                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
-                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
-                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
+                self._environment(root),
                 patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
-                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
-                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
-                patch.object(
-                    legacy_import,
-                    "legacy_import_activity_gate",
-                    side_effect=_no_lock,
-                ),
-                patch("modes.daily_research.DailyResearchPipeline") as pipeline,
+                patch("modes.history_data_repair.run_history_data_repair", side_effect=fake_repair),
+                patch("modes.history_omission_scan.run_history_omission_scan", side_effect=fake_omission),
+                patch.object(legacy_import, "_run_automatic_supplement", side_effect=fake_supplement),
             ):
-                self.assertEqual(legacy_import.main(), 0)
+                self.assertEqual(legacy_import.main(full_repair=True), 0)
 
-            pipeline.assert_not_called()
-            store = DailyResearchStore(db_path)
+            self.assertEqual(
+                call_order,
+                [("import", True), ("repair", False), ("cardless", None), ("omission", False)],
+            )
+            store = DailyResearchStore(root / "daily.db")
             summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
-            self.assertEqual(summary["supplement"]["state"], "not_needed")
+            self.assertEqual(summary["history_repair"]["state"], "completed")
+            self.assertEqual(summary["omission_scan"]["state"], "completed")
+            self.assertEqual(summary["omission_scan"]["scan"]["missed_found"], 3)
 
-    def test_import_and_automatic_supplement_emit_one_consolidated_notification(self):
+    def test_full_import_sends_one_consolidated_degraded_notification(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            db_path = root / "daily.db"
             delivered = []
 
             class _Notifier:
@@ -242,128 +141,52 @@ class LegacyImportWorkflowTests(unittest.TestCase):
                 def deliver_pending_workflow_results(self, _store):
                     return {"claimed": 1, "sent": 1, "deferred": 0}
 
-            def fake_import(_store, **_kwargs):
-                return {
-                    "finished_at": "2026-08-24T12:00:00",
-                    "history_files": {"arxiv": 2},
-                    "reports_scanned": 1,
-                    "cards_found": 1,
-                    "backlog_queued": 0,
-                }
-
             with (
-                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
-                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
-                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
+                self._environment(root),
                 patch.object(legacy_import.settings, "ENABLE_NOTIFICATIONS", True),
                 patch.object(legacy_import, "NotifierAgent", _Notifier),
-                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
-                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
-                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
-                patch.object(
-                    legacy_import,
-                    "legacy_import_activity_gate",
-                    side_effect=_no_lock,
-                ),
-            ):
-                self.assertEqual(legacy_import.main(), 0)
-
-            self.assertEqual(len(delivered), 1)
-            _run_id, result = delivered[0]
-            self.assertEqual(result.workflow, "旧历史导入")
-            self.assertTrue(result.success)
-            self.assertEqual(result.summary["自动补充报告"].split("；", 1)[0], "not_needed")
-
-    def test_failed_automatic_supplement_keeps_backlog_retryable(self):
-        """A failed second phase must not consume repair entries permanently."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            db_path = root / "daily.db"
-
-            def fake_import(store, **_kwargs):
-                store.record_supplement_backlog(
-                    [
-                        {
-                            "source": "arxiv",
-                            "canonical_id": "2608.2",
-                            "version": 1,
-                            "paper_id": "2608.2v1",
-                            "reason": "missing_analysis",
-                            "paper_json": {
-                                "paper_id": "2608.2v1",
-                                "title": "Retry Me",
-                                "authors": [],
-                                "abstract": "a",
-                                "published_date": "2026-08-01T00:00:00",
-                                "url": "https://arxiv.org/abs/2608.2v1",
-                                "source": "arxiv",
-                            },
-                        }
-                    ]
-                )
-                return {"finished_at": "2026-08-24T12:00:00"}
-
-            class _FailingPipeline:
-                def run(self, *, run_kind):
-                    self.run_kind = run_kind
-                    return RunResult(
-                        success=False,
-                        error_message="temporary LLM outage",
-                    )
-
-            with (
-                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
-                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
-                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
-                patch.object(legacy_import, "import_legacy_history", side_effect=fake_import),
-                patch.object(legacy_import, "_scan_phase", side_effect=lambda _store, summary, **_kwargs: summary),
-                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
-                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
-                patch.object(
-                    legacy_import,
-                    "legacy_import_activity_gate",
-                    side_effect=_no_lock,
-                ),
-                patch("modes.daily_research.DailyResearchPipeline", _FailingPipeline),
-            ):
-                self.assertEqual(legacy_import.main(), 1)
-
-            store = DailyResearchStore(db_path)
-            self.assertEqual(store.supplement_backlog_summary()["pending"], 1)
-            summary = json.loads(store.get_app_state(LEGACY_IMPORT_STATE_KEY))
-            self.assertEqual(summary["supplement"]["state"], "failed")
-
-    def test_interrupted_import_marks_its_run_failed_before_exiting(self):
-        """The WebUI stop action must not leave a phantom running import."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            db_path = root / "daily.db"
-
-            with (
-                patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", db_path),
-                patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
-                patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
                 patch.object(
                     legacy_import,
                     "import_legacy_history",
-                    side_effect=KeyboardInterrupt,
+                    return_value=_base_import_summary(True),
                 ),
-                patch.object(legacy_import, "run_lock", side_effect=_no_lock),
-                patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
-                patch.object(
-                    legacy_import,
-                    "legacy_import_activity_gate",
-                    side_effect=_no_lock,
+                patch(
+                    "modes.history_data_repair.run_history_data_repair",
+                    return_value=(1, "repair-run", {"candidates": 1, "pending_after": 1, "issues": ["TL;DR API 暂不可用"]}),
+                ),
+                patch.object(legacy_import, "_run_automatic_supplement", return_value=0),
+                patch(
+                    "modes.history_omission_scan.run_history_omission_scan",
+                    return_value=(0, "omission-run", {"scan": {}, "weeks": [], "pending_after": 0}),
                 ),
             ):
-                self.assertEqual(legacy_import.main(), 130)
+                self.assertEqual(legacy_import.main(full_repair=True), 1)
 
-            store = DailyResearchStore(db_path)
+            self.assertEqual(len(delivered), 1)
+            store = DailyResearchStore(root / "daily.db")
             with store._connect() as conn:
-                row = conn.execute(
-                    "SELECT status, completed_at, error FROM daily_runs"
+                parent = conn.execute(
+                    "SELECT status, error FROM daily_runs WHERE run_kind = 'legacy_import'"
                 ).fetchone()
+            self.assertEqual(parent["status"], "failed")
+            self.assertIn("旧历史完整修复有步骤未完成", parent["error"])
+            _run_id, result = delivered[0]
+            self.assertEqual(result.workflow, "旧历史导入")
+            self.assertFalse(result.success)
+            self.assertTrue(any("TL;DR API 暂不可用" in item for item in result.issues))
+
+    def test_interrupted_import_marks_parent_run_failed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with (
+                self._environment(root),
+                patch.object(legacy_import, "import_legacy_history", side_effect=KeyboardInterrupt),
+            ):
+                self.assertEqual(legacy_import.main(full_repair=False), 130)
+
+            store = DailyResearchStore(root / "daily.db")
+            with store._connect() as conn:
+                row = conn.execute("SELECT status, completed_at, error FROM daily_runs").fetchone()
             self.assertEqual(row["status"], "failed")
             self.assertIsNotNone(row["completed_at"])
             self.assertIn("用户中断旧历史导入", row["error"])

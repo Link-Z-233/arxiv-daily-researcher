@@ -62,6 +62,8 @@ find /app/logs -name "trend_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/d
 find /app/logs -name "webdav_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "keyword_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "legacy_import_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
+find /app/logs -name "history_data_repair_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
+find /app/logs -name "history_omission_scan_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "supplement_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "backfill_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
 find /app/logs -name "update_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true

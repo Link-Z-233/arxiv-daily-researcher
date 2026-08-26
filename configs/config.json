@@ -222,6 +222,12 @@
     "db_path": "data/daily_research/daily_research.db"
   },
 
+  // Legacy HTML can always be indexed into SQLite. Enable this only when
+  // the same import should also repair missing fields and scan omissions.
+  "legacy_history": {
+    "full_repair_enabled": false
+  },
+
   // ==================================================
   // PDF Parser Configuration
   // ==================================================

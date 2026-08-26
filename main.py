@@ -42,11 +42,32 @@ def parse_args(argv: Optional[Sequence[str]] = None):
             "daily_research",
             "trend_research",
             "legacy_import",
+            "history_data_repair",
+            "history_omission_scan",
             "supplement_run",
             "backfill_run",
         ],
-        help="运行模式：daily_research（每日研究，默认）、trend_research（研究趋势分析）、legacy_import（旧版本历史导入）、supplement_run（补充报告）或 backfill_run（过去时间段每日报告）",
+        help=(
+            "运行模式：daily_research（每日研究，默认）、trend_research（研究趋势分析）、"
+            "legacy_import（旧版本历史导入）、history_data_repair（历史数据补全）、"
+            "history_omission_scan（历史遗漏扫描）、supplement_run（补充报告）或 "
+            "backfill_run（过去时间段每日报告）"
+        ),
     )
+    legacy_repair_group = parser.add_mutually_exclusive_group()
+    legacy_repair_group.add_argument(
+        "--legacy-full-repair",
+        dest="legacy_full_repair",
+        action="store_true",
+        help="[legacy_import] 覆盖配置，导入后执行历史数据补全、遗漏扫描和补充报告",
+    )
+    legacy_repair_group.add_argument(
+        "--no-legacy-full-repair",
+        dest="legacy_full_repair",
+        action="store_false",
+        help="[legacy_import] 覆盖配置，只登记旧 HTML 中已有的 arXiv 论文",
+    )
+    parser.set_defaults(legacy_full_repair=None)
     parser.add_argument(
         "--target-date",
         type=str,
@@ -215,6 +236,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     args = parse_args(argv)
 
+    if args.legacy_full_repair is not None and args.mode != "legacy_import":
+        logger.error("--legacy-full-repair / --no-legacy-full-repair 只能用于 legacy_import")
+        return 1
+
     if args.mode == "trend_research":
         # 研究趋势分析模式
         log_file = setup_run_log("trend_research")
@@ -270,7 +295,43 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         from modes.legacy_import import main as legacy_import_main
 
-        return legacy_import_main()
+        return legacy_import_main(full_repair=args.legacy_full_repair)
+
+    if args.mode == "history_data_repair":
+        log_file = setup_run_log("history_data_repair")
+        logger.info(f"历史数据补全日志文件: {log_file}")
+        from modes.history_data_repair import run_history_data_repair
+
+        with run_lock("history_data_repair"):
+            with daily_workflow_gate(
+                logger=logger,
+                wait_note="历史数据补全等待每日研究、补充报告或过去日报完成",
+            ):
+                with legacy_import_activity_gate(
+                    exclusive=True,
+                    logger=logger,
+                    wait_note="历史数据补全等待趋势分析及其他任务空闲",
+                ):
+                    exit_code, _run_id, _summary = run_history_data_repair()
+        return exit_code
+
+    if args.mode == "history_omission_scan":
+        log_file = setup_run_log("history_omission_scan")
+        logger.info(f"历史遗漏扫描日志文件: {log_file}")
+        from modes.history_omission_scan import run_history_omission_scan
+
+        with run_lock("history_omission_scan"):
+            with daily_workflow_gate(
+                logger=logger,
+                wait_note="历史遗漏扫描等待每日研究、补充报告或过去日报完成",
+            ):
+                with legacy_import_activity_gate(
+                    exclusive=True,
+                    logger=logger,
+                    wait_note="历史遗漏扫描等待趋势分析及其他任务空闲",
+                ):
+                    exit_code, _run_id, _summary = run_history_omission_scan()
+        return exit_code
 
     if args.mode == "supplement_run":
         # 补充报告：重跑旧历史缺失/遗漏论文，产出一份补充报告。

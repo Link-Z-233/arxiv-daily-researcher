@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -220,6 +221,41 @@ class KeywordFusionTests(unittest.TestCase):
         second = db.import_legacy_database(legacy_path)
         self.assertEqual(second["state"], "imported")
         self.assertEqual(second["records_imported"], 0)
+
+    def test_readonly_snapshot_fallback_handles_clean_wal_mode_archive(self):
+        """A read-only bind mount can require immutable=1 without losing WAL data."""
+        legacy_path = Path(self._tmp.name) / "keywords.db"
+        _create_v32_keyword_database(legacy_path)
+        original_connect = sqlite3.connect
+        calls = []
+
+        def fail_only_normal_readonly(database, *args, **kwargs):
+            calls.append(str(database))
+            if "mode=ro" in str(database) and "immutable=1" not in str(database):
+                raise sqlite3.OperationalError("unable to open database file")
+            return original_connect(database, *args, **kwargs)
+
+        with patch("keyword_tracker.database.sqlite3.connect", side_effect=fail_only_normal_readonly):
+            source, mode = KeywordDatabase._open_legacy_database_readonly(legacy_path)
+        try:
+            self.assertEqual(mode, "immutable_snapshot")
+            self.assertEqual(source.execute("SELECT COUNT(*) FROM keywords").fetchone()[0], 3)
+        finally:
+            source.close()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("immutable=1", calls[-1])
+
+    def test_readonly_snapshot_refuses_an_uncheckpointed_wal(self):
+        legacy_path = Path(self._tmp.name) / "keywords.db"
+        _create_v32_keyword_database(legacy_path)
+        legacy_path.with_name(legacy_path.name + "-wal").write_bytes(b"pending")
+
+        with patch(
+            "keyword_tracker.database.sqlite3.connect",
+            side_effect=sqlite3.OperationalError("unable to open database file"),
+        ):
+            with self.assertRaisesRegex(sqlite3.OperationalError, "未合并的 -wal"):
+                KeywordDatabase._open_legacy_database_readonly(legacy_path)
 
     def test_missing_v32_keywords_database_is_an_explicit_non_error(self):
         db = KeywordDatabase(self.db_path)

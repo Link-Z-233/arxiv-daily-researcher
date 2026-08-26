@@ -1213,6 +1213,38 @@ class AnalysisAgent:
     # 摘要翻译
     # ======================================================================
 
+    def generate_tldr(self, title: str, abstract: str) -> str:
+        """Generate only a missing one-sentence TL;DR for history repair.
+
+        A persisted relevance score remains authoritative.  This intentionally
+        uses the lightweight plain-text route instead of rebuilding the full
+        score JSON, so repairing one omitted field does not alter the original
+        qualification decision or consume a full scoring call.
+        """
+        prompt = f"""请为以下学术论文写一条中文 TL;DR。
+
+要求：
+1. 只输出一句完整中文，不要标题、引号、列表或解释；
+2. 说明研究问题、方法或主要结果中的关键信息；
+3. 不要臆造摘要中未出现的实验结果。
+
+论文标题：{title}
+论文摘要：{abstract or '（原始摘要缺失，请只根据标题谨慎概括）'}
+"""
+        try:
+            result = self._call_cheap_llm_plain(prompt)
+        except Exception as exc:
+            logger.warning("TL;DR 补全失败 [%s]: %s", str(title)[:50], exc)
+            raise RuntimeError(f"TL;DR 补全失败: {exc}") from exc
+        text = str(result or "").strip()
+        if not text:
+            raise RuntimeError("TL;DR 补全返回空结果")
+        # A gateway occasionally emits a short heading on a separate line.
+        # Keep a compact one-line report field while preserving meaningful
+        # punctuation in Chinese and English scientific names.
+        text = " ".join(text.split())
+        return text[:1200]
+
     def translate_abstract(self, abstract: str) -> str:
         """
         将英文摘要翻译为中文。

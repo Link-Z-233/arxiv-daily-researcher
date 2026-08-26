@@ -28,7 +28,13 @@ from typing import List, Optional
 LOCK_SKIPPED_EXIT_CODE = 75
 
 # 面板触发的后台作业模式。保留该常量给兼容调用方和运行状态展示使用。
-AUX_JOB_MODES = ("legacy_import", "supplement_run", "backfill_run")
+AUX_JOB_MODES = (
+    "legacy_import",
+    "history_data_repair",
+    "history_omission_scan",
+    "supplement_run",
+    "backfill_run",
+)
 
 # 旧历史导入会批量写入同一个 SQLite 状态库，不能只依赖“先检查再运行”
 # 的锁文件轮询：检查结束到进程真正启动之间仍可能有每日任务插入。这个

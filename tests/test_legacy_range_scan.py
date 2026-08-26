@@ -14,13 +14,13 @@ from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from utils.legacy_range_scan import SCAN_CHUNK_DAYS, scan_legacy_range  # noqa: E402
 
 
-def _paper(pid: str) -> PaperMetadata:
+def _paper(pid: str, published: datetime | None = None) -> PaperMetadata:
     return PaperMetadata(
         paper_id=pid,
         title=f"Paper {pid}",
         authors=["Alice"],
         abstract="abs",
-        published_date=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        published_date=published or datetime(2026, 3, 1, tzinfo=timezone.utc),
         url=f"https://arxiv.org/abs/{pid}",
         source="arxiv",
     )
@@ -37,9 +37,26 @@ class LegacyRangeScanTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _write_history(self, entries: dict) -> None:
-        (self.history_dir / "arxiv_history.json").write_text(
-            json.dumps(entries), encoding="utf-8"
+    def _record_delivered(self, pid: str, published: datetime) -> None:
+        paper = _paper(pid, published)
+        run_id = self.store.start_run(0, run_kind="legacy_import")
+        self.store.import_legacy_paper(
+            {
+                "source": "arxiv",
+                "paper_id": paper.paper_id,
+                "canonical_id": paper.canonical_id,
+                "version": paper.version,
+                "paper_json": paper.to_dict(),
+                "score_status": "pending",
+                "tldr_status": "pending",
+                "translation_status": "not_required",
+                "analysis_status": "not_required",
+                "completed_at": published.isoformat(),
+                "delivered_at": published.isoformat(),
+                "delivery_run_id": run_id,
+                "report_path": "legacy.html",
+            },
+            delivered=True,
         )
 
     def test_missing_history_skips_scan(self):
@@ -52,10 +69,8 @@ class LegacyRangeScanTests(unittest.TestCase):
         self.assertEqual(summary["chunks_scanned"], 0)
 
     def test_unknown_papers_in_range_are_queued_as_missed(self):
-        self._write_history({
-            "2602.00001v1": "2026-02-01T10:00:00",
-            "2602.00002v1": "2026-03-15T10:00:00",
-        })
+        self._record_delivered("2602.00001v1", datetime(2026, 2, 1, tzinfo=timezone.utc))
+        self._record_delivered("2602.00002v1", datetime(2026, 3, 15, tzinfo=timezone.utc))
         run_id = self.store.start_run(0)
         # 已知：v4 行 + 旧历史缺卡片积压行都会被识别为已知身份。
         self.store.upsert_paper_seen(run_id, "arxiv", _paper("2602.00009v1"))
@@ -81,10 +96,8 @@ class LegacyRangeScanTests(unittest.TestCase):
         self.assertEqual(row_77["paper_json"]["paper_id"], "2602.00077v1")
 
     def test_range_is_chunked_and_idle_checked_per_chunk(self):
-        self._write_history({
-            "2601.00001v1": "2026-01-01T10:00:00",
-            "2605.00001v1": "2026-05-31T10:00:00",
-        })
+        self._record_delivered("2601.00001v1", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        self._record_delivered("2605.00001v1", datetime(2026, 5, 31, tzinfo=timezone.utc))
         calls = []
         windows = []
 
@@ -106,7 +119,7 @@ class LegacyRangeScanTests(unittest.TestCase):
         self.assertEqual(windows[-1][1], date(2026, 5, 31))
 
     def test_repeated_scan_is_idempotent(self):
-        self._write_history({"2602.00001v1": "2026-02-01T10:00:00"})
+        self._record_delivered("2602.00001v1", datetime(2026, 2, 1, tzinfo=timezone.utc))
         for _ in range(2):
             summary = scan_legacy_range(
                 self.store,
@@ -117,10 +130,8 @@ class LegacyRangeScanTests(unittest.TestCase):
         self.assertEqual(self.store.supplement_backlog_summary()["pending"], 1)
 
     def test_failed_chunk_is_recorded_while_later_chunks_continue(self):
-        self._write_history({
-            "2601.00001v1": "2026-01-01T10:00:00",
-            "2602.00001v1": "2026-02-15T10:00:00",
-        })
+        self._record_delivered("2601.00001v1", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        self._record_delivered("2602.00001v1", datetime(2026, 2, 15, tzinfo=timezone.utc))
         calls = []
 
         def fetch(start, _end):
@@ -139,7 +150,7 @@ class LegacyRangeScanTests(unittest.TestCase):
         self.assertEqual(summary["chunks_scanned"], 1)
         self.assertEqual(summary["missed_found"], 1)
         self.assertEqual(summary["backlog_queued"], 1)
-        self.assertIn("后续读取旧历史会重试", summary["skipped_reason"])
+        self.assertIn("后续历史遗漏扫描会重试", summary["skipped_reason"])
 
 
 class FetchBetweenTests(unittest.TestCase):

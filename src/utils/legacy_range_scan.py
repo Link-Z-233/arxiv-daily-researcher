@@ -1,9 +1,8 @@
-"""旧历史时间段扫描：寻找 v3.2 时代被漏掉的 arXiv 论文。
+"""SQLite 驱动的历史时间段扫描：寻找漏掉的 arXiv 论文。
 
-导入旧历史后，对旧历史覆盖的日期范围做一次按月分块的完整 arXiv 领域
-扫描，把既不在 SQLite（daily_papers / paper_deliveries / 补充积压）也
-不在旧历史里的论文记入补充运行积压（reason=missed_scan，随附抓取到的
-元数据），等待补充报告流程统一处理。
+历史 HTML 只在首次导入时被解析并写入 SQLite。后续的覆盖范围、已知论文
+身份与遗漏积压全部以 SQLite 为准，避免报告目录发生移动、清理或格式变化
+后改变扫描结果。
 """
 
 from __future__ import annotations
@@ -12,8 +11,6 @@ import logging
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
-
-from utils.legacy_history import load_legacy_history_files
 
 logger = logging.getLogger(__name__)
 
@@ -35,22 +32,6 @@ def _known_arxiv_identities(store: Any) -> Set[Tuple[str, int]]:
     return known
 
 
-def _history_date_range(history_dir: Path) -> Optional[Tuple[date, date]]:
-    """旧历史覆盖的日期范围（各来源最早/最晚交付日期）。"""
-    histories = load_legacy_history_files(history_dir)
-    dates: List[date] = []
-    for entries in histories.values():
-        for delivered_at in entries.values():
-            text = str(delivered_at)[:10]
-            try:
-                dates.append(date.fromisoformat(text))
-            except ValueError:
-                continue
-    if not dates:
-        return None
-    return min(dates), max(dates)
-
-
 def _month_chunks(start: date, end: date) -> List[Tuple[date, date]]:
     chunks = []
     cursor = start
@@ -64,13 +45,13 @@ def _month_chunks(start: date, end: date) -> List[Tuple[date, date]]:
 def scan_legacy_range(
     store: Any,
     *,
-    history_dir: Path,
+    history_dir: Optional[Path] = None,
     fetch_between: Callable[[date, date], List[Any]],
     logger_override: Optional[Any] = None,
     idle_check: Optional[Callable[[], None]] = None,
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> Dict[str, Any]:
-    """扫描旧历史时间段，返回遗漏论文汇总并写入补充积压。
+    """扫描 SQLite 已交付历史时间段，返回遗漏论文并写入补充积压。
 
     ``fetch_between(date_from, date_to)`` 返回该闭区间内的论文元数据列表
     （由调用方注入 ArxivSource.fetch_domain_papers_between，便于测试与
@@ -103,9 +84,13 @@ def scan_legacy_range(
         except Exception as exc:  # pragma: no cover - UI observation is optional
             log.debug("[LegacyScan] 进度回调失败: %s", exc)
 
-    date_range = _history_date_range(history_dir)
+    # ``history_dir`` is kept as a no-op compatibility argument for callers
+    # from v3.2/v4.0.  It must never become an input to the range again: the
+    # durable delivery ledger and persisted paper metadata are authoritative.
+    del history_dir
+    date_range = store.historical_delivery_date_range("arxiv")
     if date_range is None:
-        summary["skipped_reason"] = "旧历史为空，无法确定扫描时间段"
+        summary["skipped_reason"] = "SQLite 中没有已交付的 arXiv 历史，无法确定扫描时间段"
         log.info("[LegacyScan] %s", summary["skipped_reason"])
         emit(summary["skipped_reason"], 0, 0)
         return summary
@@ -213,7 +198,7 @@ def scan_legacy_range(
     )
     if summary["failed_chunks"]:
         summary["skipped_reason"] = (
-            f"{summary['failed_chunks']} 个时间段扫描失败，已记录，后续读取旧历史会重试"
+            f"{summary['failed_chunks']} 个时间段扫描失败，已记录，后续历史遗漏扫描会重试"
         )
     emit(
         f"时间段扫描完成：遗漏 {summary['missed_found']} 篇，积压 {summary['backlog_queued']} 条"

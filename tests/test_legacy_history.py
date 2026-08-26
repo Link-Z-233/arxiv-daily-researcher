@@ -242,12 +242,13 @@ class LegacyImportIntegrationTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _import(self) -> dict:
+    def _import(self, *, full_repair: bool = False) -> dict:
         return import_legacy_history(
             self.store,
             history_dir=self.history_dir,
             reports_html_dir=self.reports_dir / "html",
             delivery_run_id=self.run_id,
+            full_repair=full_repair,
         )
 
     def test_complete_cards_get_paper_rows_and_delivery_ledger(self):
@@ -267,8 +268,8 @@ class LegacyImportIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(record)
         self.assertEqual(record["score_status"], "succeeded")
         self.assertEqual(record["translation_status"], "succeeded")
-        self.assertEqual(record["analysis_status"], "pending")  # FAIL 不需要分析
-        self.assertEqual(record["completed_at"], "2026-03-03T23:48:23.286228")
+        self.assertEqual(record["analysis_status"], "not_required")  # FAIL 不需要分析
+        self.assertEqual(record["completed_at"], "2026-03-03T16:10:08")
         self.assertTrue(self.store.is_paper_delivered("arxiv", "2603.00845v1"))
         self.assertEqual(self.store.supplement_backlog_summary()["pending"], 0)
 
@@ -288,30 +289,72 @@ class LegacyImportIntegrationTests(unittest.TestCase):
         record = self.store.get_paper_record("arxiv", "2603.00845v1")
         self.assertIn("New Title", record["paper_json"])
 
-    def test_pass_without_analysis_goes_to_backlog_without_delivery(self):
+    def test_later_report_reimport_wins_when_json_delivery_time_is_unchanged(self):
+        """Newest-wins must use the HTML artifact time, not JSON delivery time."""
+        (self.history_dir / "arxiv_history.json").write_text(
+            json.dumps({"2603.00845v1": "2026-03-10T23:48:23.286228"}),
+            encoding="utf-8",
+        )
+        old_path = _write_report(
+            self.reports_dir,
+            "arxiv",
+            "2026-03-03_16-10-08",
+            _card_fail(1, "2603.00845v1", "Old Imported Title"),
+        )
+        self._import(full_repair=True)
+        self.store.complete_run(self.run_id, {})
+
+        newer_path = _write_report(
+            self.reports_dir,
+            "arxiv",
+            "2026-03-09_18-30-00",
+            _card_fail(1, "2603.00845v1", "Newly Added Report Title"),
+        )
+        rerun_id = self.store.start_run(0, run_kind="legacy_import")
+        summary = import_legacy_history(
+            self.store,
+            history_dir=self.history_dir,
+            reports_html_dir=self.reports_dir / "html",
+            delivery_run_id=rerun_id,
+            full_repair=True,
+        )
+
+        self.assertEqual(summary["imported"], 1)
+        record = self.store.get_paper_record("arxiv", "2603.00845v1")
+        self.assertIn("Newly Added Report Title", record["paper_json"])
+        self.assertEqual(record["legacy_report_at"], "2026-03-09T18:30:00")
+        with self.store._connect() as conn:
+            delivery = conn.execute(
+                "SELECT report_path, report_at, delivered_at FROM paper_deliveries "
+                "WHERE source = 'arxiv' AND canonical_id = '2603.00845' AND version = 1"
+            ).fetchone()
+        self.assertEqual(delivery["report_path"], str(newer_path))
+        self.assertEqual(delivery["report_at"], "2026-03-09T18:30:00")
+        # The user-visible original delivery timestamp remains the JSON value.
+        self.assertEqual(delivery["delivered_at"], "2026-03-10T23:48:23.286228")
+        self.assertNotEqual(old_path, newer_path)
+
+    def test_missing_fields_stay_delivered_and_become_sqlite_repair_candidates(self):
         _write_report(self.reports_dir, "arxiv", "2026-05-01_08-00-00", _CARD_PASS_MISSING_ANALYSIS)
         summary = self._import()
         self.assertEqual(summary["missing_analysis"], 1)
-        self.assertEqual(summary["delivered_ledger_rows"], 0)
-        # 不写交付账本（补充报告交付时补写），但 completed_at 保留 v3.2
-        # 推送时间：论文检索可见，也不会混入每日运行的待处理队列。
+        self.assertEqual(summary["missing_tldr"], 1)
+        self.assertEqual(summary["delivered_ledger_rows"], 1)
+        # 已有 HTML 卡片始终是已交付论文：未来日报不会再次推送；缺失
+        # 字段由 SQLite 驱动的原报告修补任务处理。
         with self.store._connect() as conn:
             ledger_rows = conn.execute(
                 "SELECT COUNT(*) FROM paper_deliveries WHERE source = 'arxiv' "
                 "AND canonical_id = '2603.22222'"
             ).fetchone()[0]
-        self.assertEqual(ledger_rows, 0)
+        self.assertEqual(ledger_rows, 1)
         record = self.store.get_paper_record("arxiv", "2603.22222v1")
         self.assertIsNotNone(record["completed_at"])
-        backlog_summary = self.store.supplement_backlog_summary()
-        self.assertEqual(backlog_summary["pending"], 1)
-        self.assertEqual(
-            backlog_summary["breakdown"]["missing_analysis"]["pending"], 1
-        )
-        rows = self.store.claim_supplement_backlog(10)
-        self.assertEqual(rows[0]["canonical_id"], "2603.22222")
-        # 缺的是分析结果而非论文元数据；自动补充无需重新向 arXiv 拉取。
-        self.assertEqual(rows[0]["paper_json"]["title"], "Pass Without Analysis")
+        self.assertEqual(self.store.supplement_backlog_summary()["pending"], 0)
+        candidates = self.store.history_repair_candidates()
+        candidate = next(item for item in candidates if item["paper_id"] == "2603.22222v1")
+        self.assertIn("tldr", candidate["needs"])
+        self.assertIn("analysis", candidate["needs"])
 
     def test_qualified_legacy_journal_card_is_not_false_missing_analysis(self):
         # v3.2 only performed PDF deep analysis for arXiv.  A qualified
@@ -323,7 +366,7 @@ class LegacyImportIntegrationTests(unittest.TestCase):
             _CARD_DOI,
         )
 
-        summary = self._import()
+        summary = self._import(full_repair=True)
 
         self.assertEqual(summary["missing_analysis"], 0)
         self.assertEqual(summary["delivered_ledger_rows"], 1)
@@ -335,11 +378,27 @@ class LegacyImportIntegrationTests(unittest.TestCase):
         (self.history_dir / "arxiv_history.json").write_text(
             json.dumps({"2602.03848v1": "2026-02-04T23:48:23.286228"}), encoding="utf-8"
         )
-        summary = self._import()
+        summary = self._import(full_repair=True)
         self.assertEqual(summary["missing_cards"], 1)
         rows = self.store.claim_supplement_backlog(10)
         self.assertEqual(rows[0]["paper_id"], "2602.03848v1")
         self.assertEqual(rows[0]["reason"], "missing_data")
+
+    def test_lightweight_import_skips_json_and_non_arxiv_cards(self):
+        (self.history_dir / "arxiv_history.json").write_text(
+            json.dumps({"2602.03848v1": "2026-02-04T23:48:23.286228"}),
+            encoding="utf-8",
+        )
+        _write_report(
+            self.reports_dir, "prl", "2026-05-02_08-00-00", _CARD_DOI
+        )
+        summary = self._import()
+        self.assertFalse(summary["full_repair_enabled"])
+        self.assertEqual(summary["cards_found"], 1)
+        self.assertEqual(summary["cards_selected"], 0)
+        self.assertEqual(summary["history_files"], {})
+        self.assertEqual(summary["delivered_ledger_rows"], 0)
+        self.assertEqual(self.store.supplement_backlog_summary()["pending"], 0)
 
     def test_v4_rows_are_never_downgraded_by_legacy_data(self):
         run_id = self.store.start_run(0)

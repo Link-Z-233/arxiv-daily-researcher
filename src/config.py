@@ -253,6 +253,11 @@ class Settings(BaseSettings):
     # cron；显式设置的 CRON_SCHEDULE 环境变量优先于该值。
     DAILY_RUN_TIME: str = "12:00"
 
+    # v3.2 archives can be imported in a lightweight ledger-only mode.  The
+    # optional full workflow additionally repairs missing SQLite fields and
+    # scans the covered historical range for omitted arXiv papers.
+    LEGACY_IMPORT_FULL_REPAIR_ENABLED: bool = False
+
     # ==================== PDF 解析配置 ====================
     PDF_PARSER_MODE: str = "pymupdf"  # PDF 解析模式: "pymupdf" (本地解析) 或 "mineru" (云端API)
     MINERU_API_KEY: str = ""  # MinerU API Token
@@ -822,6 +827,17 @@ class Settings(BaseSettings):
                         daily_cfg["db_path"],
                         label="daily_research.db_path",
                     )
+
+            if "legacy_history" in config:
+                legacy_cfg = config["legacy_history"]
+                if not isinstance(legacy_cfg, dict):
+                    raise ValueError("legacy_history 必须是对象")
+                full_repair = legacy_cfg.get(
+                    "full_repair_enabled", self.LEGACY_IMPORT_FULL_REPAIR_ENABLED
+                )
+                if not isinstance(full_repair, bool):
+                    raise ValueError("legacy_history.full_repair_enabled 必须是布尔值")
+                self.LEGACY_IMPORT_FULL_REPAIR_ENABLED = full_repair
 
             # 加载 PDF 解析配置
             if "pdf_parser" in config:

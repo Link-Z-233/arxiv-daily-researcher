@@ -118,6 +118,10 @@ class RunProgressAggregationTests(unittest.TestCase):
 
             for pid in ("2501.00001v1", "2501.00002v1", "2501.00003v1"):
                 _set_stage(store, pid, "score_status", "succeeded")
+                # TL;DR is now a distinct durable stage.  These rows model
+                # papers whose full score payload (including TL;DR) has
+                # completed before translation/deep-analysis inference.
+                _set_stage(store, pid, "tldr_status", "succeeded")
                 _set_stage(store, pid, "translation_status", "succeeded")
             _set_stage(store, "2501.00001v1", "analysis_status", "succeeded")
             _set_stage(store, "2501.00002v1", "analysis_status", "failed")

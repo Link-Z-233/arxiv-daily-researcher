@@ -612,6 +612,10 @@ def _paper_metadata_from_backlog_payload(
 def _load_supplement_candidates(
     store: DailyResearchStore,
     run_id: str,
+    *,
+    reasons: Optional[set[str] | list[str] | tuple[str, ...]] = None,
+    published_from: Optional[date] = None,
+    published_to: Optional[date] = None,
 ) -> Tuple[
     Dict[str, List[PaperMetadata]], List[Tuple[str, str, int]], int
 ]:
@@ -626,7 +630,12 @@ def _load_supplement_candidates(
     # Read the ordered backlog without applying the report cap here: a broken
     # legacy row must be recorded as retryable *and then skipped* so a later,
     # usable row can still fill this capped supplement report.
-    rows = store.claim_supplement_backlog(0)
+    rows = store.claim_supplement_backlog(
+        0,
+        reasons=reasons,
+        published_from=published_from,
+        published_to=published_to,
+    )
     papers_by_source: Dict[str, List[PaperMetadata]] = {}
     selected: List[Tuple[str, str, int]] = []
     failed: List[Tuple[str, str, int]] = []
@@ -905,7 +914,16 @@ class DailyResearchPipeline:
     从多个数据源抓取论文，评分筛选，深度分析，生成报告，发送通知。
     """
 
-    def run(self, run_kind: str = "daily", target_date: Optional[date] = None):
+    def run(
+        self,
+        run_kind: str = "daily",
+        target_date: Optional[date] = None,
+        *,
+        supplement_reasons: Optional[set[str] | list[str] | tuple[str, ...]] = None,
+        supplement_week_start: Optional[date] = None,
+        supplement_week_end: Optional[date] = None,
+        report_timestamp: Optional[datetime] = None,
+    ):
         """
         执行每日研究完整流程。
 
@@ -915,9 +933,35 @@ class DailyResearchPipeline:
           装载候选，走同一评分/分析/报告/原子交付流程，产出补充报告；
         - "backfill"：为过去的某一天（``target_date``）重跑当天的每日
           研究，报告时间戳用过去日期 + 当前时刻。
+
+        ``supplement_reasons`` 和 ``supplement_week_start/end`` 让历史遗漏
+        工作流只消费自己的 SQLite 积压，并以真实自然周拆分补充报告。
+        它们不改变普通补充运行的兼容行为。
         """
         if run_kind == "backfill" and target_date is None:
             raise ValueError("backfill 运行必须提供 target_date")
+        if run_kind != "supplement" and any(
+            value is not None
+            for value in (
+                supplement_reasons,
+                supplement_week_start,
+                supplement_week_end,
+                report_timestamp,
+            )
+        ):
+            raise ValueError("补充报告筛选与自定义时间戳只能用于 supplement 运行")
+        if supplement_week_start is not None and not isinstance(supplement_week_start, date):
+            raise ValueError("补充报告周起始日期必须是 date")
+        if supplement_week_end is not None and not isinstance(supplement_week_end, date):
+            raise ValueError("补充报告周结束日期必须是 date")
+        if (
+            supplement_week_start is not None
+            and supplement_week_end is not None
+            and supplement_week_start > supplement_week_end
+        ):
+            raise ValueError("补充报告周起始日期不能晚于结束日期")
+        if report_timestamp is not None and not isinstance(report_timestamp, datetime):
+            raise ValueError("补充报告时间戳必须是 datetime")
         store = None
         run_id = None
         notifier = None
@@ -1075,12 +1119,22 @@ class DailyResearchPipeline:
                     papers_by_source,
                     supplement_identities,
                     supplement_fetch_failures,
-                ) = _load_supplement_candidates(store, run_id)
+                ) = _load_supplement_candidates(
+                    store,
+                    run_id,
+                    reasons=supplement_reasons,
+                    published_from=supplement_week_start,
+                    published_to=supplement_week_end,
+                )
                 registered_candidate_count = sum(
                     len(papers) for papers in papers_by_source.values()
                 )
                 total_papers_count = registered_candidate_count
-                backlog_summary = store.supplement_backlog_summary()
+                backlog_summary = store.supplement_backlog_summary(
+                    reasons=supplement_reasons,
+                    published_from=supplement_week_start,
+                    published_to=supplement_week_end,
+                )
                 pending_paper_count = backlog_summary["pending"]
                 deferred_paper_count = pending_paper_count - total_papers_count
                 if supplement_fetch_failures:
@@ -1088,8 +1142,15 @@ class DailyResearchPipeline:
                         "补充积压 %s 条论文无法获取元数据，已记为失败（下次触发会重试）",
                         supplement_fetch_failures,
                     )
+                scope = ""
+                if supplement_week_start is not None or supplement_week_end is not None:
+                    scope = "（自然周 %s 至 %s）" % (
+                        supplement_week_start.isoformat() if supplement_week_start else "—",
+                        supplement_week_end.isoformat() if supplement_week_end else "—",
+                    )
                 logger.info(
-                    "补充运行：积压待处理 %s 篇，本次处理 %s 篇，留待后续 %s 篇（%s 个数据源）",
+                    "补充运行%s：积压待处理 %s 篇，本次处理 %s 篇，留待后续 %s 篇（%s 个数据源）",
+                    scope,
                     pending_paper_count,
                     total_papers_count,
                     deferred_paper_count,
@@ -1728,16 +1789,20 @@ class DailyResearchPipeline:
 
             reporter = Reporter()
             # 过去日报的时间戳 = 目标日期 + 当前时刻（用户指定的补跑语义）。
-            backfill_stamp = None
+            # 历史遗漏补充报告会显式传入该自然周周日 + 实际运行时刻，因而
+            # 报告查看页按历史周排序，同时同周多批可由微秒时间戳安全区分。
+            effective_report_timestamp = report_timestamp
             if run_kind == "backfill":
-                backfill_stamp = datetime.combine(target_date, datetime.now().time())
+                effective_report_timestamp = datetime.combine(
+                    target_date, datetime.now().time()
+                )
             report_paths = reporter.generate_reports_by_source(
                 scored_papers_by_source=reportable_papers_by_source,
                 keywords_dict=all_keywords,
                 analyses_by_source=analyses_by_source,
                 token_usage=token_counter.get_summary() if settings.TOKEN_TRACKING_ENABLED else None,
                 report_kind="supplement" if run_kind == "supplement" else "daily",
-                report_timestamp=backfill_stamp,
+                report_timestamp=effective_report_timestamp,
             )
             _validate_report_paths(report_paths, reportable_papers_by_source)
 

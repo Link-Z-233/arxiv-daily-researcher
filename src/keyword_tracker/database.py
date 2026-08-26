@@ -188,6 +188,60 @@ class KeywordDatabase:
         except ValueError:
             return None
 
+    @staticmethod
+    def _open_legacy_database_readonly(
+        source_path: Path,
+    ) -> tuple[sqlite3.Connection, str]:
+        """Open a v3.2 database without ever modifying its source files.
+
+        A normal SQLite ``mode=ro`` connection remains the preferred path: it
+        can read a live WAL sidecar consistently.  Some NAS snapshots and
+        read-only Docker bind mounts contain a clean main database whose old
+        WAL journal mode still makes SQLite try to create a ``-shm`` file;
+        that fails before any data can be read.  In that specific case an
+        immutable snapshot is safe *only when no non-empty ``-wal`` file is
+        present*.  A live/uncheckpointed WAL is never ignored silently.
+        """
+        resolved = source_path.resolve()
+        base_uri = resolved.as_uri()
+        connection: Optional[sqlite3.Connection] = None
+        try:
+            connection = sqlite3.connect(f"{base_uri}?mode=ro", uri=True)
+            # SQLite may defer opening a WAL-mode file until the first query.
+            # Probe the schema here so a read-only bind-mount failure reaches
+            # the immutable-snapshot fallback rather than surfacing later in
+            # the middle of a keyword migration.
+            connection.execute("PRAGMA schema_version").fetchone()
+            return connection, "readonly"
+        except sqlite3.Error as normal_error:
+            if connection is not None:
+                connection.close()
+            wal_path = resolved.with_name(resolved.name + "-wal")
+            try:
+                has_uncheckpointed_wal = (
+                    wal_path.is_file() and wal_path.stat().st_size > 0
+                )
+            except OSError:
+                has_uncheckpointed_wal = True
+            if has_uncheckpointed_wal:
+                raise sqlite3.OperationalError(
+                    "旧 keywords.db 无法以只读模式打开，且存在未合并的 -wal 文件；"
+                    "请先停止旧版本应用并完成 SQLite 检查点，或同时保留数据库与 WAL 文件后重试"
+                ) from normal_error
+            try:
+                connection = sqlite3.connect(
+                    f"{base_uri}?mode=ro&immutable=1", uri=True
+                )
+                connection.execute("PRAGMA schema_version").fetchone()
+                return connection, "immutable_snapshot"
+            except sqlite3.Error as immutable_error:
+                if connection is not None:
+                    connection.close()
+                raise sqlite3.OperationalError(
+                    f"普通只读与不可变快照均无法打开旧 keywords.db: "
+                    f"{normal_error}; {immutable_error}"
+                ) from immutable_error
+
     def import_legacy_database(
         self,
         legacy_db_path: Path,
@@ -206,6 +260,7 @@ class KeywordDatabase:
         source_path = Path(legacy_db_path)
         summary: Dict[str, Any] = {
             "state": "not_found",
+            "read_mode": None,
             "records_scanned": 0,
             "records_imported": 0,
             "records_invalid": 0,
@@ -230,15 +285,23 @@ class KeywordDatabase:
             pass
 
         try:
-            source = sqlite3.connect(
-                f"{source_path.resolve().as_uri()}?mode=ro", uri=True
-            )
+            source, read_mode = self._open_legacy_database_readonly(source_path)
             source.row_factory = sqlite3.Row
         except (OSError, sqlite3.Error) as exc:
             summary.update({"state": "unreadable", "error": str(exc)})
             log.warning("[LegacyKeywordImport] 无法读取旧 keywords.db: %s", exc)
             _emit_legacy_progress(progress_callback, "无法读取旧 keywords.db，已跳过")
             return summary
+
+        summary["read_mode"] = read_mode
+        if read_mode == "immutable_snapshot":
+            log.info(
+                "[LegacyKeywordImport] 旧 keywords.db 以不可变快照读取（只读挂载兼容模式）"
+            )
+            _emit_legacy_progress(
+                progress_callback,
+                "旧关键词库以只读快照方式读取",
+            )
 
         try:
             source_tables = {

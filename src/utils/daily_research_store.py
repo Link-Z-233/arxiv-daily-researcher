@@ -172,6 +172,10 @@ class DailyResearchStore:
                     analysis_input_fingerprint TEXT,
                     completed_at TEXT,
                     last_error TEXT,
+                    tldr_status TEXT NOT NULL DEFAULT 'pending',
+                    report_repair_status TEXT NOT NULL DEFAULT 'not_needed',
+                    report_repair_error TEXT,
+                    legacy_report_at TEXT,
                     queue_scope TEXT NOT NULL DEFAULT 'daily',
                     backfill_target_date TEXT,
                     PRIMARY KEY (source, paper_id)
@@ -181,6 +185,9 @@ class DailyResearchStore:
             self._migrate_paper_identity(conn)
             self._migrate_paper_queue_scope(conn)
             self._migrate_stage_state(conn)
+            self._migrate_tldr_state(conn)
+            self._migrate_report_repair_state(conn)
+            self._migrate_legacy_report_timestamp(conn)
             self._migrate_stage_fingerprints(conn)
             self._migrate_score_audit_state(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_papers_run ON daily_papers(run_id)")
@@ -206,12 +213,14 @@ class DailyResearchStore:
                     canonical_id TEXT NOT NULL,
                     version INTEGER NOT NULL DEFAULT 0,
                     report_path TEXT,
+                    report_at TEXT,
                     delivered_at TEXT NOT NULL,
                     UNIQUE(run_id, source, paper_id)
                 )
                 """
             )
             self._migrate_delivery_identity(conn)
+            self._migrate_delivery_report_timestamp(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_paper_deliveries_identity "
                 "ON paper_deliveries(source, canonical_id, version)"
@@ -647,6 +656,77 @@ class DailyResearchStore:
         )
 
     @staticmethod
+    def _migrate_tldr_state(conn):
+        """Track TL;DR separately from the complete score stage.
+
+        Older reports can contain a valid score table but no TL;DR.  Treating
+        that as a failed score forced an expensive re-score and made it
+        impossible for history repair to update just the omitted field.
+        """
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        if "tldr_status" not in columns:
+            conn.execute(
+                "ALTER TABLE daily_papers "
+                "ADD COLUMN tldr_status TEXT NOT NULL DEFAULT 'pending'"
+            )
+
+        rows = conn.execute(
+            "SELECT source, paper_id, score_json, score_status, tldr_status "
+            "FROM daily_papers WHERE score_json IS NOT NULL"
+        ).fetchall()
+        succeeded: list[tuple[str, str]] = []
+        for row in rows:
+            if row["score_status"] != "succeeded" or row["tldr_status"] != "pending":
+                continue
+            try:
+                payload = json.loads(row["score_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict) and isinstance(payload.get("tldr"), str) and payload["tldr"].strip():
+                succeeded.append((row["source"], row["paper_id"]))
+        if succeeded:
+            conn.executemany(
+                "UPDATE daily_papers SET tldr_status = 'succeeded' "
+                "WHERE source = ? AND paper_id = ?",
+                succeeded,
+            )
+
+    @staticmethod
+    def _migrate_report_repair_state(conn):
+        """Add a durable retry flag for historical report-file patches."""
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        additions = {
+            "report_repair_status": "TEXT NOT NULL DEFAULT 'not_needed'",
+            "report_repair_error": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE daily_papers ADD COLUMN {name} {definition}")
+
+    @staticmethod
+    def _migrate_legacy_report_timestamp(conn):
+        """Remember which archived HTML card last supplied a legacy row.
+
+        ``completed_at`` is the original delivery time.  Several v3.2 cards
+        can share that value through one JSON history entry, so it cannot tell
+        whether a newly discovered report is actually newer.  Keeping the
+        report artifact timestamp separately preserves the documented
+        newest-report-wins rule without changing delivery semantics.
+        """
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        if "legacy_report_at" not in columns:
+            conn.execute("ALTER TABLE daily_papers ADD COLUMN legacy_report_at TEXT")
+
+    @staticmethod
     def _migrate_stage_fingerprints(conn):
         """Add stage input keys used to invalidate stale incomplete LLM work."""
         columns = {
@@ -717,6 +797,16 @@ class DailyResearchStore:
                 "UPDATE paper_deliveries SET canonical_id = ?, version = ? WHERE delivery_id = ?",
                 updates,
             )
+
+    @staticmethod
+    def _migrate_delivery_report_timestamp(conn):
+        """Add the source-report timestamp used by legacy path replacement."""
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(paper_deliveries)").fetchall()
+        }
+        if "report_at" not in columns:
+            conn.execute("ALTER TABLE paper_deliveries ADD COLUMN report_at TEXT")
 
     @staticmethod
     def _migrate_delivery_exact_version_constraint(conn):
@@ -1203,9 +1293,11 @@ class DailyResearchStore:
                     SUM(CASE WHEN analysis_status = 'succeeded' THEN 1 ELSE 0 END) AS analyzed,
                     SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed,
                     SUM(CASE WHEN score_status = 'failed'
+                              OR tldr_status = 'failed'
                               OR translation_status = 'failed'
                               OR analysis_status = 'failed' THEN 1 ELSE 0 END) AS failed,
-                    SUM(CASE WHEN score_status IN ('pending', 'running') THEN 1 ELSE 0 END) AS awaiting_score,
+                    SUM(CASE WHEN score_status IN ('pending', 'running')
+                              OR tldr_status IN ('pending', 'running') THEN 1 ELSE 0 END) AS awaiting_score,
                     SUM(CASE WHEN analysis_status IN ('pending', 'running')
                               AND score_status = 'succeeded' THEN 1 ELSE 0 END) AS awaiting_analysis
                 FROM daily_papers
@@ -1304,8 +1396,9 @@ class DailyResearchStore:
         """Upsert one paper reconstructed from a legacy HTML report card.
 
         ``payload`` keys: source/paper_id/canonical_id/version/paper_json(dict)/
-        score_json(str)/abstract_cn/analysis_json(str)/score_status/
-        translation_status/analysis_status/completed_at/report_path/delivered_at.
+        score_json(str)/abstract_cn/analysis_json(str)/score_status/tldr_status/
+        translation_status/analysis_status/completed_at/report_path/report_at/
+        delivered_at.
 
         Newest-wins: an existing row is overwritten only when the incoming
         card timestamp is newer.  Rows produced by v4 runs carry stage
@@ -1319,6 +1412,7 @@ class DailyResearchStore:
         canonical_id = str(payload.get("canonical_id") or paper_id)
         version = int(payload.get("version") or 0)
         completed_at = payload.get("completed_at") or now
+        report_at = str(payload.get("report_at") or completed_at).strip() or completed_at
         paper_json = payload.get("paper_json")
         if not isinstance(paper_json, str):
             paper_json = json.dumps(paper_json or {}, ensure_ascii=False)
@@ -1326,7 +1420,7 @@ class DailyResearchStore:
         with self._lock, self._connect() as conn:
             existing = conn.execute(
                 """
-                SELECT completed_at, score_input_fingerprint,
+                SELECT completed_at, legacy_report_at, score_input_fingerprint,
                        translation_input_fingerprint, analysis_input_fingerprint
                 FROM daily_papers WHERE source = ? AND paper_id = ?
                 """,
@@ -1344,8 +1438,8 @@ class DailyResearchStore:
                 outcome = "skipped_v4_rows"
             elif (
                 existing is not None
-                and existing["completed_at"]
-                and str(existing["completed_at"]) >= str(completed_at)
+                and existing["legacy_report_at"]
+                and str(existing["legacy_report_at"]) >= report_at
             ):
                 outcome = "skipped_existing_newer"
             else:
@@ -1356,9 +1450,9 @@ class DailyResearchStore:
                         first_seen_at, last_seen_at, run_id, paper_json,
                         score_json, abstract_cn, analysis_json,
                         scored_at, translated_at, analyzed_at,
-                        score_status, translation_status, analysis_status,
-                        retry_count, completed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                        score_status, tldr_status, translation_status, analysis_status,
+                        retry_count, completed_at, legacy_report_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                     ON CONFLICT(source, paper_id) DO UPDATE SET
                         canonical_id = excluded.canonical_id,
                         version = excluded.version,
@@ -1371,18 +1465,20 @@ class DailyResearchStore:
                         translated_at = excluded.translated_at,
                         analyzed_at = excluded.analyzed_at,
                         score_status = excluded.score_status,
+                        tldr_status = excluded.tldr_status,
                         translation_status = excluded.translation_status,
                         analysis_status = excluded.analysis_status,
                         last_error = NULL,
-                        completed_at = COALESCE(excluded.completed_at, daily_papers.completed_at)
+                        completed_at = COALESCE(excluded.completed_at, daily_papers.completed_at),
+                        legacy_report_at = excluded.legacy_report_at
                     """,
                     (
                         source,
                         paper_id,
                         canonical_id,
                         version,
-                        completed_at,
-                        completed_at,
+                        report_at,
+                        report_at,
                         paper_json,
                         payload.get("score_json"),
                         payload.get("abstract_cn"),
@@ -1391,9 +1487,11 @@ class DailyResearchStore:
                         completed_at if payload.get("abstract_cn") else None,
                         completed_at if payload.get("analysis_json") else None,
                         payload.get("score_status") or "pending",
+                        payload.get("tldr_status") or "pending",
                         payload.get("translation_status") or "pending",
                         payload.get("analysis_status") or "pending",
                         completed_at,
+                        report_at,
                     ),
                 )
 
@@ -1402,10 +1500,21 @@ class DailyResearchStore:
                     """
                     INSERT INTO paper_deliveries(
                         run_id, source, paper_id, canonical_id, version,
-                        report_path, delivered_at
+                        report_path, report_at, delivered_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(source, canonical_id, version) DO NOTHING
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source, canonical_id, version) DO UPDATE SET
+                        run_id = excluded.run_id,
+                        paper_id = excluded.paper_id,
+                        report_path = excluded.report_path,
+                        report_at = excluded.report_at,
+                        delivered_at = excluded.delivered_at
+                    WHERE ? = 'imported'
+                      AND (
+                          paper_deliveries.report_at IS NULL
+                          OR paper_deliveries.report_at = ''
+                          OR excluded.report_at > paper_deliveries.report_at
+                      )
                     """,
                     (
                         str(payload.get("delivery_run_id") or "legacy_import"),
@@ -1414,10 +1523,257 @@ class DailyResearchStore:
                         canonical_id,
                         version,
                         payload.get("report_path"),
+                        report_at,
                         payload.get("delivered_at") or completed_at,
+                        outcome,
                     ),
                 )
         return outcome
+
+    # ─── SQLite 历史修复与遗漏扫描 ────────────────────────────────────────
+
+    @staticmethod
+    def _paper_payload_from_row(row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+        """Decode one persisted paper payload without making report files input.
+
+        Historical repair deliberately trusts SQLite instead of re-parsing
+        HTML.  A malformed old payload is returned as an empty object so the
+        caller can expose it as a retryable, actionable problem.
+        """
+        try:
+            raw = row["paper_json"]
+        except (KeyError, IndexError, TypeError):
+            raw = None
+        try:
+            payload = json.loads(raw) if raw else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _published_date_from_payload(payload: Dict[str, Any]) -> Optional[date]:
+        """Read a day from durable paper metadata, accepting old ISO forms."""
+        value = payload.get("published_date") if isinstance(payload, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            return None
+        text = value.strip()
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                return date.fromisoformat(text[:10])
+            except ValueError:
+                return None
+
+    def historical_delivery_date_range(self, source: str = "arxiv") -> Optional[Tuple[date, date]]:
+        """Return the published-date coverage of delivered SQLite history.
+
+        This is intentionally independent from v3.2 JSON files and report
+        directories.  Once a report has been imported/generated, its SQLite
+        delivery row plus paper metadata is the durable historical record.
+        """
+        normalized_source = str(source or "").strip().lower()
+        if not normalized_source:
+            raise ValueError("source must be non-empty")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT papers.paper_json
+                FROM paper_deliveries AS deliveries
+                JOIN daily_papers AS papers
+                  ON papers.source = deliveries.source
+                 AND papers.paper_id = deliveries.paper_id
+                WHERE deliveries.source = ?
+                """,
+                (normalized_source,),
+            ).fetchall()
+        days = [
+            value
+            for row in rows
+            for value in [self._published_date_from_payload(self._paper_payload_from_row(row))]
+            if value is not None
+        ]
+        return (min(days), max(days)) if days else None
+
+    def history_repair_candidates(
+        self,
+        *,
+        include_deep_analysis: bool = True,
+        limit: int = 0,
+    ) -> list[Dict[str, Any]]:
+        """Find delivered papers whose SQLite fields or report patch need repair.
+
+        The query reads only the authoritative relational history.  It does
+        not inspect report contents: HTML is an output to patch *after* a
+        missing field is repaired, never evidence used to decide whether a
+        field exists.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("history repair limit must be a non-negative integer")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT papers.*, deliveries.run_id AS delivery_run_id,
+                       deliveries.report_path AS delivery_report_path,
+                       deliveries.delivered_at,
+                       runs.report_paths_json AS delivery_report_paths_json
+                FROM paper_deliveries AS deliveries
+                JOIN daily_papers AS papers
+                  ON papers.source = deliveries.source
+                 AND papers.paper_id = deliveries.paper_id
+                LEFT JOIN daily_runs AS runs ON runs.run_id = deliveries.run_id
+                ORDER BY deliveries.delivered_at ASC, deliveries.delivery_id ASC
+                """
+            ).fetchall()
+
+        candidates: list[Dict[str, Any]] = []
+        for row in rows:
+            payload = self._paper_payload_from_row(row)
+            needs: list[str] = []
+            score_payload: Dict[str, Any] = {}
+            try:
+                decoded_score = json.loads(row["score_json"]) if row["score_json"] else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                decoded_score = {}
+            if isinstance(decoded_score, dict):
+                score_payload = decoded_score
+
+            score_ready = row["score_status"] == "succeeded" and bool(score_payload)
+            if not score_ready:
+                needs.append("score")
+            elif (
+                row["tldr_status"] != "succeeded"
+                or not isinstance(score_payload.get("tldr"), str)
+                or not score_payload["tldr"].strip()
+            ):
+                needs.append("tldr")
+
+            abstract = str(payload.get("abstract") or "").strip()
+            if abstract and (
+                row["translation_status"] != "succeeded"
+                or not str(row["abstract_cn"] or "").strip()
+            ):
+                needs.append("translation")
+
+            qualified = bool(score_payload.get("is_qualified", False))
+            pdf_url = str(payload.get("pdf_url") or "").strip()
+            if (
+                include_deep_analysis
+                and str(row["source"] or "").lower() == "arxiv"
+                and score_ready
+                and qualified
+                and pdf_url
+                and (
+                    row["analysis_status"] != "succeeded"
+                    or not str(row["analysis_json"] or "").strip()
+                )
+            ):
+                needs.append("analysis")
+
+            patch_status = str(row["report_repair_status"] or "not_needed")
+            if patch_status in {"pending", "failed"}:
+                needs.append("report_patch")
+
+            if not needs:
+                continue
+            candidates.append(
+                {
+                    "source": row["source"],
+                    "paper_id": row["paper_id"],
+                    "canonical_id": row["canonical_id"],
+                    "version": int(row["version"] or 0),
+                    "paper_json": payload,
+                    "score_json": score_payload,
+                    "abstract_cn": str(row["abstract_cn"] or ""),
+                    "analysis_json": row["analysis_json"],
+                    "needs": needs,
+                    "delivery_run_id": row["delivery_run_id"],
+                    "delivery_report_path": row["delivery_report_path"],
+                    "delivery_report_paths_json": row["delivery_report_paths_json"],
+                    "report_repair_status": patch_status,
+                }
+            )
+            if limit and len(candidates) >= limit:
+                break
+        return candidates
+
+    def history_repair_summary(self, *, include_deep_analysis: bool = True) -> Dict[str, Any]:
+        """Count outstanding SQLite-driven history repairs by field."""
+        candidates = self.history_repair_candidates(
+            include_deep_analysis=include_deep_analysis
+        )
+        by_need: Dict[str, int] = {}
+        for candidate in candidates:
+            for need in candidate["needs"]:
+                by_need[need] = by_need.get(need, 0) + 1
+        return {"pending": len(candidates), "by_need": by_need}
+
+    def report_paths_for_paper(self, source: str, paper_id: str) -> list[str]:
+        """Return saved report artifacts for one delivered paper, HTML first."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT deliveries.report_path, deliveries.run_id,
+                       runs.report_paths_json
+                FROM paper_deliveries AS deliveries
+                LEFT JOIN daily_runs AS runs ON runs.run_id = deliveries.run_id
+                WHERE deliveries.source = ? AND deliveries.paper_id = ?
+                ORDER BY deliveries.delivery_id DESC
+                LIMIT 1
+                """,
+                (source, paper_id),
+            ).fetchone()
+        if row is None:
+            return []
+
+        paths: list[str] = []
+        try:
+            report_paths = json.loads(row["report_paths_json"] or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            report_paths = {}
+        if isinstance(report_paths, dict):
+            for key in (f"{source}_html", source):
+                value = report_paths.get(key)
+                if isinstance(value, str) and value.strip():
+                    paths.append(value.strip())
+            for key, value in report_paths.items():
+                if (
+                    isinstance(key, str)
+                    and key.startswith(f"{source}_")
+                    and isinstance(value, str)
+                    and value.strip()
+                ):
+                    paths.append(value.strip())
+        direct = row["report_path"]
+        if isinstance(direct, str) and direct.strip():
+            paths.append(direct.strip())
+
+        unique: list[str] = []
+        for value in paths:
+            if value not in unique:
+                unique.append(value)
+        unique.sort(key=lambda value: (0 if value.lower().endswith(".html") else 1, value))
+        return unique
+
+    def set_history_report_repair_status(
+        self,
+        source: str,
+        paper_id: str,
+        status: str,
+        error: Optional[str] = None,
+    ) -> None:
+        """Persist report-patching state so file errors remain retryable."""
+        if status not in {"not_needed", "pending", "succeeded", "failed"}:
+            raise ValueError(f"invalid history report repair status: {status}")
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE daily_papers
+                SET report_repair_status = ?, report_repair_error = ?
+                WHERE source = ? AND paper_id = ?
+                """,
+                (status, str(error)[:4000] if error else None, source, paper_id),
+            )
 
     def record_supplement_backlog(self, entries: list[Dict[str, Any]]) -> int:
         """Queue papers that need a supplement run; returns newly queued count.
@@ -1489,33 +1845,122 @@ class DailyResearchStore:
                     )
         return inserted
 
-    def supplement_backlog_summary(self) -> Dict[str, Any]:
-        """Return per-status/per-reason counts plus the oldest pending row."""
+    @staticmethod
+    def _normalize_supplement_reasons(reasons: Optional[set[str] | list[str] | tuple[str, ...]]) -> Optional[list[str]]:
+        if reasons is None:
+            return None
+        normalized = sorted(
+            {
+                str(reason).strip()
+                for reason in reasons
+                if isinstance(reason, str) and str(reason).strip()
+            }
+        )
+        if not normalized:
+            return []
+        allowed = {"missing_data", "missing_analysis", "missing_translation", "missed_scan"}
+        invalid = set(normalized).difference(allowed)
+        if invalid:
+            raise ValueError("invalid supplement backlog reasons: " + ", ".join(sorted(invalid)))
+        return normalized
+
+    @staticmethod
+    def _normalize_history_date_filter(value: Optional[date | str], field: str) -> Optional[date]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value[:10])
+            except ValueError as exc:
+                raise ValueError(f"{field} must be YYYY-MM-DD") from exc
+        raise ValueError(f"{field} must be YYYY-MM-DD")
+
+    @classmethod
+    def _supplement_row_matches_date_filter(
+        cls,
+        row: Dict[str, Any],
+        published_from: Optional[date],
+        published_to: Optional[date],
+    ) -> bool:
+        if published_from is None and published_to is None:
+            return True
+        payload = row.get("paper_json")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = None
+        paper_day = cls._published_date_from_payload(
+            payload if isinstance(payload, dict) else {}
+        )
+        if paper_day is None:
+            return False
+        return (
+            (published_from is None or paper_day >= published_from)
+            and (published_to is None or paper_day <= published_to)
+        )
+
+    def supplement_backlog_summary(
+        self,
+        *,
+        reasons: Optional[set[str] | list[str] | tuple[str, ...]] = None,
+        published_from: Optional[date | str] = None,
+        published_to: Optional[date | str] = None,
+    ) -> Dict[str, Any]:
+        """Return per-status/per-reason counts plus the oldest pending row.
+
+        Optional reason/date filters let a natural-week omission workflow
+        count only its own queued papers without inspecting any report file.
+        """
+        normalized_reasons = self._normalize_supplement_reasons(reasons)
+        start_day = self._normalize_history_date_filter(published_from, "published_from")
+        end_day = self._normalize_history_date_filter(published_to, "published_to")
+        if start_day and end_day and start_day > end_day:
+            raise ValueError("published_from must not be after published_to")
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT reason, status, COUNT(*) AS n FROM supplement_backlog
-                GROUP BY reason, status
-                """
-            ).fetchall()
-            pending_total = conn.execute(
-                "SELECT COUNT(*) FROM supplement_backlog "
-                "WHERE status IN ('pending', 'failed')"
-            ).fetchone()[0]
-            oldest = conn.execute(
-                "SELECT MIN(created_at) FROM supplement_backlog "
-                "WHERE status IN ('pending', 'failed')"
-            ).fetchone()[0]
+            query = "SELECT reason, status, created_at, paper_json FROM supplement_backlog"
+            params: list[Any] = []
+            if normalized_reasons is not None:
+                if not normalized_reasons:
+                    rows = []
+                else:
+                    placeholders = ", ".join("?" for _ in normalized_reasons)
+                    query += f" WHERE reason IN ({placeholders})"
+                    rows = conn.execute(query, normalized_reasons).fetchall()
+            else:
+                rows = conn.execute(query, params).fetchall()
+        filtered = [
+            dict(row)
+            for row in rows
+            if self._supplement_row_matches_date_filter(dict(row), start_day, end_day)
+        ]
         breakdown: Dict[str, Dict[str, int]] = {}
-        for row in rows:
-            breakdown.setdefault(row["reason"], {})[row["status"]] = row["n"]
+        pending_created: list[str] = []
+        for row in filtered:
+            bucket = breakdown.setdefault(row["reason"], {})
+            bucket[row["status"]] = bucket.get(row["status"], 0) + 1
+            if row["status"] in {"pending", "failed"} and row.get("created_at"):
+                pending_created.append(str(row["created_at"]))
         return {
             "breakdown": breakdown,
-            "pending": pending_total,
-            "oldest_pending_at": oldest,
+            "pending": sum(
+                1 for row in filtered if row["status"] in {"pending", "failed"}
+            ),
+            "oldest_pending_at": min(pending_created) if pending_created else None,
         }
 
-    def claim_supplement_backlog(self, limit: int = 0) -> list[Dict[str, Any]]:
+    def claim_supplement_backlog(
+        self,
+        limit: int = 0,
+        *,
+        reasons: Optional[set[str] | list[str] | tuple[str, ...]] = None,
+        published_from: Optional[date | str] = None,
+        published_to: Optional[date | str] = None,
+    ) -> list[Dict[str, Any]]:
         """Select the next backlog papers for one supplement run.
 
         Pending data-repair entries (from the legacy import) are selected
@@ -1530,21 +1975,36 @@ class DailyResearchStore:
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
             raise ValueError("supplement backlog limit must be a non-negative integer")
+        normalized_reasons = self._normalize_supplement_reasons(reasons)
+        start_day = self._normalize_history_date_filter(published_from, "published_from")
+        end_day = self._normalize_history_date_filter(published_to, "published_to")
+        if start_day and end_day and start_day > end_day:
+            raise ValueError("published_from must not be after published_to")
+        if normalized_reasons == []:
+            return []
         bounded = int(limit)
         query = """
                 SELECT source, canonical_id, version, paper_id, reason,
                        detail, paper_json
                 FROM supplement_backlog
                 WHERE status IN ('pending', 'failed')
+                """
+        params: list[Any] = []
+        if normalized_reasons is not None:
+            placeholders = ", ".join("?" for _ in normalized_reasons)
+            query += f" AND reason IN ({placeholders})"
+            params.extend(normalized_reasons)
+        query += """
                 ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
                          CASE reason WHEN 'missed_scan' THEN 1 ELSE 0 END,
                          created_at ASC,
                          backlog_id ASC
                 """
-        params: list[Any] = []
         if bounded:
-            query += " LIMIT ?"
-            params.append(bounded)
+            # Date filtering happens after parsing stored metadata. Do not
+            # apply SQL LIMIT first, otherwise a few malformed old rows could
+            # starve later valid papers from a capped natural-week report.
+            pass
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         result = []
@@ -1555,7 +2015,11 @@ class DailyResearchStore:
                     item["paper_json"] = json.loads(item["paper_json"])
                 except (TypeError, ValueError):
                     item["paper_json"] = None
+            if not self._supplement_row_matches_date_filter(item, start_day, end_day):
+                continue
             result.append(item)
+            if bounded and len(result) >= bounded:
+                break
         return result
 
     def resolve_supplement_backlog(
@@ -1585,6 +2049,27 @@ class DailyResearchStore:
                 )
                 resolved += max(0, cursor.rowcount or 0)
         return resolved
+
+    def missed_scan_week_groups(self) -> Dict[date, int]:
+        """Return pending omission rows grouped by ISO calendar week (Mon-Sun).
+
+        The grouping is derived from the stored paper publication date, not a
+        report filename or a directory scan. Rows with malformed metadata are
+        deliberately omitted here; the caller can surface them as a retryable
+        issue instead of assigning them to an arbitrary week.
+        """
+        rows = self.claim_supplement_backlog(0, reasons={"missed_scan"})
+        groups: Dict[date, int] = {}
+        for row in rows:
+            payload = row.get("paper_json")
+            published = self._published_date_from_payload(
+                payload if isinstance(payload, dict) else {}
+            )
+            if published is None:
+                continue
+            week_start = published - timedelta(days=published.weekday())
+            groups[week_start] = groups.get(week_start, 0) + 1
+        return dict(sorted(groups.items()))
 
     # ─── 过去日报日期队列 ────────────────────────────────────────────────
 
@@ -2721,7 +3206,7 @@ class DailyResearchStore:
 
                     record = conn.execute(
                         """
-                        SELECT score_status, translation_status, analysis_status,
+                        SELECT score_status, tldr_status, translation_status, analysis_status,
                                score_json, abstract_cn, paper_json
                         FROM daily_papers
                         WHERE source = ? AND paper_id = ?
@@ -2733,6 +3218,8 @@ class DailyResearchStore:
 
                     if record["score_status"] != "succeeded" or not record["score_json"]:
                         raise RuntimeError(f"评分尚未完成，不能交付日报: {source}:{paper_id}")
+                    if record["tldr_status"] != "succeeded":
+                        raise RuntimeError(f"TL;DR 尚未完成，不能交付日报: {source}:{paper_id}")
                     if paper.abstract and paper.abstract.strip() and (
                         record["translation_status"] != "succeeded"
                         or not (record["abstract_cn"] or "").strip()
@@ -3647,7 +4134,8 @@ class DailyResearchStore:
                         SET score_json = NULL, score_audit_json = NULL,
                             abstract_cn = NULL, analysis_json = NULL,
                             scored_at = NULL, translated_at = NULL, analyzed_at = NULL,
-                            score_status = 'pending', translation_status = 'pending',
+                            score_status = 'pending', tldr_status = 'pending',
+                            translation_status = 'pending',
                             analysis_status = 'pending', last_error = NULL
                         WHERE source = ? AND paper_id = ?
                         """,
@@ -3742,11 +4230,11 @@ class DailyResearchStore:
                     first_seen_at, last_seen_at, run_id, paper_json,
                     score_json, abstract_cn, scored_at, translated_at,
                     score_audit_json,
-                    score_status, translation_status,
+                    score_status, tldr_status, translation_status,
                     score_input_fingerprint, translation_input_fingerprint,
                     analysis_input_fingerprint, last_error
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(source, paper_id) DO UPDATE SET
                     canonical_id = excluded.canonical_id,
                     version = excluded.version,
@@ -3761,6 +4249,7 @@ class DailyResearchStore:
                     scored_at = excluded.scored_at,
                     translated_at = excluded.translated_at,
                     score_status = excluded.score_status,
+                    tldr_status = excluded.tldr_status,
                     translation_status = excluded.translation_status,
                     score_input_fingerprint = COALESCE(
                         excluded.score_input_fingerprint, daily_papers.score_input_fingerprint
@@ -3790,6 +4279,7 @@ class DailyResearchStore:
                     if score_audit_metadata is not None
                     else None,
                     "succeeded",
+                    "succeeded",
                     translation_status,
                     fingerprints.get("score"),
                     fingerprints.get("translation"),
@@ -3814,7 +4304,7 @@ class DailyResearchStore:
                 """
                 UPDATE daily_papers
                 SET run_id = ?, paper_json = ?, score_json = ?, score_audit_json = ?, scored_at = ?,
-                    score_status = 'succeeded',
+                    score_status = 'succeeded', tldr_status = 'succeeded',
                     score_input_fingerprint = COALESCE(?, score_input_fingerprint),
                     last_error = NULL
                 WHERE source = ? AND paper_id = ?
@@ -3830,6 +4320,57 @@ class DailyResearchStore:
                     score_input_fingerprint,
                     source,
                     scored["paper_id"],
+                ),
+            )
+
+    def update_score_tldr(
+        self,
+        run_id: str,
+        source: str,
+        paper_id: str,
+        tldr: str,
+    ) -> None:
+        """Fill only the TL;DR of an otherwise valid persisted score.
+
+        History repair intentionally avoids re-scoring a paper whose original
+        relevance decision is already present.  The score JSON remains the
+        single source of truth; this narrowly replaces its missing ``tldr``
+        field and records a separate durable stage state for retry.
+        """
+        text = str(tldr or "").strip()
+        if not text:
+            raise ValueError("tldr must be non-empty")
+        now = datetime.now().isoformat()
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT score_json, score_status FROM daily_papers "
+                "WHERE source = ? AND paper_id = ?",
+                (source, paper_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"论文不存在，无法补全 TL;DR: {source}:{paper_id}")
+            if row["score_status"] != "succeeded" or not row["score_json"]:
+                raise RuntimeError(f"评分未完成，无法仅补全 TL;DR: {source}:{paper_id}")
+            try:
+                payload = json.loads(row["score_json"])
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValueError(f"评分 JSON 损坏，无法仅补全 TL;DR: {exc}") from exc
+            if not isinstance(payload, dict):
+                raise ValueError("评分 JSON 必须是对象")
+            payload["tldr"] = text
+            conn.execute(
+                """
+                UPDATE daily_papers
+                SET run_id = ?, score_json = ?, tldr_status = 'succeeded',
+                    last_error = NULL, last_seen_at = ?
+                WHERE source = ? AND paper_id = ?
+                """,
+                (
+                    run_id,
+                    json.dumps(payload, ensure_ascii=False),
+                    now,
+                    source,
+                    paper_id,
                 ),
             )
 
@@ -3948,11 +4489,12 @@ class DailyResearchStore:
                 UPDATE daily_papers
                 SET run_id = ?, last_seen_at = ?, last_error = ?, retry_count = retry_count + 1,
                     score_status = CASE WHEN ? = 'score' THEN 'failed' ELSE score_status END,
+                    tldr_status = CASE WHEN ? = 'tldr' THEN 'failed' ELSE tldr_status END,
                     translation_status = CASE WHEN ? = 'translation' THEN 'failed' ELSE translation_status END,
                     analysis_status = CASE WHEN ? = 'analysis' THEN 'failed' ELSE analysis_status END
                 WHERE source = ? AND paper_id = ?
                 """,
-                (run_id, now, error[:4000], stage, stage, stage, source, paper_id),
+                (run_id, now, error[:4000], stage, stage, stage, stage, source, paper_id),
             )
 
     def mark_completed(self, run_id: str, source: str, paper_id: str):
@@ -3973,6 +4515,8 @@ class DailyResearchStore:
         if not record or not record["score_json"]:
             return None
         if record["score_status"] != "succeeded":
+            return None
+        if record["tldr_status"] != "succeeded":
             return None
         if require_translation and record["translation_status"] not in (
             "succeeded",

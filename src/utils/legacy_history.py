@@ -1,20 +1,16 @@
-"""v3.2 历史数据导入：旧 JSON 历史与 HTML 日报卡片 → SQLite。
+"""v3.2 HTML history importer with an optional complete-repair path.
 
-v4 的 SQLite 账本是唯一每日研究历史，升级后并不会迁移旧数据。本模块把
-两块 v3.2 遗产合并进 SQLite：
+The normal path parses old daily-report cards once and records their exact
+versions in the v4 SQLite delivery ledger.  This is enough to keep future
+daily runs from repeating papers that were already delivered.  The optional
+complete path additionally imports v3.2 JSON delivery metadata and
+``keywords.db`` records, then leaves all repair/omission work to SQLite-driven
+maintenance tasks.
 
-1. ``data/history/*_history.json`` — 只有「论文标识 → 交付时间」；
-2. ``data/reports/daily_research/html/**/*.html`` — 日报卡片里保存着
-   标题/作者/摘要/评分/翻译/深度分析等完整数据。
-3. ``data/keywords/keywords.db`` — v3.2 的逐论文关键词、标准化词和
-   别名映射，HTML 报告只能恢复其中一部分。
-
-导入规则：
-- 同一论文出现多份卡片时，最新报告覆盖旧数据；
-- 由 v4 运行写入的行（带阶段指纹）永不被旧数据降级；
-- 数据完整的卡片同时补写交付账本，防止未来重复推送；
-- 缺卡片 / 缺翻译 / 及格但缺深度分析的论文进入补充运行积压表，
-  之后由补充报告流程统一重跑并推送一次。
+Repeated cards are resolved by their *report artifact timestamp*, not by the
+old JSON delivery timestamp.  Therefore a newer archived report always wins
+even when both cards share one historical delivery record.  Rows managed by a
+v4 run retain priority and are never downgraded by imported archive content.
 """
 
 from __future__ import annotations
@@ -670,24 +666,31 @@ def import_legacy_history(
     legacy_keywords_db_path: Optional[Path] = None,
     progress_logger: Optional[Any] = None,
     progress_callback: Optional[LegacyProgressCallback] = None,
+    full_repair: bool = False,
 ) -> Dict[str, Any]:
-    """把旧 JSON 历史与 HTML 日报卡片合并进 SQLite，返回汇总。
+    """Write legacy HTML cards to SQLite and optionally queue full repair.
 
-    导入可能包含数百份归档报告。每个主要阶段和报告文件都会写入普通
-    运行日志；``progress_callback`` 同步给 WebUI 一个有节流能力的持久化
-    心跳，因而刷新页面或容器日志滚动时仍可看到实际进度。
+    The default path is deliberately lightweight: only arXiv papers already
+    present in v3.2 HTML reports are indexed and entered in the exact-version
+    delivery ledger.  That alone prevents future daily runs from treating
+    those papers as new.  Enabling ``full_repair`` additionally reads the
+    legacy JSON/keyword inputs and queues cardless historical entries; later
+    repair and omission tasks operate from SQLite, not by re-scanning HTML.
     """
     log = progress_logger or logger
     summary: Dict[str, Any] = {
         "finished_at": None,
+        "full_repair_enabled": bool(full_repair),
         "history_files": {},
         "reports_scanned": 0,
         "cards_found": 0,
+        "cards_selected": 0,
         "imported": 0,
         "skipped_existing_newer": 0,
         "skipped_v4_rows": 0,
         "delivered_ledger_rows": 0,
         "missing_cards": 0,
+        "missing_tldr": 0,
         "missing_translation": 0,
         "missing_analysis": 0,
         "backlog_queued": 0,
@@ -695,60 +698,76 @@ def import_legacy_history(
         "errors": [],
     }
 
-    log.info("[LegacyImport] 开始读取 v3.2 历史：JSON、HTML 报告与关键词库")
-    _emit_progress(progress_callback, "legacy_history", "开始读取旧 JSON 历史")
-    histories = load_legacy_history_files(
-        history_dir, progress_callback=progress_callback
-    )
-    summary["history_files"] = {
-        source: len(entries) for source, entries in histories.items()
-    }
-
-    keyword_db_path = (
-        Path(legacy_keywords_db_path)
-        if legacy_keywords_db_path is not None
-        else Path(history_dir).parent / "keywords" / "keywords.db"
-    )
-    if not keyword_db_path.is_file():
-        summary["legacy_keywords"] = {"state": "not_found", "records_imported": 0}
-        log.info("[LegacyKeywordImport] 未找到旧 keywords.db，跳过关键词库迁移")
-        _emit_progress(
-            progress_callback,
-            "legacy_keywords",
-            "未找到旧 keywords.db，已跳过",
-            0,
-            0,
+    histories: Dict[str, Dict[Tuple[str, int], str]] = {}
+    if full_repair:
+        log.info("[LegacyImport] 完整模式：读取 v3.2 JSON、HTML 报告与关键词库")
+        _emit_progress(progress_callback, "legacy_history", "开始读取旧 JSON 历史")
+        histories = load_legacy_history_files(
+            history_dir, progress_callback=progress_callback
         )
-    else:
-        try:
-            from keyword_tracker.database import KeywordDatabase
+        summary["history_files"] = {
+            source: len(entries) for source, entries in histories.items()
+        }
 
-            keyword_summary = KeywordDatabase(store.db_path).import_legacy_database(
-                keyword_db_path,
-                progress_logger=log,
-                progress_callback=progress_callback,
-            )
-            summary["legacy_keywords"] = keyword_summary
-            if keyword_summary.get("state") in {"failed", "unreadable", "unsupported_schema"}:
-                summary["errors"].append(
-                    "旧 keywords.db 迁移未完成: "
-                    + str(keyword_summary.get("error") or keyword_summary["state"])
-                )
-        except Exception as exc:  # 历史关键词不能阻断 HTML / JSON 主迁移
-            log.warning("[LegacyImport] 旧 keywords.db 迁移初始化失败: %s", exc)
-            summary["legacy_keywords"] = {"state": "failed", "error": str(exc)}
-            summary["errors"].append(f"旧 keywords.db 迁移初始化失败: {exc}")
+        keyword_db_path = (
+            Path(legacy_keywords_db_path)
+            if legacy_keywords_db_path is not None
+            else Path(history_dir).parent / "keywords" / "keywords.db"
+        )
+        if not keyword_db_path.is_file():
+            summary["legacy_keywords"] = {"state": "not_found", "records_imported": 0}
+            log.info("[LegacyKeywordImport] 未找到旧 keywords.db，跳过关键词库迁移")
             _emit_progress(
                 progress_callback,
                 "legacy_keywords",
-                "旧关键词库迁移初始化失败，继续导入其他历史",
+                "未找到旧 keywords.db，已跳过",
+                0,
+                0,
             )
+        else:
+            try:
+                from keyword_tracker.database import KeywordDatabase
+
+                keyword_summary = KeywordDatabase(store.db_path).import_legacy_database(
+                    keyword_db_path,
+                    progress_logger=log,
+                    progress_callback=progress_callback,
+                )
+                summary["legacy_keywords"] = keyword_summary
+                if keyword_summary.get("state") in {"failed", "unreadable", "unsupported_schema"}:
+                    summary["errors"].append(
+                        "旧 keywords.db 迁移未完成: "
+                        + str(keyword_summary.get("error") or keyword_summary["state"])
+                    )
+            except Exception as exc:  # 历史关键词不能阻断 HTML / JSON 主迁移
+                log.warning("[LegacyImport] 旧 keywords.db 迁移初始化失败: %s", exc)
+                summary["legacy_keywords"] = {"state": "failed", "error": str(exc)}
+                summary["errors"].append(f"旧 keywords.db 迁移初始化失败: {exc}")
+                _emit_progress(
+                    progress_callback,
+                    "legacy_keywords",
+                    "旧关键词库迁移初始化失败，继续导入其他历史",
+                )
+    else:
+        log.info("[LegacyImport] 轻量模式：仅登记 HTML 中已有的 arXiv 论文")
+        summary["legacy_keywords"] = {"state": "skipped_lightweight", "records_imported": 0}
+        _emit_progress(
+            progress_callback,
+            "legacy_history",
+            "轻量模式跳过旧 JSON 与关键词库，只读取 HTML 报告",
+            0,
+            0,
+        )
 
     cards = parse_legacy_report_cards(
         reports_html_dir, progress_callback=progress_callback
     )
     summary["cards_found"] = len(cards)
-    summary["reports_scanned"] = len({card["report_path"] for card in cards})
+    selected_cards = cards if full_repair else [
+        card for card in cards if str(card.get("source") or "").lower() == "arxiv"
+    ]
+    summary["cards_selected"] = len(selected_cards)
+    summary["reports_scanned"] = len({card["report_path"] for card in selected_cards})
 
     # 旧历史的交付时间优先于报告时间戳（更接近真实推送时刻）。
     arxiv_history = histories.get("arxiv", {})
@@ -759,16 +778,18 @@ def import_legacy_history(
             arxiv_by_canonical[canonical] = delivered_at
 
     card_index: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
-    canonical_index: Dict[str, List[Dict[str, Any]]] = {}
-    for card in cards:
+    for card in selected_cards:
         if not card["canonical_id"]:
             continue
         key = (card["source"], card["canonical_id"], card["version"])
         existing = card_index.get(key)
         if existing is None or card["report_at"] > existing["report_at"]:
             card_index[key] = card
-        canonical_index.setdefault(card["canonical_id"], []).append(card)
 
+    # Only cardless JSON history becomes a supplemental-report backlog. HTML
+    # cards always enter the delivery ledger, even when a field is missing:
+    # repair updates the original report in place rather than re-delivering
+    # the same paper in a new report.
     backlog_entries: List[Dict[str, Any]] = []
 
     def delivered_at_for(card: Dict[str, Any]) -> str:
@@ -801,6 +822,11 @@ def import_legacy_history(
         )
         try:
             has_score = bool(card["score_payload"])
+            has_tldr = bool(
+                has_score
+                and isinstance(card["score_payload"].get("tldr"), str)
+                and card["score_payload"]["tldr"].strip()
+            )
             needs_translation = bool(card["abstract"].strip())
             has_translation = bool(card["abstract_cn"].strip())
             # v3.2 的期刊/OpenAlex 卡片没有 PDF 深度分析能力；它们即使
@@ -812,15 +838,15 @@ def import_legacy_history(
             )
             has_analysis = bool(card["analysis"])
 
-            reasons: List[str] = []
+            missing_fields: List[str] = []
             if not has_score:
-                reasons.append("missing_data")
+                missing_fields.append("score")
+            elif not has_tldr:
+                missing_fields.append("tldr")
             if needs_translation and not has_translation:
-                reasons.append("missing_translation")
+                missing_fields.append("translation")
             if needs_analysis and not has_analysis:
-                reasons.append("missing_analysis")
-
-            complete = not reasons
+                missing_fields.append("analysis")
             delivered_at = delivered_at_for(card)
             payload = {
                 "source": card["source"],
@@ -832,43 +858,34 @@ def import_legacy_history(
                 "abstract_cn": card["abstract_cn"] or None,
                 "analysis_json": json.dumps(card["analysis"], ensure_ascii=False) if has_analysis else None,
                 "score_status": "succeeded" if has_score else "pending",
+                "tldr_status": "succeeded" if has_tldr else "pending",
                 "translation_status": (
                     "succeeded" if has_translation else ("not_required" if not needs_translation else "pending")
                 ),
                 "analysis_status": (
                     "succeeded"
                     if has_analysis
-                    else ("not_required" if card["source"] != "arxiv" else "pending")
+                    else ("pending" if needs_analysis else "not_required")
                 ),
                 "completed_at": delivered_at,
                 "report_path": card["report_path"],
+                "report_at": card["report_at"].isoformat(),
                 "delivered_at": delivered_at,
                 "delivery_run_id": delivery_run_id,
             }
-            outcome = store.import_legacy_paper(payload, delivered=complete)
+            outcome = store.import_legacy_paper(payload, delivered=True)
             summary[outcome if outcome in summary else "imported"] = (
                 summary.get(outcome, 0) + 1
             )
-            if complete:
-                summary["delivered_ledger_rows"] += 1
-            else:
-                backlog_entries.append(
-                    {
-                        "source": card["source"],
-                        "canonical_id": card["canonical_id"],
-                        "version": card["version"],
-                        "paper_id": card["paper_id"],
-                        "reason": reasons[0],
-                        "detail": "缺失: " + ", ".join(reasons),
-                        # 这张旧报告卡已经带有论文元数据。把它随积压
-                        # 一起保存，后续自动补充可直接重试评分/翻译/分析，
-                        # 不必因为历史 arXiv ID 暂时抓取失败而卡住。
-                        "paper_json": _paper_json_from_card(card),
-                    }
-                )
-                for reason in reasons:
-                    if reason in summary:
-                        summary[reason] += 1
+            summary["delivered_ledger_rows"] += 1
+            for missing in missing_fields:
+                key_name = {
+                    "tldr": "missing_tldr",
+                    "translation": "missing_translation",
+                    "analysis": "missing_analysis",
+                }.get(missing)
+                if key_name:
+                    summary[key_name] += 1
             if index == len(cards_to_write) or index % 25 == 0:
                 log.info(
                     "[LegacyImport] 卡片写入 %s/%s：已导入 %s，保留新数据 %s，补充积压候选 %s",
@@ -876,7 +893,10 @@ def import_legacy_history(
                     len(cards_to_write),
                     summary["imported"],
                     summary["skipped_existing_newer"],
-                    len(backlog_entries),
+                    sum(
+                        summary[key]
+                        for key in ("missing_tldr", "missing_translation", "missing_analysis")
+                    ),
                 )
         except Exception as exc:  # 单卡片失败不终止整个导入
             log.warning("[LegacyImport] 导入卡片失败 %s: %s", key, exc)
@@ -890,50 +910,58 @@ def import_legacy_history(
                 len(cards_to_write),
             )
 
-    # 旧历史里有记录、但任何报告卡片都找不到的论文。
-    arxiv_card_canonicals = {
-        card["canonical_id"] for card in cards if card["source"] == "arxiv"
-    }
-    doi_card_canonicals = {
-        normalize_doi_key(card["paper_id"])
-        for card in cards
-        if card["identity_kind"] == "doi"
-    }
-    for (canonical, version), delivered_at in arxiv_history.items():
-        if canonical in arxiv_card_canonicals:
-            continue
-        paper_id = f"{canonical}v{version}" if version else canonical
-        backlog_entries.append(
-            {
-                "source": "arxiv",
-                "canonical_id": canonical,
-                "version": version,
-                "paper_id": paper_id,
-                "reason": "missing_data",
-                "detail": "旧历史有交付记录但未找到报告卡片",
-            }
-        )
-        summary["missing_cards"] += 1
-    openalex_history = histories.get("openalex", {})
-    for (canonical, _version), _delivered_at in openalex_history.items():
-        if canonical in doi_card_canonicals:
-            continue
-        backlog_entries.append(
-            {
-                "source": "openalex",
-                "canonical_id": canonical,
-                "version": 0,
-                "paper_id": f"https://doi.org/{canonical}",
-                "reason": "missing_data",
-                "detail": "旧历史有交付记录但未找到报告卡片",
-            }
-        )
-        summary["missing_cards"] += 1
+    if full_repair:
+        # JSON-only entries have no prior report to patch. Preserve them as
+        # supplemental candidates so a full import can create a new report if
+        # metadata becomes available, while lightweight import remains a
+        # zero-LLM HTML ledger migration.
+        arxiv_card_canonicals = {
+            card["canonical_id"] for card in selected_cards if card["source"] == "arxiv"
+        }
+        doi_card_canonicals = {
+            normalize_doi_key(card["paper_id"])
+            for card in selected_cards
+            if card["identity_kind"] == "doi"
+        }
+        for (canonical, version), _delivered_at in arxiv_history.items():
+            if canonical in arxiv_card_canonicals:
+                continue
+            paper_id = f"{canonical}v{version}" if version else canonical
+            backlog_entries.append(
+                {
+                    "source": "arxiv",
+                    "canonical_id": canonical,
+                    "version": version,
+                    "paper_id": paper_id,
+                    "reason": "missing_data",
+                    "detail": "旧历史有交付记录但未找到报告卡片",
+                }
+            )
+            summary["missing_cards"] += 1
+        openalex_history = histories.get("openalex", {})
+        for (canonical, _version), _delivered_at in openalex_history.items():
+            if canonical in doi_card_canonicals:
+                continue
+            backlog_entries.append(
+                {
+                    "source": "openalex",
+                    "canonical_id": canonical,
+                    "version": 0,
+                    "paper_id": f"https://doi.org/{canonical}",
+                    "reason": "missing_data",
+                    "detail": "旧历史有交付记录但未找到报告卡片",
+                }
+            )
+            summary["missing_cards"] += 1
 
     _emit_progress(
         progress_callback,
         "legacy_backlog",
-        f"整理 {len(backlog_entries)} 条缺失或遗漏数据",
+        (
+            f"整理 {len(backlog_entries)} 条无报告的旧历史记录"
+            if full_repair
+            else "轻量导入不创建补充积压"
+        ),
         0,
         len(backlog_entries),
     )
@@ -957,12 +985,14 @@ def import_legacy_history(
                 len(backlog_entries),
             )
     else:
-        _emit_progress(progress_callback, "legacy_backlog", "没有待补全的旧历史数据", 0, 0)
+        _emit_progress(progress_callback, "legacy_backlog", "没有无报告的旧历史记录", 0, 0)
 
     summary["finished_at"] = datetime.now().isoformat()
     log.info(
-        "[LegacyImport] 导入完成: 报告 %s 份、卡片 %s 张、账本 %s 条、积压 %s 条",
+        "[LegacyImport] 导入完成（%s）: 报告 %s 份、卡片 %s/%s 张、账本 %s 条、积压 %s 条",
+        "完整修复" if full_repair else "仅 HTML 入库",
         summary["reports_scanned"],
+        summary["cards_selected"],
         summary["cards_found"],
         summary["delivered_ledger_rows"],
         summary["backlog_queued"],
