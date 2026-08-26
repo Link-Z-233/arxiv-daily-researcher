@@ -4,7 +4,7 @@
 
 **基于 LLM 的学术论文监控、筛选、分析、报告与研究归档系统**
 
-[![Version](https://img.shields.io/badge/version-v4.0-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v4.1-brightgreen.svg)](CHANGELOG.md)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
@@ -20,7 +20,7 @@
 
 ArXiv Daily Researcher 从 ArXiv 与可选扩展来源收集论文，按研究主题完成评分、摘要翻译、PDF 分析与趋势整理，并输出 Markdown、HTML 报告和多平台通知。
 
-v4.0 以 SQLite 保存候选论文、处理阶段、报告交付、通知发件箱、历史导入积压与过去日报队列。每个任务都可以从已完成阶段继续运行，适合长期部署。
+v4.1 以 SQLite 保存候选论文、处理阶段、报告交付、通知发件箱、历史导入积压与过去日报队列。每个任务都可以从已完成阶段继续运行，适合长期部署。
 
 当前版本提供：
 
@@ -391,11 +391,11 @@ docker compose ps
 
 #### 使用 GHCR 托管镜像
 
-v4.0 同时提供 x86_64 和 ARM64 镜像。生产部署使用固定版本标签：
+v4.1 发布后将同时提供 x86_64 和 ARM64 镜像。生产部署可使用对应的固定版本标签：
 
 ~~~bash
-export ADR_WORKER_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher:4.0
-export ADR_WEBUI_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher-config-panel:4.0
+export ADR_WORKER_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher:4.1
+export ADR_WEBUI_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher-config-panel:4.1
 
 docker compose pull
 docker compose up -d --no-build --force-recreate
@@ -881,6 +881,7 @@ docker compose ps
 
 <table>
 <tr><th>版本</th><th>日期</th><th>类型</th><th>亮点</th></tr>
+<tr><td><b>v4.1</b></td><td>2026-08-26</td><td>✨ 增强 + 🐛 修复</td><td>旧历史关键词改为 HTML 报告优先、旧缓存按论文精确补位，关键词标准化统一由当前 SQLite 管理；报告预览与数据分析升级至 Streamlit 原生 iframe。</td></tr>
 <tr><td><b>v4.0</b></td><td>2026-08-25</td><td>🚀 重大更新</td><td>SQLite 日报历史、持久化候选与重试队列、完整扫描收据、核心相关性 V2、收藏偏好、旧历史导入与自动补充报告、过去日报日期范围队列、SQLite 备份与 WebDAV 增量归档、LLM 健康面板、多平台大型任务通知、GHCR AMD64/ARM64 镜像与完整发布回归。</td></tr>
 <tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ 增强 + 🐛 修复</td><td>网络代理、WebDAV 数据同步、配置导出、Docker 更新通知、每日推送 Tab、Markdown/HTML 报告开关、趋势分析输出设置。</td></tr>
 <tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ 增强 + 🐛 修复</td><td>运行管理、日志查看、趋势分析 Tab、报告查看增强、ArXiv 超时守卫与运行锁改进。</td></tr>

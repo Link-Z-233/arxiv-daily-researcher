@@ -4,7 +4,7 @@
 
 **An LLM-powered system for academic paper monitoring, selection, analysis, reporting, and research archiving**
 
-[![Version](https://img.shields.io/badge/version-v4.0-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v4.1-brightgreen.svg)](CHANGELOG.md)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
@@ -20,7 +20,7 @@
 
 ArXiv Daily Researcher collects papers from ArXiv and optional additional sources, evaluates them against a research profile, produces translated summaries and PDF analysis, tracks research trends, and delivers Markdown/HTML reports through multiple notification channels.
 
-v4.0 uses SQLite for candidate papers, processing stages, report delivery, notification outbox rows, legacy-import backlogs, and historical-daily-report queues. Each workflow can resume from completed stages, which makes the system suitable for long-running deployments.
+v4.1 uses SQLite for candidate papers, processing stages, report delivery, notification outbox rows, legacy-import backlogs, and historical-daily-report queues. Each workflow can resume from completed stages, which makes the system suitable for long-running deployments.
 
 The current release includes:
 
@@ -391,11 +391,11 @@ docker compose ps
 
 #### Use GHCR hosted images
 
-v4.0 ships x86_64 and ARM64 images. Pin a production deployment to a version tag:
+After v4.1 is released, x86_64 and ARM64 images will be available. Pin a production deployment to its matching version tag:
 
 ~~~bash
-export ADR_WORKER_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher:4.0
-export ADR_WEBUI_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher-config-panel:4.0
+export ADR_WORKER_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher:4.1
+export ADR_WEBUI_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher-config-panel:4.1
 
 docker compose pull
 docker compose up -d --no-build --force-recreate
@@ -881,6 +881,7 @@ See **[CHANGELOG.md](CHANGELOG.md)** for the complete version history.
 
 <table>
 <tr><th>Version</th><th>Date</th><th>Type</th><th>Highlights</th></tr>
+<tr><td><b>v4.1</b></td><td>2026-08-26</td><td>✨ Enhancements + fixes</td><td>Legacy keywords are HTML-report-first, with an old cache used only as a paper-scoped fallback; the current SQLite owns normalization. Report previews and analytics use Streamlit's native iframe.</td></tr>
 <tr><td><b>v4.0</b></td><td>2026-08-25</td><td>🚀 Major release</td><td>SQLite daily-history system, durable candidate and retry queues, complete scan receipts, Core Relevance V2, favorites, legacy import with automatic supplement reports, past-daily date-range queues, SQLite backups with incremental WebDAV archive, LLM health, workflow notifications, GHCR AMD64/ARM64 images, and release regression.</td></tr>
 <tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ Enhancements + fixes</td><td>Network proxy, WebDAV data sync, configuration export, Docker update notifications, Daily Push tab, Markdown/HTML output switches, and trend-analysis output settings.</td></tr>
 <tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ Enhancements + fixes</td><td>Run management, log viewer, Trend Analysis tab, report-view improvements, ArXiv timeout guard, and run-lock improvements.</td></tr>
