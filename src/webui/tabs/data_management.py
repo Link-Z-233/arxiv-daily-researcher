@@ -493,29 +493,33 @@ def _render_legacy_import_section(config_values: dict) -> None:
                         pending=omission.get("pending_after", 0),
                     )
                 )
-            legacy_keywords = summary.get("legacy_keywords")
-            if isinstance(legacy_keywords, dict):
-                state = str(legacy_keywords.get("state") or "not_found")
+            report_keywords = summary.get("report_keywords")
+            if isinstance(report_keywords, dict):
+                state = str(report_keywords.get("state") or "html_only")
                 state_key = {
-                    "not_found": "dm_legacy_keywords_state_not_found",
-                    "imported": "dm_legacy_keywords_state_imported",
-                    "same_database": "dm_legacy_keywords_state_same_database",
-                    "unreadable": "dm_legacy_keywords_state_unreadable",
-                    "unsupported_schema": "dm_legacy_keywords_state_unsupported_schema",
-                    "failed": "dm_legacy_keywords_state_failed",
-                    "skipped_lightweight": "dm_legacy_keywords_state_skipped_lightweight",
+                    "html_only": "dm_report_keywords_state_html_only",
+                    "not_needed": "dm_report_keywords_state_not_needed",
+                    "supplemented": "dm_report_keywords_state_supplemented",
+                    "no_matching_records": "dm_report_keywords_state_no_matching",
+                    "not_found": "dm_report_keywords_state_not_found",
+                    "not_configured": "dm_report_keywords_state_not_configured",
+                    "unreadable": "dm_report_keywords_state_unreadable",
+                    "unsupported_schema": "dm_report_keywords_state_unsupported",
                 }.get(state)
                 state_label = t(state_key) if state_key else state
                 st.caption(
-                    t("dm_legacy_keywords_line").format(
+                    t("dm_report_keywords_line").format(
                         state=state_label,
-                        scanned=legacy_keywords.get("records_scanned", 0),
-                        imported=legacy_keywords.get("records_imported", 0),
-                        terms=legacy_keywords.get("normalized_terms_imported", 0),
-                        aliases=legacy_keywords.get("aliases_imported", 0),
-                        preserved=legacy_keywords.get("aliases_preserved", 0),
+                        html_papers=report_keywords.get("html_papers", 0),
+                        html_terms=report_keywords.get("html_terms", 0),
+                        fallback_papers=report_keywords.get("fallback_papers", 0),
+                        fallback_terms=report_keywords.get("fallback_terms", 0),
                     )
                 )
+            elif isinstance(summary.get("legacy_keywords"), dict):
+                # v4.0 summaries remain readable after upgrade. A new import
+                # replaces this with the report-scoped v4.1 keyword summary.
+                st.caption(t("dm_report_keywords_legacy_summary"))
     else:
         st.caption(t("dm_legacy_none"))
 

@@ -88,7 +88,7 @@ Papers enter SQLite before downstream processing. Source, canonical identity, an
 
 ### 📜 Legacy Import and Past Daily Reports
 
-Legacy HTML reports can be indexed into the SQLite delivery ledger in one click, preventing future daily runs from repeating those papers. Complete repair additionally migrates compatible JSON and keyword data, fills missing fields, patches original reports, and produces calendar-week supplement reports for omissions. Past daily reports use a durable date-range queue and run the complete research pipeline day by day.
+Legacy HTML reports can be indexed into the SQLite delivery ledger in one click, preventing future daily runs from repeating those papers. Complete repair additionally reads compatible JSON. HTML remains authoritative for report keywords, while the old keyword cache only fills a missing keyword section for the same reported paper. It then fills missing fields, patches original reports, and produces calendar-week supplement reports for omissions. Past daily reports use a durable date-range queue and run the complete research pipeline day by day.
 
 </td>
 </tr>
@@ -529,7 +529,7 @@ Use one project directory for the worker, WebUI, SQLite database, reports, and l
 
 | Mode | Entry and coordination | Result |
 | :--- | :--------------------- | :----- |
-| <code>legacy_import</code> | Data Management → Read Legacy History; waits for related work to become idle | By default indexes existing arXiv HTML deliveries; complete repair also migrates JSON / <code>keywords.db</code> and runs follow-up maintenance |
+| <code>legacy_import</code> | Data Management → Read Legacy History; waits for related work to become idle | By default indexes existing arXiv HTML deliveries; complete repair reads JSON, fills only missing keywords for the same HTML report, and runs follow-up maintenance |
 | <code>history_data_repair</code> | Data Management → Check and Repair History | Uses SQLite to fill missing scores, TLDRs, translations, or deep analyses and patches original reports |
 | <code>history_omission_scan</code> | Data Management → Scan Omissions and Build Supplements | Scans the SQLite-covered ArXiv period and creates capped supplements by ISO calendar week |
 | <code>supplement_run</code> | Automatically after import or manually through CLI | Processes supplement backlog and produces supplement reports |
@@ -755,7 +755,7 @@ Check **Daily Push → Status Panel / Run Logs** and <code>legacy_import_*.log</
 
 The default **Read Legacy History** action parses only ArXiv cards already present in legacy HTML and creates delivery-ledger rows. It makes no LLM calls and does not scan for omissions, which is useful immediately after an upgrade.
 
-**Fully repair legacy history** merges records by stable paper identity and selects the newest report analysis. It also migrates compatible JSON and <code>data/keywords/keywords.db</code>. The legacy keyword database preserves per-paper terms, original dates, and normalized aliases; keywords found in HTML cards are also written to the paper score record. **Check and Repair History** fills missing TLDRs, translations, or deep analyses from SQLite and patches original reports. Range-scan omissions enter the supplement queue by ISO calendar week. Each report follows the configured run cap, and remaining rows stay retryable.
+**Fully repair legacy history** merges records by stable paper identity and selects the newest report analysis. Compatible JSON is written into SQLite. Extracted keywords from HTML cards are written directly to paper score records; only an already analyzed HTML card with no keyword section may read <code>data/keywords/keywords.db</code> as a read-only fallback for that same paper. The old cache's normalized terms, aliases, and derived counts are not migrated: the current SQLite normalization workflow owns them. **Check and Repair History** fills missing TLDRs, translations, or deep analyses from SQLite and patches original reports. Range-scan omissions enter the supplement queue by ISO calendar week. Each report follows the configured run cap, and remaining rows stay retryable.
 
 Complete v4 records have a higher completeness priority, so their existing content remains available during import.
 </details>

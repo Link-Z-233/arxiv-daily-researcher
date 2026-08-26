@@ -3,9 +3,11 @@
 The normal path parses old daily-report cards once and records their exact
 versions in the v4 SQLite delivery ledger.  This is enough to keep future
 daily runs from repeating papers that were already delivered.  The optional
-complete path additionally imports v3.2 JSON delivery metadata and
-``keywords.db`` records, then leaves all repair/omission work to SQLite-driven
-maintenance tasks.
+complete path additionally imports v3.2 JSON delivery metadata. Its old
+``keywords.db`` is never migrated wholesale: it is only a read-only fallback
+for raw terms belonging to HTML-confirmed papers whose report card does not
+contain extracted keywords. Normalization, aliases, and trend statistics stay
+owned by the current SQLite database.
 
 Repeated cards are resolved by their *report artifact timestamp*, not by the
 old JSON delivery timestamp.  Therefore a newer archived report always wins
@@ -19,6 +21,7 @@ import html as html_module
 import json
 import logging
 import re
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -657,6 +660,270 @@ def _paper_json_from_card(card: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _dedupe_keyword_terms(values: Any) -> List[str]:
+    """Return stable, display-preserving keyword terms from one loose input."""
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    terms: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        term = _collapse_ws(value)
+        key = term.casefold()
+        if not term or key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+    return terms
+
+
+def _card_extracted_keywords(card: Dict[str, Any]) -> List[str]:
+    payload = card.get("score_payload")
+    if not isinstance(payload, dict):
+        return []
+    return _dedupe_keyword_terms(payload.get("extracted_keywords"))
+
+
+def _open_legacy_keywords_readonly(
+    source_path: Path,
+) -> Tuple[Optional[sqlite3.Connection], str, Optional[str]]:
+    """Open the optional v3.2 keyword cache without changing source files."""
+    path = Path(source_path)
+    if not path.is_file():
+        return None, "not_found", None
+    try:
+        resolved = path.resolve()
+        conn = sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA schema_version").fetchone()
+        return conn, "readonly", None
+    except (OSError, sqlite3.Error) as normal_error:
+        # A clean read-only NAS snapshot can require immutable=1 for a
+        # WAL-mode database. Never ignore a non-empty WAL: its contents may
+        # hold newer records than the main database.
+        try:
+            wal_path = path.with_name(path.name + "-wal")
+            has_live_wal = wal_path.is_file() and wal_path.stat().st_size > 0
+        except OSError:
+            has_live_wal = True
+        if has_live_wal:
+            return None, "unreadable", "旧关键词库存在未合并的 WAL 文件"
+        try:
+            resolved = path.resolve()
+            conn = sqlite3.connect(
+                f"{resolved.as_uri()}?mode=ro&immutable=1", uri=True
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA schema_version").fetchone()
+            return conn, "immutable_snapshot", None
+        except (OSError, sqlite3.Error) as immutable_error:
+            return None, "unreadable", str(immutable_error or normal_error)
+
+
+def _supplement_html_keywords_from_legacy_db(
+    cards: List[Dict[str, Any]],
+    legacy_db_path: Optional[Path],
+    *,
+    progress_logger: Any,
+    progress_callback: Optional[LegacyProgressCallback],
+) -> Dict[str, Any]:
+    """Use v3.2 raw terms only as a fallback for HTML-confirmed papers.
+
+    This deliberately does *not* import old normalized terms, aliases or
+    derived counts. HTML is authoritative when it has a keyword section; the
+    old cache only fills an absent section for the same reported paper.
+    """
+    html_terms_by_card = {
+        id(card): _card_extracted_keywords(card) for card in cards
+    }
+    summary: Dict[str, Any] = {
+        "state": "html_only",
+        "html_papers": sum(bool(terms) for terms in html_terms_by_card.values()),
+        "html_terms": sum(len(terms) for terms in html_terms_by_card.values()),
+        "fallback_papers": 0,
+        "fallback_terms": 0,
+        "db_records_scanned": 0,
+    }
+
+    # A legacy cache can only complement an already scored report card. Cards
+    # without a score retain their normal SQLite repair path instead of being
+    # made to look scored merely because a keyword cache happened to exist.
+    candidates = [
+        card
+        for card in cards
+        if isinstance(card.get("score_payload"), dict)
+        and card.get("score_payload")
+        and not html_terms_by_card[id(card)]
+    ]
+    if not candidates:
+        summary["state"] = "not_needed"
+        progress_logger.info(
+            "[LegacyKeywordFallback] HTML 已提供所有已分析论文的关键词；不读取旧 keywords.db"
+        )
+        _emit_progress(
+            progress_callback,
+            "legacy_keywords",
+            "HTML 已提供关键词，不读取旧关键词库",
+            0,
+            0,
+        )
+        return summary
+
+    if legacy_db_path is None:
+        summary["state"] = "not_configured"
+        progress_logger.info(
+            "[LegacyKeywordFallback] 有 %s 篇 HTML 卡片缺少关键词；未配置旧关键词库，保留为空",
+            len(candidates),
+        )
+        _emit_progress(
+            progress_callback,
+            "legacy_keywords",
+            "未配置旧关键词库，仅保留 HTML 中已有关键词",
+            0,
+            len(candidates),
+        )
+        return summary
+
+    conn, read_mode, error = _open_legacy_keywords_readonly(legacy_db_path)
+    if conn is None:
+        summary.update({"state": read_mode, "error": error})
+        level = progress_logger.warning if read_mode == "unreadable" else progress_logger.info
+        level(
+            "[LegacyKeywordFallback] 旧 keywords.db 未用于补齐报告关键词：%s",
+            error or read_mode,
+        )
+        _emit_progress(
+            progress_callback,
+            "legacy_keywords",
+            "旧关键词库不可用，仅保留 HTML 中已有关键词",
+            0,
+            len(candidates),
+        )
+        return summary
+
+    exact_cards: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    canonical_cards: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    candidate_ids: Dict[str, set[str]] = {}
+    for card in candidates:
+        source = str(card.get("source") or "").strip().lower()
+        paper_id = str(card.get("paper_id") or "").strip()
+        canonical_id = str(card.get("canonical_id") or "").strip()
+        if not source or not paper_id:
+            continue
+        exact_cards[(source, paper_id.casefold())] = card
+        candidate_ids.setdefault(source, set()).add(paper_id.casefold())
+        if canonical_id:
+            # v3.2 stores canonical arXiv ids in some installations. When
+            # several historical versions exist, the newest report artifact
+            # is the only safe recipient for that versionless cache record.
+            canonical_key = (source, canonical_id.casefold())
+            previous = canonical_cards.get(canonical_key)
+            if previous is None or card["report_at"] > previous["report_at"]:
+                canonical_cards[canonical_key] = card
+            candidate_ids[source].add(canonical_id.casefold())
+
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(keywords)").fetchall()
+        } if "keywords" in tables else set()
+        required = {"keyword", "paper_id", "source"}
+        if not required.issubset(columns):
+            summary["state"] = "unsupported_schema"
+            progress_logger.info(
+                "[LegacyKeywordFallback] 旧 keywords.db 不含原始关键词表；不迁移别名或统计缓存"
+            )
+            _emit_progress(
+                progress_callback,
+                "legacy_keywords",
+                "旧关键词库格式不支持，仅保留 HTML 中已有关键词",
+                0,
+                len(candidates),
+            )
+            return summary
+
+        progress_logger.info(
+            "[LegacyKeywordFallback] 仅查询 %s 篇缺关键词的 HTML 已分析论文；不迁移别名、规范词或统计缓存",
+            len(candidates),
+        )
+        _emit_progress(
+            progress_callback,
+            "legacy_keywords",
+            f"为 {len(candidates)} 篇 HTML 已分析论文补查关键词",
+            0,
+            len(candidates),
+        )
+        assigned: Dict[int, List[str]] = {}
+        for source, paper_ids in candidate_ids.items():
+            ids = sorted(paper_ids)
+            for offset in range(0, len(ids), 400):
+                chunk = ids[offset : offset + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    "SELECT source, paper_id, keyword FROM keywords "
+                    "WHERE LOWER(source) = ? AND LOWER(paper_id) IN ("
+                    + placeholders + ")",
+                    [source, *chunk],
+                )
+                for row in rows:
+                    summary["db_records_scanned"] += 1
+                    row_source = str(row["source"] or "").strip().lower()
+                    row_paper_id = str(row["paper_id"] or "").strip().casefold()
+                    target = exact_cards.get((row_source, row_paper_id))
+                    if target is None:
+                        target = canonical_cards.get((row_source, row_paper_id))
+                    if target is None:
+                        continue
+                    term = _dedupe_keyword_terms([row["keyword"]])
+                    if term:
+                        assigned.setdefault(id(target), []).extend(term)
+
+        for card in candidates:
+            terms = _dedupe_keyword_terms(assigned.get(id(card), []))
+            if not terms:
+                continue
+            card["score_payload"]["extracted_keywords"] = terms
+            summary["fallback_papers"] += 1
+            summary["fallback_terms"] += len(terms)
+
+        summary["state"] = "supplemented" if summary["fallback_terms"] else "no_matching_records"
+        progress_logger.info(
+            "[LegacyKeywordFallback] 完成：HTML 关键词 %s 篇/%s 个，旧库仅补齐 %s 篇/%s 个",
+            summary["html_papers"],
+            summary["html_terms"],
+            summary["fallback_papers"],
+            summary["fallback_terms"],
+        )
+        _emit_progress(
+            progress_callback,
+            "legacy_keywords",
+            "HTML 关键词导入完成；旧库仅补齐 "
+            f"{summary['fallback_papers']} 篇/{summary['fallback_terms']} 个",
+            len(candidates),
+            len(candidates),
+        )
+        return summary
+    except sqlite3.Error as exc:
+        summary.update({"state": "unreadable", "error": str(exc)})
+        progress_logger.warning("[LegacyKeywordFallback] 旧关键词库读取失败，继续导入 HTML：%s", exc)
+        _emit_progress(
+            progress_callback,
+            "legacy_keywords",
+            "旧关键词库读取失败，仅保留 HTML 中已有关键词",
+            0,
+            len(candidates),
+        )
+        return summary
+    finally:
+        conn.close()
+
+
 def import_legacy_history(
     store: Any,
     *,
@@ -673,9 +940,10 @@ def import_legacy_history(
     The default path is deliberately lightweight: only arXiv papers already
     present in v3.2 HTML reports are indexed and entered in the exact-version
     delivery ledger.  That alone prevents future daily runs from treating
-    those papers as new.  Enabling ``full_repair`` additionally reads the
-    legacy JSON/keyword inputs and queues cardless historical entries; later
-    repair and omission tasks operate from SQLite, not by re-scanning HTML.
+    those papers as new. Enabling ``full_repair`` additionally reads legacy
+    JSON and uses old raw keywords only to fill an absent HTML keyword section
+    for the same report card; later repair and omission tasks operate from
+    SQLite, not by re-scanning HTML.
     """
     log = progress_logger or logger
     summary: Dict[str, Any] = {
@@ -694,13 +962,15 @@ def import_legacy_history(
         "missing_translation": 0,
         "missing_analysis": 0,
         "backlog_queued": 0,
-        "legacy_keywords": {},
+        "report_keywords": {},
         "errors": [],
     }
 
     histories: Dict[str, Dict[Tuple[str, int], str]] = {}
     if full_repair:
-        log.info("[LegacyImport] 完整模式：读取 v3.2 JSON、HTML 报告与关键词库")
+        log.info(
+            "[LegacyImport] 完整模式：读取 v3.2 JSON 与 HTML 报告；旧 keywords.db 仅按报告卡片补齐缺失关键词"
+        )
         _emit_progress(progress_callback, "legacy_history", "开始读取旧 JSON 历史")
         histories = load_legacy_history_files(
             history_dir, progress_callback=progress_callback
@@ -708,53 +978,12 @@ def import_legacy_history(
         summary["history_files"] = {
             source: len(entries) for source, entries in histories.items()
         }
-
-        keyword_db_path = (
-            Path(legacy_keywords_db_path)
-            if legacy_keywords_db_path is not None
-            else Path(history_dir).parent / "keywords" / "keywords.db"
-        )
-        if not keyword_db_path.is_file():
-            summary["legacy_keywords"] = {"state": "not_found", "records_imported": 0}
-            log.info("[LegacyKeywordImport] 未找到旧 keywords.db，跳过关键词库迁移")
-            _emit_progress(
-                progress_callback,
-                "legacy_keywords",
-                "未找到旧 keywords.db，已跳过",
-                0,
-                0,
-            )
-        else:
-            try:
-                from keyword_tracker.database import KeywordDatabase
-
-                keyword_summary = KeywordDatabase(store.db_path).import_legacy_database(
-                    keyword_db_path,
-                    progress_logger=log,
-                    progress_callback=progress_callback,
-                )
-                summary["legacy_keywords"] = keyword_summary
-                if keyword_summary.get("state") in {"failed", "unreadable", "unsupported_schema"}:
-                    summary["errors"].append(
-                        "旧 keywords.db 迁移未完成: "
-                        + str(keyword_summary.get("error") or keyword_summary["state"])
-                    )
-            except Exception as exc:  # 历史关键词不能阻断 HTML / JSON 主迁移
-                log.warning("[LegacyImport] 旧 keywords.db 迁移初始化失败: %s", exc)
-                summary["legacy_keywords"] = {"state": "failed", "error": str(exc)}
-                summary["errors"].append(f"旧 keywords.db 迁移初始化失败: {exc}")
-                _emit_progress(
-                    progress_callback,
-                    "legacy_keywords",
-                    "旧关键词库迁移初始化失败，继续导入其他历史",
-                )
     else:
         log.info("[LegacyImport] 轻量模式：仅登记 HTML 中已有的 arXiv 论文")
-        summary["legacy_keywords"] = {"state": "skipped_lightweight", "records_imported": 0}
         _emit_progress(
             progress_callback,
             "legacy_history",
-            "轻量模式跳过旧 JSON 与关键词库，只读取 HTML 报告",
+            "轻量模式跳过旧 JSON 与旧关键词库，只读取 HTML 报告",
             0,
             0,
         )
@@ -805,6 +1034,36 @@ def import_legacy_history(
     cards_to_write = sorted(
         card_index.items(), key=lambda item: item[1]["report_at"]
     )
+    keyword_cards = [card for _, card in cards_to_write]
+    if full_repair:
+        keyword_db_path = (
+            Path(legacy_keywords_db_path)
+            if legacy_keywords_db_path is not None
+            else Path(history_dir).parent / "keywords" / "keywords.db"
+        )
+        summary["report_keywords"] = _supplement_html_keywords_from_legacy_db(
+            keyword_cards,
+            keyword_db_path,
+            progress_logger=log,
+            progress_callback=progress_callback,
+        )
+    else:
+        html_terms = [_card_extracted_keywords(card) for card in keyword_cards]
+        summary["report_keywords"] = {
+            "state": "html_only",
+            "html_papers": sum(bool(terms) for terms in html_terms),
+            "html_terms": sum(len(terms) for terms in html_terms),
+            "fallback_papers": 0,
+            "fallback_terms": 0,
+            "db_records_scanned": 0,
+        }
+        _emit_progress(
+            progress_callback,
+            "legacy_keywords",
+            "仅写入 HTML 卡片中的已分析论文关键词，不读取旧 keywords.db",
+            len(keyword_cards),
+            len(keyword_cards),
+        )
     _emit_progress(
         progress_callback,
         "legacy_write",

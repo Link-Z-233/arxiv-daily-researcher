@@ -1,11 +1,13 @@
 """v3.2 旧历史导入：HTML 卡片解析、最新覆盖、交付账本与补充积压。"""
 
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -108,6 +110,29 @@ def _write_report(root: Path, source: str, stamp: str, body: str) -> Path:
     path = directory / f"{source.upper()}_Report_{stamp}.html"
     path.write_text(_report_html(body, stamp.replace("_", " ").replace("-", ":")[:19], 11.0), encoding="utf-8")
     return path
+
+
+def _card_without_keyword_section(idx: int, paper_id: str, title: str) -> str:
+    """Build a normally scored card whose report did not expose raw terms."""
+    card = _card_fail(idx, paper_id, title)
+    marker = "<details><summary>关键词</summary>"
+    start = card.index(marker)
+    end = card.index("</details>", start) + len("</details>")
+    return card[:start] + card[end:]
+
+
+def _write_v32_keyword_cache(path: Path, rows: list[tuple[str, str, str]]) -> None:
+    """Create just enough v3.2 cache schema for report-scoped fallback tests."""
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE keywords (keyword TEXT, paper_id TEXT, source TEXT, extracted_date TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO keywords(keyword, paper_id, source, extracted_date) VALUES (?, ?, ?, '2026-03-03')",
+        rows,
+    )
+    conn.commit()
+    conn.close()
 
 
 class LegacyCardParsingTests(unittest.TestCase):
@@ -399,6 +424,99 @@ class LegacyImportIntegrationTests(unittest.TestCase):
         self.assertEqual(summary["history_files"], {})
         self.assertEqual(summary["delivered_ledger_rows"], 0)
         self.assertEqual(self.store.supplement_backlog_summary()["pending"], 0)
+
+    def test_lightweight_import_never_reads_old_keyword_cache(self):
+        _write_report(
+            self.reports_dir,
+            "arxiv",
+            "2026-05-03_08-00-00",
+            _card_without_keyword_section(1, "2603.30001v1", "No HTML Terms"),
+        )
+        legacy_cache = self.root / "keywords.db"
+        _write_v32_keyword_cache(
+            legacy_cache,
+            [("cache-only", "2603.30001v1", "arxiv")],
+        )
+
+        with patch("utils.legacy_history._open_legacy_keywords_readonly") as opener:
+            summary = import_legacy_history(
+                self.store,
+                history_dir=self.history_dir,
+                reports_html_dir=self.reports_dir / "html",
+                delivery_run_id=self.run_id,
+                legacy_keywords_db_path=legacy_cache,
+                full_repair=False,
+            )
+
+        opener.assert_not_called()
+        self.assertEqual(summary["report_keywords"]["state"], "html_only")
+        record = self.store.get_paper_record("arxiv", "2603.30001v1")
+        self.assertEqual(json.loads(record["score_json"])["extracted_keywords"], [])
+
+    def test_full_repair_uses_old_keyword_cache_only_for_matching_html_gap(self):
+        _write_report(
+            self.reports_dir,
+            "arxiv",
+            "2026-05-04_08-00-00",
+            _card_fail(1, "2603.30002v1", "HTML Terms Win")
+            + _card_without_keyword_section(2, "2603.30003v1", "Cache Fallback"),
+        )
+        legacy_cache = self.root / "keywords.db"
+        _write_v32_keyword_cache(
+            legacy_cache,
+            [
+                ("must-not-overwrite-html", "2603.30002v1", "arxiv"),
+                ("cache-only", "2603.30003v1", "arxiv"),
+                ("cache-extra", "2603.30003v1", "arxiv"),
+                ("unreported-term", "2603.99999v1", "arxiv"),
+            ],
+        )
+
+        summary = import_legacy_history(
+            self.store,
+            history_dir=self.history_dir,
+            reports_html_dir=self.reports_dir / "html",
+            delivery_run_id=self.run_id,
+            legacy_keywords_db_path=legacy_cache,
+            full_repair=True,
+        )
+
+        html_record = self.store.get_paper_record("arxiv", "2603.30002v1")
+        fallback_record = self.store.get_paper_record("arxiv", "2603.30003v1")
+        self.assertEqual(
+            json.loads(html_record["score_json"])["extracted_keywords"],
+            ["entanglement", "state preparation"],
+        )
+        self.assertEqual(
+            json.loads(fallback_record["score_json"])["extracted_keywords"],
+            ["cache-only", "cache-extra"],
+        )
+        self.assertEqual(summary["report_keywords"]["state"], "supplemented")
+        self.assertEqual(summary["report_keywords"]["html_papers"], 1)
+        self.assertEqual(summary["report_keywords"]["fallback_papers"], 1)
+        self.assertEqual(summary["report_keywords"]["fallback_terms"], 2)
+
+        # Old normalized terms, aliases, and unrelated raw entries never
+        # enter the new SQLite database through the history importer.
+        with self.store._connect() as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+        self.assertNotIn("legacy_keyword_records", tables)
+        self.assertNotIn("normalized_keywords", tables)
+
+        # The current SQLite keyword tracker sees exactly the report-scoped
+        # terms and can normalize them through its normal workflow.
+        from keyword_tracker.database import KeywordDatabase
+
+        tracked_terms = KeywordDatabase(self.store.db_path).get_unique_unnormalized_keywords()
+        self.assertEqual(
+            set(tracked_terms),
+            {"entanglement", "state preparation", "cache-only", "cache-extra"},
+        )
 
     def test_v4_rows_are_never_downgraded_by_legacy_data(self):
         run_id = self.store.start_run(0)
