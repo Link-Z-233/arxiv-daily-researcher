@@ -3,14 +3,18 @@
 import sys
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from modes.history_omission_scan import run_history_omission_scan  # noqa: E402
+from modes.history_omission_scan import (  # noqa: E402
+    _scan_sqlite_history,
+    run_history_omission_scan,
+)
+from sources.base_source import PaperMetadata  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 
 
@@ -52,6 +56,118 @@ class HistoryOmissionScanTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def _record_delivered(self, source: str, paper_id: str) -> None:
+        paper = PaperMetadata(
+            paper_id=paper_id,
+            title=f"Delivered {paper_id}",
+            authors=["Alice"],
+            abstract="abstract",
+            published_date=datetime(2026, 3, 2, tzinfo=timezone.utc),
+            url=f"https://example.test/{paper_id}",
+            source=source,
+        )
+        run_id = self.store.start_run(0, run_kind="legacy_import")
+        self.store.import_legacy_paper(
+            {
+                "source": source,
+                "paper_id": paper.paper_id,
+                "canonical_id": paper.canonical_id,
+                "version": paper.version,
+                "paper_json": paper.to_dict(),
+                "score_status": "completed",
+                "tldr_status": "completed",
+                "translation_status": "not_required",
+                "analysis_status": "not_required",
+                "completed_at": paper.published_date.isoformat(),
+                "delivered_at": paper.published_date.isoformat(),
+                "delivery_run_id": run_id,
+                "report_path": "legacy.html",
+            },
+            delivered=True,
+        )
+
+    def test_sqlite_scan_covers_each_enabled_source(self):
+        self._record_delivered("arxiv", "2603.30001v1")
+        self._record_delivered("prl", "10.1103/known")
+
+        class _SearchAgent:
+            def __init__(self, **_kwargs):
+                self.closed = False
+
+            def get_enabled_sources(self):
+                return ["arxiv", "prl"]
+
+            def fetch_source_papers_between(self, source, _start, _end):
+                paper_id = "2603.39999v1" if source == "arxiv" else "10.1103/new"
+                return [
+                    PaperMetadata(
+                        paper_id=paper_id,
+                        title=f"New {paper_id}",
+                        authors=["Bob"],
+                        abstract="abstract",
+                        published_date=datetime(2026, 3, 2, tzinfo=timezone.utc),
+                        url=f"https://example.test/{paper_id}",
+                        source=source,
+                    )
+                ]
+
+            def close(self):
+                self.closed = True
+
+        agent = _SearchAgent()
+        with patch("sources.search_agent.SearchAgent", return_value=agent):
+            summary = _scan_sqlite_history(
+                self.store,
+                progress_callback=lambda **_kwargs: None,
+            )
+
+        self.assertTrue(agent.closed)
+        self.assertEqual(set(summary["sources"]), {"arxiv", "prl"})
+        self.assertEqual(summary["missed_found"], 2)
+        self.assertEqual(summary["backlog_queued"], 2)
+        self.assertEqual(summary["failed_chunks"], 0)
+
+    def test_one_source_failure_does_not_hide_other_source_results(self):
+        self._record_delivered("arxiv", "2603.30001v1")
+        self._record_delivered("prl", "10.1103/known")
+
+        class _SearchAgent:
+            def __init__(self, **_kwargs):
+                pass
+
+            def get_enabled_sources(self):
+                return ["arxiv", "prl"]
+
+            def fetch_source_papers_between(self, source, _start, _end):
+                if source == "prl":
+                    raise RuntimeError("OpenAlex unavailable")
+                return [
+                    PaperMetadata(
+                        paper_id="2603.39999v1",
+                        title="New arXiv",
+                        authors=["Bob"],
+                        abstract="abstract",
+                        published_date=datetime(2026, 3, 2, tzinfo=timezone.utc),
+                        url="https://arxiv.org/abs/2603.39999v1",
+                        source="arxiv",
+                    )
+                ]
+
+            def close(self):
+                pass
+
+        with patch("sources.search_agent.SearchAgent", _SearchAgent):
+            summary = _scan_sqlite_history(
+                self.store,
+                progress_callback=lambda **_kwargs: None,
+            )
+
+        self.assertEqual(summary["sources"]["arxiv"]["missed_found"], 1)
+        self.assertEqual(summary["sources"]["prl"]["failed_chunks"], 1)
+        self.assertEqual(summary["missed_found"], 1)
+        self.assertEqual(summary["failed_chunks"], 1)
+        self.assertTrue(any(error.startswith("prl:") for error in summary["errors"]))
 
     def test_groups_only_pending_missed_rows_by_iso_week(self):
         self.assertEqual(

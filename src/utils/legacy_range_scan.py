@@ -1,4 +1,4 @@
-"""SQLite 驱动的历史时间段扫描：寻找漏掉的 arXiv 论文。
+"""SQLite 驱动的历史时间段扫描：寻找各来源漏掉的论文。
 
 历史 HTML 只在首次导入时被解析并写入 SQLite。后续的覆盖范围、已知论文
 身份与遗漏积压全部以 SQLite 为准，避免报告目录发生移动、清理或格式变化
@@ -18,18 +18,24 @@ logger = logging.getLogger(__name__)
 SCAN_CHUNK_DAYS = 31
 
 
-def _known_arxiv_identities(store: Any) -> Set[Tuple[str, int]]:
-    """SQLite 中已知的 arXiv 身份（论文行、交付账本、补充积压）。"""
+def _known_source_identities(store: Any, source: str) -> Set[Tuple[str, int]]:
+    """SQLite 中已知的某一来源身份（论文行、交付账本、补充积压）。"""
     known: Set[Tuple[str, int]] = set()
     with store._connect() as conn:
         for table in ("daily_papers", "paper_deliveries", "supplement_backlog"):
             rows = conn.execute(
                 f"SELECT canonical_id, version FROM {table} "
-                "WHERE source = 'arxiv' AND canonical_id != ''"
+                "WHERE source = ? AND canonical_id != ''",
+                (source,),
             ).fetchall()
             for row in rows:
                 known.add((row["canonical_id"], int(row["version"] or 0)))
     return known
+
+
+def _known_arxiv_identities(store: Any) -> Set[Tuple[str, int]]:
+    """Backward-compatible arXiv identity helper."""
+    return _known_source_identities(store, "arxiv")
 
 
 def _month_chunks(start: date, end: date) -> List[Tuple[date, date]]:
@@ -42,22 +48,25 @@ def _month_chunks(start: date, end: date) -> List[Tuple[date, date]]:
     return chunks
 
 
-def scan_legacy_range(
+def scan_source_range(
     store: Any,
     *,
+    source: str = "arxiv",
     history_dir: Optional[Path] = None,
     fetch_between: Callable[[date, date], List[Any]],
     logger_override: Optional[Any] = None,
     idle_check: Optional[Callable[[], None]] = None,
     progress_callback: Optional[Callable[..., None]] = None,
 ) -> Dict[str, Any]:
-    """扫描 SQLite 已交付历史时间段，返回遗漏论文并写入补充积压。
+    """Scan one source's SQLite-covered date range and queue unknown papers.
 
-    ``fetch_between(date_from, date_to)`` 返回该闭区间内的论文元数据列表
-    （由调用方注入 ArxivSource.fetch_domain_papers_between，便于测试与
-    代理配置复用）。``idle_check`` 在每个月份分块前调用，供长扫描在
-    每日研究启动时暂停让路。
+    ``fetch_between(date_from, date_to)`` returns metadata for the inclusive
+    interval. The caller supplies the provider-specific implementation so the
+    same scanner works for arXiv, OpenAlex journals and dated feeds.
     """
+    normalized_source = str(source or "").strip().lower()
+    if not normalized_source:
+        raise ValueError("source must be non-empty")
     log = logger_override or logger
     summary: Dict[str, Any] = {
         "range_start": None,
@@ -88,9 +97,11 @@ def scan_legacy_range(
     # from v3.2/v4.0.  It must never become an input to the range again: the
     # durable delivery ledger and persisted paper metadata are authoritative.
     del history_dir
-    date_range = store.historical_delivery_date_range("arxiv")
+    date_range = store.historical_delivery_date_range(normalized_source)
     if date_range is None:
-        summary["skipped_reason"] = "SQLite 中没有已交付的 arXiv 历史，无法确定扫描时间段"
+        summary["skipped_reason"] = (
+            f"SQLite 中没有已交付的 {normalized_source} 历史，无法确定扫描时间段"
+        )
         log.info("[LegacyScan] %s", summary["skipped_reason"])
         emit(summary["skipped_reason"], 0, 0)
         return summary
@@ -98,10 +109,11 @@ def scan_legacy_range(
     summary["range_start"] = start.isoformat()
     summary["range_end"] = end.isoformat()
 
-    known = _known_arxiv_identities(store)
+    known = _known_source_identities(store, normalized_source)
     chunks = _month_chunks(start, end)
     log.info(
-        "[LegacyScan] 扫描 %s 至 %s（共 %s 个分块，SQLite 已知身份 %s 个）",
+        "[LegacyScan][%s] 扫描 %s 至 %s（共 %s 个分块，SQLite 已知身份 %s 个）",
+        normalized_source,
         start,
         end,
         len(chunks),
@@ -133,7 +145,8 @@ def scan_legacy_range(
             error = f"{chunk_start} 至 {chunk_end}: {exc}"
             summary["errors"].append(error)
             log.exception(
-                "[LegacyScan] 分块 %s/%s 失败（%s），继续后续分块",
+                "[LegacyScan][%s] 分块 %s/%s 失败（%s），继续后续分块",
+                normalized_source,
                 chunk_index,
                 len(chunks),
                 error,
@@ -148,6 +161,11 @@ def scan_legacy_range(
         summary["papers_scanned"] += len(papers)
         chunk_missed = 0
         for paper in papers:
+            paper_source = str(getattr(paper, "source", "") or "").strip().lower()
+            if paper_source != normalized_source:
+                raise ValueError(
+                    f"来源历史扫描返回错误来源：请求 {normalized_source}，得到 {paper_source or '空'}"
+                )
             canonical = (getattr(paper, "canonical_id", None) or paper.paper_id).strip()
             version = int(getattr(paper, "version", None) or 0)
             if (canonical, version) in known:
@@ -156,7 +174,7 @@ def scan_legacy_range(
             chunk_missed += 1
             missed.append(
                 {
-                    "source": "arxiv",
+                    "source": normalized_source,
                     "canonical_id": canonical,
                     "version": version,
                     "paper_id": paper.paper_id,
@@ -166,7 +184,8 @@ def scan_legacy_range(
                 }
             )
         log.info(
-            "[LegacyScan] 分块 %s/%s（%s~%s）: %s 篇，本块遗漏 %s 篇",
+            "[LegacyScan][%s] 分块 %s/%s（%s~%s）: %s 篇，本块遗漏 %s 篇",
+            normalized_source,
             chunk_index,
             len(chunks),
             chunk_start,
@@ -188,7 +207,8 @@ def scan_legacy_range(
             log.warning("[LegacyScan] 遗漏论文写入积压失败: %s", exc)
             summary["backlog_queued"] = 0
     log.info(
-        "[LegacyScan] 扫描完成: 成功分块 %s/%s，失败 %s；%s 篇论文中遗漏 %s 篇，新入积压 %s 篇",
+        "[LegacyScan][%s] 扫描完成: 成功分块 %s/%s，失败 %s；%s 篇论文中遗漏 %s 篇，新入积压 %s 篇",
+        normalized_source,
         summary["chunks_scanned"],
         len(chunks),
         summary["failed_chunks"],
@@ -207,3 +227,24 @@ def scan_legacy_range(
         len(chunks),
     )
     return summary
+
+
+def scan_legacy_range(
+    store: Any,
+    *,
+    history_dir: Optional[Path] = None,
+    fetch_between: Callable[[date, date], List[Any]],
+    logger_override: Optional[Any] = None,
+    idle_check: Optional[Callable[[], None]] = None,
+    progress_callback: Optional[Callable[..., None]] = None,
+) -> Dict[str, Any]:
+    """Compatibility wrapper for the former arXiv-only scanner."""
+    return scan_source_range(
+        store,
+        source="arxiv",
+        history_dir=history_dir,
+        fetch_between=fetch_between,
+        logger_override=logger_override,
+        idle_check=idle_check,
+        progress_callback=progress_callback,
+    )

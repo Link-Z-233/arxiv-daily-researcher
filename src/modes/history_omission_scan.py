@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, Optional
 from config import settings
 from notifications import NotifierAgent, WorkflowResult
 from utils.daily_research_store import DailyResearchStore
-from utils.legacy_range_scan import scan_legacy_range
+from utils.legacy_range_scan import scan_source_range
 from utils.token_counter import token_counter
 
 logger = logging.getLogger("HistoryOmissionScan")
@@ -107,26 +107,95 @@ def _scan_sqlite_history(
     *,
     progress_callback: Callable[..., None],
 ) -> Dict[str, Any]:
-    """Fetch the covered arXiv range and persist only unknown identities."""
-    from sources.arxiv_source import ArxivSource
+    """Scan every currently available report source without cross-source failure."""
+    from sources.search_agent import SearchAgent
 
-    source = ArxivSource(
+    agent = SearchAgent(
         history_dir=settings.HISTORY_DIR,
-        proxy_dict=settings.get_proxy_dict("arxiv"),
-        announcement_lookback_grace_days=int(
-            getattr(settings, "ARXIV_ANNOUNCEMENT_LOOKBACK_GRACE_DAYS", 2)
-        ),
-        load_legacy_history=False,
+        enabled_sources=settings.ENABLED_SOURCES,
+        arxiv_domains=settings.TARGET_DOMAINS,
+        journals=settings.TARGET_JOURNALS,
+        enable_openalex=getattr(settings, "ENABLE_OPENALEX", True),
+        openalex_api_key=settings.OPENALEX_API_KEY,
+        enable_semantic_scholar=settings.ENABLE_SEMANTIC_SCHOLAR_TLDR,
+        semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
+        extra_source_definitions=getattr(settings, "EXTRA_SOURCE_DEFINITIONS", []),
+        use_legacy_history_filter=False,
     )
-    domains = list(getattr(settings, "TARGET_DOMAINS", []) or [])
-    return scan_legacy_range(
-        store,
-        fetch_between=lambda start, end: source.fetch_domain_papers_between(
-            start, end, domains
-        ),
-        logger_override=logger,
-        progress_callback=progress_callback,
-    )
+    aggregate: Dict[str, Any] = {
+        "range_start": None,
+        "range_end": None,
+        "chunks_scanned": 0,
+        "papers_scanned": 0,
+        "missed_found": 0,
+        "backlog_queued": 0,
+        "failed_chunks": 0,
+        "errors": [],
+        "sources": {},
+        "skipped_reason": None,
+    }
+    try:
+        for source in agent.get_enabled_sources():
+            logger.info("[HistoryOmission][%s] 开始扫描 SQLite 历史范围", source)
+
+            def source_progress(*, phase, detail="", current=None, total=None, _source=source):
+                progress_callback(
+                    phase=phase,
+                    detail=f"[{_source}] {detail}",
+                    current=current,
+                    total=total,
+                )
+
+            try:
+                source_summary = scan_source_range(
+                    store,
+                    source=source,
+                    fetch_between=lambda start, end, _source=source: (
+                        agent.fetch_source_papers_between(_source, start, end)
+                    ),
+                    logger_override=logger,
+                    progress_callback=source_progress,
+                )
+            except Exception as exc:
+                logger.exception("[HistoryOmission][%s] 来源扫描失败，继续其他来源", source)
+                source_summary = {
+                    "range_start": None,
+                    "range_end": None,
+                    "chunks_scanned": 0,
+                    "papers_scanned": 0,
+                    "missed_found": 0,
+                    "backlog_queued": 0,
+                    "failed_chunks": 1,
+                    "errors": [str(exc)],
+                    "skipped_reason": str(exc),
+                }
+            aggregate["sources"][source] = source_summary
+            for field in (
+                "chunks_scanned",
+                "papers_scanned",
+                "missed_found",
+                "backlog_queued",
+                "failed_chunks",
+            ):
+                aggregate[field] += int(source_summary.get(field, 0) or 0)
+            for error in source_summary.get("errors", []) or []:
+                aggregate["errors"].append(f"{source}: {error}")
+            start = source_summary.get("range_start")
+            end = source_summary.get("range_end")
+            if start and (aggregate["range_start"] is None or start < aggregate["range_start"]):
+                aggregate["range_start"] = start
+            if end and (aggregate["range_end"] is None or end > aggregate["range_end"]):
+                aggregate["range_end"] = end
+    finally:
+        agent.close()
+
+    if aggregate["failed_chunks"]:
+        aggregate["skipped_reason"] = (
+            f"{aggregate['failed_chunks']} 个来源时间段扫描失败，后续运行会重试"
+        )
+    elif aggregate["range_start"] is None:
+        aggregate["skipped_reason"] = "SQLite 中没有当前启用来源的已交付历史"
+    return aggregate
 
 
 def run_history_omission_scan(
@@ -163,7 +232,7 @@ def run_history_omission_scan(
             token_counter.reset()
 
         progress(phase="history_omission_scan", detail="根据 SQLite 交付账本确定历史扫描范围")
-        logger.info("[HistoryOmission] 开始按 SQLite 历史范围扫描 arXiv 漏项")
+        logger.info("[HistoryOmission] 开始按 SQLite 历史范围扫描各启用来源漏项")
         try:
             scan = _scan_sqlite_history(store, progress_callback=progress)
         except Exception as exc:

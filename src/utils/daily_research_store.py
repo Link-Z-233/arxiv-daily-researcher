@@ -2060,21 +2060,25 @@ class DailyResearchStore:
 
     @staticmethod
     def _published_date_from_payload(payload: Dict[str, Any]) -> Optional[date]:
-        """Read a day from durable paper metadata, accepting old ISO forms."""
-        value = payload.get("published_date") if isinstance(payload, dict) else None
-        if not isinstance(value, str) or not value.strip():
+        """Read the source day, falling back to legacy publication metadata."""
+        if not isinstance(payload, dict):
             return None
-        text = value.strip()
-        try:
-            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
-        except ValueError:
+        for field in ("source_date", "published_date"):
+            value = payload.get(field)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            text = value.strip()
             try:
-                return date.fromisoformat(text[:10])
+                return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
             except ValueError:
-                return None
+                try:
+                    return date.fromisoformat(text[:10])
+                except ValueError:
+                    continue
+        return None
 
     def historical_delivery_date_range(self, source: str = "arxiv") -> Optional[Tuple[date, date]]:
-        """Return the published-date coverage of delivered SQLite history.
+        """Return the source-date coverage of delivered SQLite history.
 
         This is intentionally independent from v3.2 JSON files and report
         directories.  Once a report has been imported/generated, its SQLite

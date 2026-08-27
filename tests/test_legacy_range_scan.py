@@ -11,7 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sources.base_source import PaperMetadata  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
-from utils.legacy_range_scan import SCAN_CHUNK_DAYS, scan_legacy_range  # noqa: E402
+from utils.legacy_range_scan import (  # noqa: E402
+    SCAN_CHUNK_DAYS,
+    scan_legacy_range,
+    scan_source_range,
+)
 
 
 def _paper(pid: str, published: datetime | None = None) -> PaperMetadata:
@@ -26,6 +30,20 @@ def _paper(pid: str, published: datetime | None = None) -> PaperMetadata:
     )
 
 
+def _journal_paper(pid: str, published: datetime | None = None) -> PaperMetadata:
+    return PaperMetadata(
+        paper_id=pid,
+        title=f"Journal {pid}",
+        authors=["Bob"],
+        abstract="abs",
+        published_date=published or datetime(2026, 3, 1, tzinfo=timezone.utc),
+        url=f"https://doi.org/{pid}",
+        source="prl",
+        doi=pid,
+        journal="Physical Review Letters",
+    )
+
+
 class LegacyRangeScanTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -37,12 +55,20 @@ class LegacyRangeScanTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _record_delivered(self, pid: str, published: datetime) -> None:
-        paper = _paper(pid, published)
+    def _record_delivered(
+        self,
+        pid: str,
+        published: datetime,
+        *,
+        source: str = "arxiv",
+        source_date: date | None = None,
+    ) -> None:
+        paper = _paper(pid, published) if source == "arxiv" else _journal_paper(pid, published)
+        paper.source_date = source_date or paper.source_date
         run_id = self.store.start_run(0, run_kind="legacy_import")
         self.store.import_legacy_paper(
             {
-                "source": "arxiv",
+                "source": source,
                 "paper_id": paper.paper_id,
                 "canonical_id": paper.canonical_id,
                 "version": paper.version,
@@ -57,6 +83,40 @@ class LegacyRangeScanTests(unittest.TestCase):
                 "report_path": "legacy.html",
             },
             delivered=True,
+        )
+
+    def test_non_arxiv_source_scan_is_idempotent(self):
+        delivered = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        self._record_delivered("10.1103/known", delivered, source="prl")
+        fetched = [_journal_paper("10.1103/known", delivered), _journal_paper("10.1103/new", delivered)]
+
+        first = scan_source_range(
+            self.store,
+            source="prl",
+            fetch_between=lambda _start, _end: fetched,
+        )
+        second = scan_source_range(
+            self.store,
+            source="prl",
+            fetch_between=lambda _start, _end: fetched,
+        )
+
+        self.assertEqual(first["missed_found"], 1)
+        self.assertEqual(first["backlog_queued"], 1)
+        self.assertEqual(second["missed_found"], 0)
+        rows = self.store.claim_supplement_backlog(10, reasons={"missed_scan"})
+        self.assertEqual([(row["source"], row["paper_id"]) for row in rows], [("prl", "10.1103/new")])
+
+    def test_source_date_defines_historical_coverage(self):
+        self._record_delivered(
+            "10.1103/source-day",
+            datetime(2025, 12, 1, tzinfo=timezone.utc),
+            source="prl",
+            source_date=date(2026, 2, 3),
+        )
+        self.assertEqual(
+            self.store.historical_delivery_date_range("prl"),
+            (date(2026, 2, 3), date(2026, 2, 3)),
         )
 
     def test_missing_history_skips_scan(self):
