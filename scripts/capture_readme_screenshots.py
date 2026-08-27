@@ -10,6 +10,7 @@ release if a local configuration has customized any labels.
 from __future__ import annotations
 
 import re
+import os
 import sys
 import time
 from pathlib import Path
@@ -34,6 +35,35 @@ def wait_for_streamlit(page: Page, timeout_seconds: float = 30) -> None:
             pass
         time.sleep(0.25)
     page.wait_for_timeout(900)
+
+
+def authenticate(page: Page) -> None:
+    """Sign in when the privacy-safe capture target enables WebUI auth.
+
+    Credentials are deliberately read only from the process environment; the
+    script never prints them or puts them in a screenshot. A fresh deployment
+    must be initialized locally before automated documentation capture runs.
+    """
+    if page.get_by_text(re.compile("初始化管理员账户|Set Up the Administrator Account")).count():
+        raise RuntimeError(
+            "WebUI administrator account is not initialized. Complete local setup first."
+        )
+    if not page.get_by_text(re.compile("登录配置面板|Sign in to the configuration panel")).count():
+        return
+    username = os.environ.get("ADR_SCREENSHOT_USERNAME", "")
+    password = os.environ.get("ADR_SCREENSHOT_PASSWORD", "")
+    if not username or not password:
+        raise RuntimeError(
+            "WebUI authentication is enabled; set ADR_SCREENSHOT_USERNAME and "
+            "ADR_SCREENSHOT_PASSWORD for screenshot capture."
+        )
+    page.get_by_label(re.compile("^(用户名|Username)$")).fill(username)
+    page.get_by_label(re.compile("^(密码|Password)$")).fill(password)
+    page.get_by_role("button", name=re.compile("^(登录|Sign in)$")).click()
+    page.get_by_role("tab", name=re.compile("^(每日推送|Daily Push)$")).wait_for(
+        timeout=30_000
+    )
+    wait_for_streamlit(page)
 
 
 def show_tab(page: Page, label: str) -> None:
@@ -89,6 +119,7 @@ def main() -> int:
         page = browser.new_page(viewport=VIEWPORT, device_scale_factor=1)
         page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
         wait_for_streamlit(page, timeout_seconds=60)
+        authenticate(page)
 
         # Keeping the main content wide makes README images legible while
         # avoiding the sidebar's runtime controls and local-version text.

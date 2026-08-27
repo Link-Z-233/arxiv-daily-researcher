@@ -197,6 +197,8 @@ docker compose up -d --build
 
 Docker 会以 `.env` 中的 `PUID` / `PGID` 写入 `data`、`logs`、`configs` 和 `.env`，避免 NAS 挂载目录出现 root 所有文件。升级自旧镜像且已有 root 所有文件时，可临时加入 `ADR_REPAIR_OWNERSHIP=true` 启动一次，确认权限恢复后删除该项。
 
+WebUI 默认启用单管理员登录。首次仅在本机地址完成账户初始化，密码以加盐哈希写入 `.env`；登录会在默认 8 小时无操作后失效，并对连续错误尝试限流。面板仍建议置于 VPN 或带 HTTPS 与访问控制的反向代理之后。
+
 <details>
 <summary><b>手动配置</b></summary>
 

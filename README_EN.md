@@ -197,6 +197,8 @@ Open <http://127.0.0.1:8503> and configure LLMs, sources, keywords, scoring, not
 
 Docker writes `data`, `logs`, `configs`, and `.env` as the `PUID` / `PGID` in `.env`, preventing root-owned files on NAS bind mounts. When upgrading from an old root-running image, set `ADR_REPAIR_OWNERSHIP=true` for one start, verify ownership, then remove it.
 
+The WebUI enables single-administrator login by default. Initialize the account from the local address on first use; the password is written to `.env` only as a salted hash. Sessions expire after eight idle hours by default and repeated failed attempts are rate-limited. Keep the panel behind a VPN or an HTTPS reverse proxy with access control as well.
+
 <details>
 <summary><b>Manual configuration</b></summary>
 

@@ -33,6 +33,7 @@ from webui.styles import CUSTOM_CSS
 from webui.tabs import llm, search, keywords, scoring, notifications, advanced, reports
 from webui.tabs import favorites, run_manager, trend_runner, data_management
 from webui.tabs.analytics import render as render_analytics
+from webui.auth import require_authentication, render_account_controls
 from webui.i18n import t
 from webui.secret_fields import clear_secret_field_state
 
@@ -65,6 +66,14 @@ def load_env():
 def load_config():
     raw = read_config_json()
     return flatten_config_dict(raw) if raw else {}
+
+
+# Gate the panel before rendering navigation, reports, logs, or any writable
+# configuration control. The initial local setup screen appears only while no
+# administrator password hash has been configured.
+initial_env_values = load_env()
+if not require_authentication(initial_env_values):
+    st.stop()
 
 
 def do_save():
@@ -179,6 +188,8 @@ with st.sidebar:
     if st.button(lang_label, width="stretch", key="lang_btn"):
         st.session_state["lang"] = "en" if st.session_state["lang"] == "zh" else "zh"
         st.rerun()
+
+    render_account_controls(initial_env_values)
 
     version_file = _project_root / "VERSION"
     app_version = (
