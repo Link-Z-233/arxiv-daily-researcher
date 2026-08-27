@@ -27,6 +27,17 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 TRIGGER_SCHEMA_VERSION = 1
 TRIGGER_DIRECTORY_NAME = "webui_triggers"
 TRIGGER_STATUS_DIRECTORY_NAME = "status"
+# Trigger requests and status receipts are operational audit records rather
+# than a second long-term history database. Keep enough recent evidence for
+# the WebUI/task diagnosis while bounding the shared-volume metadata.
+TRIGGER_STATUS_RETENTION_DAYS = 30
+TRIGGER_STATUS_MAX_RECORDS = 200
+RESTART_REQUEST_DONE_RETENTION_DAYS = 30
+RESTART_REQUEST_DONE_MAX_RECORDS = 50
+_STATUS_RECORD_NAME_RE = re.compile(r"^(?:[0-9a-f]{32}|rejected_[0-9a-f]{32})\.json$")
+_RESTART_DONE_NAME_RE = re.compile(
+    r"^restart_worker\.request\.done-\d{8}T\d{6}(?:\d{1,9})?(?:-\d+)?$"
+)
 SUPPORTED_MODES = frozenset(
     {
         "daily_research",
@@ -65,6 +76,112 @@ def trigger_directory(data_dir: Path) -> Path:
 def trigger_status_directory(data_dir: Path) -> Path:
     """Return the small, durable status directory for consumed requests."""
     return trigger_directory(data_dir) / TRIGGER_STATUS_DIRECTORY_NAME
+
+
+def _validate_rotation_value(value: Any, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _rotate_owned_records(
+    directory: Path,
+    filename_pattern: re.Pattern[str],
+    *,
+    max_records: int,
+    retention_days: int,
+    protected_names: set[str] | None = None,
+) -> list[str]:
+    """Bound application-owned audit files without touching unrelated files.
+
+    ``max_records=0`` disables only the count cap. ``retention_days=0``
+    disables only age expiry. A just-written ``protected_names`` record is
+    retained even if a skewed filesystem timestamp would otherwise put it
+    outside the selected set.
+    """
+    max_records = _validate_rotation_value(max_records, name="max_records")
+    retention_days = _validate_rotation_value(
+        retention_days, name="retention_days"
+    )
+    if not directory.is_dir():
+        return []
+
+    protected = protected_names or set()
+    cutoff = time.time() - retention_days * 24 * 60 * 60 if retention_days else None
+    entries: list[tuple[float, str, Path]] = []
+    removed: list[str] = []
+    for path in directory.iterdir():
+        if not path.is_file() or not filename_pattern.fullmatch(path.name):
+            continue
+        try:
+            modified_at = path.stat().st_mtime
+        except OSError:
+            continue
+        if cutoff is not None and modified_at < cutoff and path.name not in protected:
+            try:
+                path.unlink()
+                removed.append(path.name)
+            except OSError:
+                pass
+            continue
+        entries.append((modified_at, path.name, path))
+
+    if max_records:
+        protected_count = sum(name in protected for _mtime, name, _path in entries)
+        remaining_slots = max(0, max_records - protected_count)
+        retained_non_protected = 0
+        for _modified_at, name, path in sorted(entries, reverse=True):
+            if name in protected:
+                continue
+            if retained_non_protected < remaining_slots:
+                retained_non_protected += 1
+                continue
+            try:
+                path.unlink()
+                removed.append(name)
+            except OSError:
+                pass
+    return sorted(removed)
+
+
+def rotate_trigger_statuses(
+    data_dir: Path,
+    *,
+    max_records: int = TRIGGER_STATUS_MAX_RECORDS,
+    retention_days: int = TRIGGER_STATUS_RETENTION_DAYS,
+    protected_names: set[str] | None = None,
+) -> list[str]:
+    """Rotate finished WebUI trigger status receipts by age and count."""
+    return _rotate_owned_records(
+        trigger_status_directory(Path(data_dir)),
+        _STATUS_RECORD_NAME_RE,
+        max_records=max_records,
+        retention_days=retention_days,
+        protected_names=protected_names,
+    )
+
+
+def rotate_restart_request_markers(
+    data_dir: Path,
+    *,
+    max_records: int = RESTART_REQUEST_DONE_MAX_RECORDS,
+    retention_days: int = RESTART_REQUEST_DONE_RETENTION_DAYS,
+) -> list[str]:
+    """Rotate archived worker-restart markers in the shared trigger queue."""
+    return _rotate_owned_records(
+        trigger_directory(Path(data_dir)),
+        _RESTART_DONE_NAME_RE,
+        max_records=max_records,
+        retention_days=retention_days,
+    )
+
+
+def run_trigger_maintenance(data_dir: Path) -> Dict[str, list[str]]:
+    """Run all bounded trigger-file maintenance actions for an app data dir."""
+    return {
+        "status_removed": rotate_trigger_statuses(data_dir),
+        "restart_markers_removed": rotate_restart_request_markers(data_dir),
+    }
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -360,6 +477,9 @@ def _write_status(data_dir: Path, payload: Mapping[str, Any], state: str, **deta
     }
     status_path = trigger_status_directory(data_dir) / f"{payload['request_id']}.json"
     _atomic_write_json(status_path, status_payload)
+    # Rotation follows the atomic replacement so the current receipt is never
+    # lost even if filesystem timestamps on older records are skewed.
+    rotate_trigger_statuses(data_dir, protected_names={status_path.name})
     return status_path
 
 
@@ -525,6 +645,7 @@ def execute_trigger_request(
                     "error": str(exc)[:4000],
                 },
             )
+            rotate_trigger_statuses(data_dir, protected_names={error_path.name})
         print(f"[webui-trigger] Request failed: {exc}", file=sys.stderr)
         return 1
     finally:
@@ -534,13 +655,38 @@ def execute_trigger_request(
 
 def _parse_cli(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Execute one validated WebUI trigger request")
-    parser.add_argument("request_path", type=Path, help="Claimed .running request file")
+    parser.add_argument(
+        "request_path",
+        type=Path,
+        nargs="?",
+        help="Claimed .running request file",
+    )
     parser.add_argument("--pid-file", type=Path, default=None, help="Shared current worker PID file")
+    parser.add_argument(
+        "--maintain-trigger-files",
+        action="store_true",
+        help="Rotate bounded trigger status and restart-marker audit files",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Application data directory used with --maintain-trigger-files",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parse_cli(argv)
+    if args.maintain_trigger_files:
+        if args.request_path is not None or args.data_dir is None:
+            raise SystemExit(
+                "--maintain-trigger-files requires --data-dir and no request path"
+            )
+        run_trigger_maintenance(args.data_dir)
+        return 0
+    if args.request_path is None:
+        raise SystemExit("request_path is required unless --maintain-trigger-files is used")
     return execute_trigger_request(args.request_path, pid_file=args.pid_file)
 
 

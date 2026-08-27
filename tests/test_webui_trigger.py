@@ -16,6 +16,8 @@ from utils.webui_trigger import (  # noqa: E402
     enqueue_trigger,
     execute_trigger_request,
     read_trigger_payload,
+    rotate_restart_request_markers,
+    rotate_trigger_statuses,
     trigger_status_directory,
     validate_trigger_payload,
 )
@@ -161,6 +163,64 @@ class WebUITriggerTests(unittest.TestCase):
             statuses = list(trigger_status_directory(data_dir).glob("*.json"))
             self.assertEqual(len(statuses), 2)
             self.assertIn("rejected", {json.loads(path.read_text())["state"] for path in statuses})
+
+    def test_trigger_status_and_restart_audits_are_rotated_by_count_and_age(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            status_dir = trigger_status_directory(data_dir)
+            status_dir.mkdir(parents=True)
+            status_names = [f"{index:032x}.json" for index in range(1, 4)]
+            for index, name in enumerate(status_names, start=1):
+                path = status_dir / name
+                path.write_text('{"state":"succeeded"}\n', encoding="utf-8")
+                os.utime(path, (index, index))
+
+            removed = rotate_trigger_statuses(
+                data_dir, max_records=2, retention_days=0
+            )
+            self.assertEqual(removed, [status_names[0]])
+            self.assertEqual(
+                {path.name for path in status_dir.glob("*.json")},
+                set(status_names[1:]),
+            )
+
+            restart_names = [
+                f"restart_worker.request.done-20260101T00000{index}"
+                for index in range(1, 4)
+            ]
+            queue_dir = data_dir / "run" / "webui_triggers"
+            for index, name in enumerate(restart_names, start=1):
+                path = queue_dir / name
+                path.write_text("requested\n", encoding="utf-8")
+                os.utime(path, (index, index))
+
+            removed = rotate_restart_request_markers(
+                data_dir, max_records=2, retention_days=0
+            )
+            self.assertEqual(removed, [restart_names[0]])
+            self.assertEqual(
+                {
+                    path.name
+                    for path in queue_dir.glob("restart_worker.request.done-*")
+                },
+                set(restart_names[1:]),
+            )
+
+            # Filename timestamps are audit labels; expiry intentionally uses
+            # filesystem age so manually restored records remain meaningful.
+            for name in restart_names[1:]:
+                os.utime(queue_dir / name, None)
+
+            expired = queue_dir / "restart_worker.request.done-20200101T000000"
+            expired.write_text("old\n", encoding="utf-8")
+            old_timestamp = 1
+            os.utime(expired, (old_timestamp, old_timestamp))
+            self.assertEqual(
+                rotate_restart_request_markers(
+                    data_dir, max_records=0, retention_days=1
+                ),
+                [expired.name],
+            )
 
     def test_pid_file_is_removed_after_worker_exits(self):
         with tempfile.TemporaryDirectory() as temp_dir:

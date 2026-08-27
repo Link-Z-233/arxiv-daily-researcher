@@ -180,6 +180,12 @@ PID_FILE="/app/data/run/webui_triggered.pid"
 adr_run_as_user mkdir -p "$TRIGGER_DIR/status"
 WATCHER_HEARTBEAT="$TRIGGER_DIR/.watcher-heartbeat"
 adr_run_as_user touch "$WATCHER_HEARTBEAT"
+# Status receipts and archived restart markers are bounded operational audit
+# data. Run a startup pass so stale files are cleaned even when no new WebUI
+# request is submitted for a while.
+python /app/src/utils/webui_trigger.py \
+    --maintain-trigger-files --data-dir /app/data \
+    || echo "[trigger-watcher] Trigger-file maintenance failed; will retry on the next startup/request"
 
 # A container restart kills the child process with it.  Return an atomically
 # claimed request to the queue so a SIGKILL/redeploy cannot silently lose a
@@ -196,17 +202,30 @@ trigger_watcher() {
     echo "[trigger-watcher] Started. Polling $TRIGGER_DIR every 5s..."
     # The WebUI restart button drops this marker into the shared volume; a
     # worker restart re-runs this entrypoint, reinstalling cron from config.
-    # The marker is archived (never deleted) so restarts stay auditable.
+    # The marker is archived before restarting so the request remains
+    # auditable. A bounded maintenance pass prevents repeated restarts from
+    # growing the shared volume forever.
     RESTART_MARKER="$TRIGGER_DIR/restart_worker.request"
     while true; do
         adr_run_as_user touch "$WATCHER_HEARTBEAT"
         if [ -e "$RESTART_MARKER" ]; then
-            mv "$RESTART_MARKER" \
-               "$RESTART_MARKER.done-$(date +%Y%m%dT%H%M%S)" 2>/dev/null || true
-            echo "[trigger-watcher] WebUI restart request: restarting container..."
-            # PID 1 在独立 PID namespace 内默认丢弃一切信号（含 KILL）；
-            # 只有注册了 handler 的信号才会送达，见文件末尾的 trap。
-            kill -TERM 1
+            RESTART_ARCHIVE="$RESTART_MARKER.done-$(date +%Y%m%dT%H%M%S%N)"
+            RESTART_ARCHIVE_SUFFIX=2
+            while [ -e "$RESTART_ARCHIVE" ]; do
+                RESTART_ARCHIVE="$RESTART_MARKER.done-$(date +%Y%m%dT%H%M%S%N)-$RESTART_ARCHIVE_SUFFIX"
+                RESTART_ARCHIVE_SUFFIX=$((RESTART_ARCHIVE_SUFFIX + 1))
+            done
+            if mv "$RESTART_MARKER" "$RESTART_ARCHIVE" 2>/dev/null; then
+                python /app/src/utils/webui_trigger.py \
+                    --maintain-trigger-files --data-dir /app/data \
+                    || echo "[trigger-watcher] Trigger-file maintenance failed after restart request"
+                echo "[trigger-watcher] WebUI restart request: restarting container..."
+                # PID 1 在独立 PID namespace 内默认丢弃一切信号（含 KILL）；
+                # 只有注册了 handler 的信号才会送达，见文件末尾的 trap。
+                kill -TERM 1
+            else
+                echo "[trigger-watcher] Failed to archive WebUI restart request; leaving it queued"
+            fi
         fi
         REQUEST_FILE=$(find "$TRIGGER_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | head -n 1)
         if [ -n "$REQUEST_FILE" ]; then
