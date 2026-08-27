@@ -720,8 +720,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Only ranks already qualified papers; it never affects recommendation eligibility.",
     },
     "core_relevance_no_primary_warning": {
-        "zh": "尚未配置主要关键词。运行时会以全部关键词临时降级为核心集合；请在“关键词”页添加主要关键词，以获得稳定资格判定。",
-        "en": "No primary keywords are configured. Runtime will temporarily fall back to all keywords as the core set; add primary keywords on the Keywords tab for stable qualification.",
+        "zh": "尚未配置主要关键词，且参考文献关键词提取未启用。运行无法开始；请添加主要关键词，或启用参考文献关键词提取并提供参考 PDF。",
+        "en": "No primary keywords are configured and reference keyword extraction is off. The run cannot start; add primary keywords, or enable extraction and provide reference PDFs.",
+    },
+    "core_relevance_reference_only_info": {
+        "zh": "尚未配置主要关键词。此次运行会先从参考文献 PDF 提取可用关键词；提取到的关键词将临时作为核心集合。若没有可用 PDF 或提取结果为空，运行会给出明确提示。",
+        "en": "No primary keywords are configured. This run will first extract usable terms from reference PDFs and use them as a temporary core set. It will clearly report if no readable PDF or usable term is available.",
     },
     "legacy_strategy_warning": {
         "zh": "兼容模式：作者加分和参考关键词仍会影响是否通过。只建议用于与既有历史结果对比或暂时回退。",

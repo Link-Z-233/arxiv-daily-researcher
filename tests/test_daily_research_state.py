@@ -11,7 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agents.analysis_agent import WeightedScoreResponse  # noqa: E402
 from config import settings  # noqa: E402
-from modes.daily_research import DailyResearchPipeline, _score_or_hydrate_paper  # noqa: E402
+from modes.daily_research import (  # noqa: E402
+    DailyResearchPipeline,
+    _keyword_configuration_error,
+    _score_or_hydrate_paper,
+)
 from sources.base_source import PaperMetadata  # noqa: E402
 from utils.daily_research_errors import PaperStageError  # noqa: E402
 from utils.daily_research_fingerprints import build_stage_input_fingerprints  # noqa: E402
@@ -67,6 +71,18 @@ class _Agent:
 
 
 class DailyResearchStateTests(unittest.TestCase):
+    def test_reference_extraction_can_be_the_only_keyword_source(self):
+        self.assertIsNone(_keyword_configuration_error(None, [], True))
+        self.assertIsNone(
+            _keyword_configuration_error({"reference term": 0.8}, [], True)
+        )
+        self.assertIn(
+            "未产出关键词", _keyword_configuration_error({}, [], True) or ""
+        )
+        self.assertIn(
+            "未启用", _keyword_configuration_error(None, [], False) or ""
+        )
+
     def _run_score_or_hydrate(self, store, run_id, paper, agent, keywords):
         return _score_or_hydrate_paper(
             run_id,

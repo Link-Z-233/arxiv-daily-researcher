@@ -55,6 +55,21 @@ class DataSourceCollectTests(unittest.TestCase):
         self.assertTrue(updates["extra_sources_enabled"])
         self.assertEqual(updates["extra_source_definitions"], [])
 
+    def test_empty_extra_selection_is_saved_as_disabled(self):
+        session = _FakeSessionState(
+            {
+                "source_arxiv": True,
+                "extra_builtin_selected": [],
+                "extra_sources_enabled": True,
+            }
+        )
+
+        with patch.object(search.st, "session_state", session):
+            updates = search.collect({}, self._flat_config())
+
+        self.assertEqual(updates["enabled_sources"], ["arxiv"])
+        self.assertFalse(updates["extra_sources_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

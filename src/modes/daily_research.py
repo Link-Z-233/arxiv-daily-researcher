@@ -66,6 +66,40 @@ from utils.webdav_sync import (
 logger = setup_logger("DailyResearch")
 
 
+def _keyword_configuration_error(
+    all_keywords: Optional[Dict[str, float]],
+    primary_keywords: object,
+    reference_extraction_enabled: bool,
+) -> Optional[str]:
+    """Return a user-actionable keyword setup error, if one is known.
+
+    ``all_keywords`` is ``None`` for the cheap preflight check.  Reference
+    extraction is allowed to be the only keyword source, so a missing primary
+    list is only an immediate configuration error when extraction is disabled.
+    After extraction has run, an empty result gets a distinct message that
+    points to the actual missing input instead of incorrectly demanding a
+    manually configured primary keyword.
+    """
+    normalized_primary = [
+        str(keyword).strip()
+        for keyword in (primary_keywords or [])
+        if str(keyword).strip()
+    ]
+    if normalized_primary:
+        return None
+    if not reference_extraction_enabled:
+        return (
+            "未配置可用关键词：主要关键词为空，且参考文献关键词提取未启用。"
+            "请添加主要关键词，或启用提取并提供参考 PDF。"
+        )
+    if all_keywords is not None and not all_keywords:
+        return (
+            "未获得可用关键词：主要关键词为空，且参考文献关键词提取未产出关键词。"
+            "请添加可读取的参考 PDF，或配置主要关键词后重试。"
+        )
+    return None
+
+
 def _validate_report_paths(
     report_paths: Dict[str, Path], scored_papers_by_source: Dict[str, List[Dict[str, Any]]]
 ) -> None:
@@ -1030,18 +1064,44 @@ class DailyResearchPipeline:
             # ==================== 阶段2: 关键词准备 ====================
             logger.info(">>> 阶段2: 准备关键词...")
 
+            primary_keywords = getattr(settings, "PRIMARY_KEYWORDS", [])
+            reference_extraction_enabled = bool(
+                getattr(settings, "ENABLE_REFERENCE_EXTRACTION", False)
+            )
+            keyword_error = _keyword_configuration_error(
+                None, primary_keywords, reference_extraction_enabled
+            )
+            if keyword_error:
+                logger.error("错误: %s", keyword_error)
+                fail_result = RunResult(
+                    run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    success=False,
+                    error_message=keyword_error,
+                )
+                if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
+                    try:
+                        NotifierAgent().notify(fail_result)
+                    except Exception:
+                        pass
+                if store and run_id:
+                    store.fail_run(run_id, fail_result.error_message)
+                return fail_result
+
             keyword_agent = KeywordAgent()
             attach_health_recorder = getattr(keyword_agent, "set_health_recorder", None)
             if callable(attach_health_recorder):
                 attach_health_recorder(llm_health_recorder)
             all_keywords = keyword_agent.get_all_keywords()
 
-            if not all_keywords:
-                logger.error("错误: 未找到任何关键词。请在 configs/config.json 中配置主要关键词。")
+            keyword_error = _keyword_configuration_error(
+                all_keywords, primary_keywords, reference_extraction_enabled
+            )
+            if keyword_error:
+                logger.error("错误: %s", keyword_error)
                 fail_result = RunResult(
                     run_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     success=False,
-                    error_message="未找到任何关键词，请在 configs/config.json 中配置主要关键词",
+                    error_message=keyword_error,
                 )
                 if settings.ENABLE_NOTIFICATIONS and run_kind == "daily":
                     try:

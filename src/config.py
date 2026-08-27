@@ -472,17 +472,32 @@ class Settings(BaseSettings):
                         extra_sources = {}
                     if not isinstance(extra_sources, dict):
                         raise ValueError("data_sources.extra_sources 必须是对象")
-                    self.EXTRA_SOURCES_ENABLED = extra_sources.get("enabled", False)
-                    if not isinstance(self.EXTRA_SOURCES_ENABLED, bool):
+                    requested_extra_sources_enabled = extra_sources.get("enabled", False)
+                    if not isinstance(requested_extra_sources_enabled, bool):
                         raise ValueError("data_sources.extra_sources.enabled 必须是布尔值")
                     self.EXTRA_SOURCE_DEFINITIONS = validate_source_definitions(
                         extra_sources.get("definitions", [])
                     )
+                    # ``prl`` is retained as a core registry code for
+                    # backwards compatibility, but the v4 WebUI presents it
+                    # inside the extra-source group.  A checked switch with
+                    # neither PRL nor a declarative definition is therefore
+                    # a no-op and must behave exactly like an unchecked one.
+                    # This prevents a misleading "enabled" state from being
+                    # carried into workers, backfills, or omission scans.
+                    has_selected_extra_source = bool(
+                        self.EXTRA_SOURCE_DEFINITIONS
+                    ) or "prl" in normalized_configured
+                    self.EXTRA_SOURCES_ENABLED = bool(
+                        requested_extra_sources_enabled and has_selected_extra_source
+                    )
                     core_sources = [
                         source
                         for source in normalized_configured
-                        if source in CORE_SOURCE_CODES
+                        if source == "arxiv"
                     ]
+                    if self.EXTRA_SOURCES_ENABLED and "prl" in normalized_configured:
+                        core_sources.append("prl")
                 else:
                     # One-time in-memory compatibility for pre-v4 source
                     # lists. Saving through the wizard/WebUI writes the new
@@ -502,7 +517,9 @@ class Settings(BaseSettings):
                     self.EXTRA_SOURCE_DEFINITIONS = definitions_for_builtin_codes(
                         legacy_extra_codes
                     )
-                    self.EXTRA_SOURCES_ENABLED = bool(self.EXTRA_SOURCE_DEFINITIONS)
+                    self.EXTRA_SOURCES_ENABLED = bool(
+                        self.EXTRA_SOURCE_DEFINITIONS or "prl" in core_sources
+                    )
 
                 self.ENABLED_SOURCES = list(core_sources)
                 if self.EXTRA_SOURCES_ENABLED:

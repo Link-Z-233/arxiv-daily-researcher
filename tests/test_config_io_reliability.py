@@ -480,6 +480,47 @@ class ConfigIOReliabilityTests(unittest.TestCase):
             config["data_sources"]["extra_sources"]["definitions"], definitions
         )
 
+    def test_empty_enabled_extra_group_is_normalized_to_off(self):
+        config = build_config_dict(
+            enabled_sources=["arxiv"],
+            extra_sources_enabled=True,
+            extra_source_definitions=[],
+        )
+
+        self.assertFalse(config["data_sources"]["extra_sources"]["enabled"])
+        self.assertEqual(config["data_sources"]["enabled"], ["arxiv"])
+        self.assertFalse(flatten_config_dict(config)["extra_sources_enabled"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            runtime = Settings()
+            runtime.load_from_search_config(path)
+
+        self.assertFalse(runtime.EXTRA_SOURCES_ENABLED)
+        self.assertEqual(runtime.ENABLED_SOURCES, ["arxiv"])
+
+    def test_explicit_extra_switch_also_controls_prl(self):
+        document = {
+            "data_sources": {
+                "enabled": ["arxiv", "prl"],
+                "extra_sources": {"enabled": False, "definitions": []},
+            }
+        }
+
+        flat = flatten_config_dict(document)
+        self.assertFalse(flat["extra_sources_enabled"])
+        self.assertEqual(flat["enabled_sources"], ["arxiv"])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            runtime = Settings()
+            runtime.load_from_search_config(path)
+
+        self.assertFalse(runtime.EXTRA_SOURCES_ENABLED)
+        self.assertEqual(runtime.ENABLED_SOURCES, ["arxiv"])
+
     def test_explicit_extra_source_switch_cannot_be_bypassed_by_stale_codes(self):
         definitions = [
             {

@@ -93,7 +93,10 @@ def render(_env_values: dict, config_values: dict):
                 help=t("reference_ranking_weight_help"),
             )
         if not flat.get("primary_keywords", []):
-            st.warning(t("core_relevance_no_primary_warning"))
+            if flat.get("enable_reference_extraction", False):
+                st.info(t("core_relevance_reference_only_info"))
+            else:
+                st.warning(t("core_relevance_no_primary_warning"))
     elif strategy == "learned_preference_v1":
         col_d1, col_d2 = st.columns(2)
         with col_d1:

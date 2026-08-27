@@ -799,6 +799,24 @@ def build_config_dict(
         # explicit False always wins, even if stale source codes remain in the
         # incoming enabled list.
         extra_sources_enabled = True
+    if not definitions_were_explicit and "prl" in normalized_enabled:
+        # PRL was a selectable top-level source before the v4 extra-source
+        # switch existed.  Retain that old API contract exactly once; WebUI
+        # saves always supply an explicit definitions list, so their explicit
+        # False still wins.
+        extra_sources_enabled = True
+
+    # A checked extra-source switch without a selected source has no runtime
+    # effect. Persist it as false so the configuration, worker status and
+    # future WebUI reload all agree. PRL is special only because it remains a
+    # reserved core code for compatibility while being shown under the extra
+    # source group in the UI.
+    has_selected_extra_source = bool(normalized_definitions) or "prl" in normalized_enabled
+    extra_sources_enabled = bool(extra_sources_enabled and has_selected_extra_source)
+    if not extra_sources_enabled:
+        normalized_enabled = [
+            source for source in normalized_enabled if source != "prl"
+        ]
     if extra_sources_enabled:
         # The enabled list is intentionally a complete, portable source scope:
         # a worker launched without the WebUI can reproduce exactly which
@@ -1084,16 +1102,29 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
                 definition_codes.add(source_code)
     if legacy_codes and not has_extra_sources:
         definitions.extend(definitions_for_builtin_codes(legacy_codes))
-    flat["extra_sources_enabled"] = (
+    configured_prl = any(
+        isinstance(source, str) and source.strip().lower() == "prl"
+        for source in [*raw_enabled, *raw_journals]
+    )
+    requested_extra_sources = (
         bool(extra_sources.get("enabled", False))
         if has_extra_sources
-        else bool(legacy_codes)
+        else bool(legacy_codes or configured_prl)
+    )
+    flat["extra_sources_enabled"] = bool(
+        requested_extra_sources and (bool(definitions) or configured_prl)
     )
     core_enabled = []
     for source in [*raw_enabled, *raw_journals]:
         if isinstance(source, str):
             source_code = source.strip().lower()
-            if source_code in CORE_SOURCE_CODES and source_code not in core_enabled:
+            if source_code == "arxiv" and source_code not in core_enabled:
+                core_enabled.append(source_code)
+            elif (
+                source_code == "prl"
+                and flat["extra_sources_enabled"]
+                and source_code not in core_enabled
+            ):
                 core_enabled.append(source_code)
     flat["enabled_sources"] = core_enabled
     if flat["extra_sources_enabled"]:

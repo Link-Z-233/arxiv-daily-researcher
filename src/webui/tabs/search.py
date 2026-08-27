@@ -110,12 +110,13 @@ def render(_env_values: dict, config_values: dict):
         extra_cfg = []
     extra_cfg = [d for d in extra_cfg if isinstance(d, dict)]
 
-    # PRL predates declarative source definitions. Treat an existing enabled
-    # PRL source as an enabled extra-source group so it remains visible and
-    # cannot be accidentally disabled merely by opening this redesigned page.
+    # PRL predates declarative source definitions, but flatten_config_dict()
+    # now exposes it as active only when the v4 extra-source group is active.
+    # Do not OR it back in here, otherwise a stale PRL entry could silently
+    # bypass the master switch on the next save.
     extra_enabled = st.toggle(
         t("extra_sources_enabled"),
-        value=bool(flat.get("extra_sources_enabled", False) or "prl" in current_sources),
+        value=bool(flat.get("extra_sources_enabled", False)),
         key="extra_sources_enabled",
         help=t("extra_sources_help"),
     )
@@ -304,7 +305,7 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
     arxiv_enabled = bool(
         st.session_state.get("source_arxiv", "arxiv" in configured_sources)
     )
-    extra_enabled = bool(current("extra_sources_enabled", False))
+    extra_requested = bool(current("extra_sources_enabled", False))
     enabled = []
     if arxiv_enabled:
         enabled.append("arxiv")
@@ -340,11 +341,6 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
             if code in builtin_templates
         ]
 
-    # Turning the extra-source group off stops PRL alongside declarative
-    # sources.  PRL itself remains an enabled_sources entry for compatibility.
-    if extra_enabled and "prl" in selected_builtins:
-        enabled.append("prl")
-
     if "extra_custom_definitions" not in st.session_state:
         custom_definitions = [
             d
@@ -365,6 +361,13 @@ def collect(_env_values: dict, _config_values: dict) -> dict:
         )
     except ValueError as exc:
         raise ValueError(f"{t('extra_sources_invalid')}: {exc}") from exc
+
+    # A checked switch with no actual selection is a no-op. Saving it as off
+    # makes the UI state truthful and prevents empty source groups from being
+    # reported as active in workers and diagnostics.
+    extra_enabled = bool(extra_requested and (selected_builtins or extra_definitions))
+    if extra_enabled and "prl" in selected_builtins:
+        enabled.append("prl")
 
     return {
         "enabled_sources": enabled,
