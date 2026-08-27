@@ -276,8 +276,8 @@ class HuggingFacePapersSource(BasePaperSource):
         arxiv_url = f"https://arxiv.org/abs/{arxiv_id}"
         return PaperMetadata(
             # Keep this source's delivery identity independent from arXiv.
-            # Cross-source mirror suppression uses ``arxiv_id`` explicitly,
-            # so it never makes an arXiv v2/v3 look already delivered.
+            # SQLite can later link this record to arXiv by ``arxiv_id`` while
+            # preserving Hugging Face's own report, retry and delivery state.
             paper_id=f"hf:{arxiv_id}",
             title=raw_title.strip(),
             authors=self._parse_authors(paper.get("authors"), feed_date, item_index),

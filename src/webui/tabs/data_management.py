@@ -459,6 +459,17 @@ def _render_legacy_import_section(config_values: dict) -> None:
                     backlog=summary.get("backlog_queued", 0),
                 )
             )
+            source_breakdown = summary.get("source_breakdown")
+            if isinstance(source_breakdown, dict) and source_breakdown:
+                source_text = " · ".join(
+                    f"{source}: {count}"
+                    for source, count in sorted(source_breakdown.items())
+                    if isinstance(source, str)
+                )
+                if source_text:
+                    st.caption(
+                        t("dm_legacy_source_breakdown").format(sources=source_text)
+                    )
             repair = summary.get("history_repair")
             if isinstance(repair, dict):
                 st.caption(

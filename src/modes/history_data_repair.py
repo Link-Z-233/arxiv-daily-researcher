@@ -85,7 +85,6 @@ def _current_repairs_needed(record: Any, paper: PaperMetadata) -> set[str]:
         needs.add("translation")
     if (
         settings.DAILY_ENABLE_DEEP_ANALYSIS
-        and paper.source == "arxiv"
         and bool(score.get("is_qualified", False))
         and paper.has_pdf_access()
         and (

@@ -639,7 +639,9 @@ def _parse_card(chunk: str, source: str, stamp: datetime, path: Path) -> Optiona
 
 def _paper_json_from_card(card: Dict[str, Any]) -> Dict[str, Any]:
     paper_id = card["paper_id"]
-    pdf_url = _arxiv_pdf_url(paper_id) if card["source"] == "arxiv" else None
+    is_arxiv_identity = card.get("identity_kind") == "arxiv"
+    is_doi_identity = card.get("identity_kind") == "doi"
+    pdf_url = _arxiv_pdf_url(paper_id) if is_arxiv_identity else None
     published = card["published"] or card["report_at"]
     return {
         "paper_id": paper_id,
@@ -650,11 +652,12 @@ def _paper_json_from_card(card: Dict[str, Any]) -> Dict[str, Any]:
         "url": card["url"],
         "source": card["source"],
         "pdf_url": pdf_url,
-        "doi": None,
+        "doi": card["canonical_id"] if is_doi_identity else None,
         "journal": None,
         "categories": [],
         "semantic_scholar_tldr": card["ss_tldr"] or None,
-        "arxiv_id": paper_id if card["source"] == "arxiv" else None,
+        "arxiv_id": paper_id if is_arxiv_identity else None,
+        "arxiv_url": card["url"] if is_arxiv_identity else None,
         "canonical_id": card["canonical_id"],
         "version": card["version"] or None,
     }
@@ -937,13 +940,14 @@ def import_legacy_history(
 ) -> Dict[str, Any]:
     """Write legacy HTML cards to SQLite and optionally queue full repair.
 
-    The default path is deliberately lightweight: only arXiv papers already
-    present in v3.2 HTML reports are indexed and entered in the exact-version
-    delivery ledger.  That alone prevents future daily runs from treating
-    those papers as new. Enabling ``full_repair`` additionally reads legacy
-    JSON and uses old raw keywords only to fill an absent HTML keyword section
-    for the same report card; later repair and omission tasks operate from
-    SQLite, not by re-scanning HTML.
+    The default path is deliberately lightweight: every v3.2 HTML card with
+    a reliable arXiv or DOI identity is indexed and entered in its own
+    source-level delivery ledger.  That prevents future scans of *any*
+    enabled source from treating already reported work as new. Enabling
+    ``full_repair`` additionally reads legacy JSON and uses old raw keywords
+    only to fill an absent HTML keyword section for the same report card;
+    later repair and omission tasks operate from SQLite, not by re-scanning
+    HTML.
     """
     log = progress_logger or logger
     summary: Dict[str, Any] = {
@@ -953,6 +957,8 @@ def import_legacy_history(
         "reports_scanned": 0,
         "cards_found": 0,
         "cards_selected": 0,
+        "cards_without_identity": 0,
+        "source_breakdown": {},
         "imported": 0,
         "skipped_existing_newer": 0,
         "skipped_v4_rows": 0,
@@ -979,11 +985,11 @@ def import_legacy_history(
             source: len(entries) for source, entries in histories.items()
         }
     else:
-        log.info("[LegacyImport] 轻量模式：仅登记 HTML 中已有的 arXiv 论文")
+        log.info("[LegacyImport] 轻量模式：登记 HTML 中已有的各来源论文")
         _emit_progress(
             progress_callback,
             "legacy_history",
-            "轻量模式跳过旧 JSON 与旧关键词库，只读取 HTML 报告",
+            "轻量模式跳过旧 JSON 与旧关键词库，只读取各来源 HTML 报告",
             0,
             0,
         )
@@ -992,19 +998,32 @@ def import_legacy_history(
         reports_html_dir, progress_callback=progress_callback
     )
     summary["cards_found"] = len(cards)
-    selected_cards = cards if full_repair else [
-        card for card in cards if str(card.get("source") or "").lower() == "arxiv"
+    selected_cards = [
+        card
+        for card in cards
+        if card.get("canonical_id")
+        and card.get("identity_kind") in {"arxiv", "doi"}
     ]
+    summary["cards_without_identity"] = len(cards) - len(selected_cards)
     summary["cards_selected"] = len(selected_cards)
     summary["reports_scanned"] = len({card["report_path"] for card in selected_cards})
+    source_breakdown: Dict[str, int] = {}
+    for card in selected_cards:
+        source = str(card.get("source") or "").strip().lower()
+        if source:
+            source_breakdown[source] = source_breakdown.get(source, 0) + 1
+    summary["source_breakdown"] = dict(sorted(source_breakdown.items()))
 
-    # 旧历史的交付时间优先于报告时间戳（更接近真实推送时刻）。
-    arxiv_history = histories.get("arxiv", {})
-    arxiv_by_canonical: Dict[str, str] = {}
-    for (canonical, _version), delivered_at in arxiv_history.items():
-        previous = arxiv_by_canonical.get(canonical)
-        if previous is None or delivered_at > previous:
-            arxiv_by_canonical[canonical] = delivered_at
+    # 旧历史的交付时间优先于报告时间戳（更接近真实推送时刻）。每个来源
+    # 独立保留其交付记录；跨来源归并由 SQLite 实体层按 DOI/arXiv 身份完成。
+    histories_by_canonical: Dict[str, Dict[str, str]] = {}
+    for history_source, entries in histories.items():
+        by_canonical: Dict[str, str] = {}
+        for (canonical, _version), delivered_at in entries.items():
+            previous = by_canonical.get(canonical)
+            if previous is None or delivered_at > previous:
+                by_canonical[canonical] = delivered_at
+        histories_by_canonical[history_source] = by_canonical
 
     card_index: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
     for card in selected_cards:
@@ -1022,13 +1041,15 @@ def import_legacy_history(
     backlog_entries: List[Dict[str, Any]] = []
 
     def delivered_at_for(card: Dict[str, Any]) -> str:
-        if card["source"] == "arxiv":
-            exact = arxiv_history.get((card["canonical_id"], card["version"]))
-            if exact:
-                return exact
-            fallback = arxiv_by_canonical.get(card["canonical_id"])
-            if fallback:
-                return fallback
+        source_history = histories.get(card["source"], {})
+        exact = source_history.get((card["canonical_id"], card["version"]))
+        if exact:
+            return exact
+        fallback = histories_by_canonical.get(card["source"], {}).get(
+            card["canonical_id"]
+        )
+        if fallback:
+            return fallback
         return card["report_at"].isoformat()
 
     cards_to_write = sorted(
@@ -1088,11 +1109,12 @@ def import_legacy_history(
             )
             needs_translation = bool(card["abstract"].strip())
             has_translation = bool(card["abstract_cn"].strip())
-            # v3.2 的期刊/OpenAlex 卡片没有 PDF 深度分析能力；它们即使
-            # 及格也不该被误判为缺数据、重新塞进补充队列。旧版只有
-            # arXiv 来源走过深度分析流程。
+            # 历史报告只在可确定拥有 arXiv PDF 的情况下要求深度分析。
+            # 这以论文能力而非来源名称判断，因此带 arXiv 身份的非 arXiv
+            # 来源记录也会与主源使用相同的修复逻辑；纯 DOI 卡片不会被
+            # 凭空判为缺分析。
             needs_analysis = (
-                card["source"] == "arxiv"
+                card["identity_kind"] == "arxiv"
                 and card["score_payload"].get("is_qualified", False)
             )
             has_analysis = bool(card["analysis"])
@@ -1175,43 +1197,52 @@ def import_legacy_history(
         # metadata becomes available, while lightweight import remains a
         # zero-LLM HTML ledger migration.
         arxiv_card_canonicals = {
-            card["canonical_id"] for card in selected_cards if card["source"] == "arxiv"
+            card["canonical_id"]
+            for card in selected_cards
+            if card["identity_kind"] == "arxiv"
         }
         doi_card_canonicals = {
             normalize_doi_key(card["paper_id"])
             for card in selected_cards
             if card["identity_kind"] == "doi"
         }
-        for (canonical, version), _delivered_at in arxiv_history.items():
-            if canonical in arxiv_card_canonicals:
-                continue
-            paper_id = f"{canonical}v{version}" if version else canonical
-            backlog_entries.append(
-                {
-                    "source": "arxiv",
-                    "canonical_id": canonical,
-                    "version": version,
-                    "paper_id": paper_id,
-                    "reason": "missing_data",
-                    "detail": "旧历史有交付记录但未找到报告卡片",
-                }
+        card_canonicals_by_source: Dict[str, set[str]] = {}
+        for card in selected_cards:
+            card_canonicals_by_source.setdefault(card["source"], set()).add(
+                card["canonical_id"]
             )
-            summary["missing_cards"] += 1
-        openalex_history = histories.get("openalex", {})
-        for (canonical, _version), _delivered_at in openalex_history.items():
-            if canonical in doi_card_canonicals:
-                continue
-            backlog_entries.append(
-                {
-                    "source": "openalex",
-                    "canonical_id": canonical,
-                    "version": 0,
-                    "paper_id": f"https://doi.org/{canonical}",
-                    "reason": "missing_data",
-                    "detail": "旧历史有交付记录但未找到报告卡片",
-                }
-            )
-            summary["missing_cards"] += 1
+
+        for history_source, entries in histories.items():
+            for (canonical, version), _delivered_at in entries.items():
+                if history_source == "arxiv":
+                    present = canonical in arxiv_card_canonicals
+                    paper_id = f"{canonical}v{version}" if version else canonical
+                else:
+                    # DOI cards are often rendered under journal-specific
+                    # sources even when the old JSON file was named
+                    # ``openalex_history.json``. A DOI match in any report is
+                    # therefore sufficient evidence that this work has a
+                    # patchable card already.
+                    is_doi = normalize_doi_key(canonical) == canonical and canonical.startswith("10.")
+                    present = (
+                        canonical in doi_card_canonicals
+                        if is_doi
+                        else canonical in card_canonicals_by_source.get(history_source, set())
+                    )
+                    paper_id = f"https://doi.org/{canonical}" if is_doi else canonical
+                if present:
+                    continue
+                backlog_entries.append(
+                    {
+                        "source": history_source,
+                        "canonical_id": canonical,
+                        "version": version,
+                        "paper_id": paper_id,
+                        "reason": "missing_data",
+                        "detail": "旧历史有交付记录但未找到报告卡片",
+                    }
+                )
+                summary["missing_cards"] += 1
 
     _emit_progress(
         progress_callback,

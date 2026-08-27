@@ -176,52 +176,17 @@ def _exclude_cross_source_arxiv_mirrors(
     store: DailyResearchStore | None,
     papers_by_source: Dict[str, List[PaperMetadata]],
 ) -> Dict[str, List[PaperMetadata]]:
-    """Prefer arXiv records over supplement-source mirrors without blocking revisions.
+    """Keep source records even when an arXiv identity says they are the same work.
 
-    A Hugging Face entry is a mirror of a particular arXiv work, but its
-    source identity remains separate so a later arXiv v2/v3 is never hidden.
-    We suppress only the mirror: first if the same canonical arXiv work is in
-    the current batch, then if any arXiv version was previously delivered.
-    This avoids double reports when HF's curated feed arrives after the
-    canonical arXiv delivery while preserving HF-only discovery when arXiv is
-    not enabled.
+    The function name remains for compatibility with older callers, but v4.1
+    deliberately no longer drops a Hugging Face or journal record merely
+    because arXiv also has it.  Each source can produce its own report and
+    retry state; ``DailyResearchStore`` links exact DOI/arXiv identities into
+    one logical-paper entity for archive search and keyword de-duplication.
+    ``store`` is retained in the signature to avoid breaking extensions.
     """
-    arxiv_canonicals = {
-        (paper.canonical_id or paper.paper_id).strip()
-        for paper in papers_by_source.get("arxiv", [])
-        if (paper.canonical_id or paper.paper_id).strip()
-    }
-    if not arxiv_canonicals and store is None:
-        return papers_by_source
-
-    filtered: Dict[str, List[PaperMetadata]] = {}
-    for source, papers in papers_by_source.items():
-        if source != "huggingface_papers":
-            filtered[source] = papers
-            continue
-
-        kept = []
-        skipped_current = 0
-        skipped_delivered = 0
-        for paper in papers:
-            canonical_id = _arxiv_mirror_canonical_id(paper)
-            if canonical_id and canonical_id in arxiv_canonicals:
-                skipped_current += 1
-                continue
-            if canonical_id and store is not None and store.has_delivered_arxiv_canonical(canonical_id):
-                skipped_delivered += 1
-                continue
-            kept.append(paper)
-        if skipped_current or skipped_delivered:
-            logger.info(
-                "[%s] 跨源 arXiv 镜像去重跳过 %s 篇（同轮 arXiv %s，已交付 arXiv %s）",
-                source,
-                skipped_current + skipped_delivered,
-                skipped_current,
-                skipped_delivered,
-            )
-        filtered[source] = kept
-    return filtered
+    del store
+    return {source: list(papers) for source, papers in papers_by_source.items()}
 
 
 def _load_learned_terms(store):

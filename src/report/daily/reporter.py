@@ -323,11 +323,12 @@ class Reporter:
         if source == "huggingface_papers":
             lines.append(
                 "> ℹ️ **来源说明**: Hugging Face Papers 是精选补充流，不是 arXiv "
-                "分类的全量替代；同轮或此前已交付的 arXiv 镜像论文会自动去重。"
+                "分类的全量替代；与 arXiv 重合的论文会保留本来源处理记录，"
+                "并在 SQLite 历史库中关联为同一论文实体。"
             )
             lines.append("")
         elif source != "arxiv":
-            lines.append("> ⚠️ **注意**: 该数据源不支持PDF下载，仅提供评分和摘要翻译，无深度分析")
+            lines.append("> ℹ️ **处理说明**: 有可用 PDF 的及格论文会进入深度分析；其余论文保留评分和摘要翻译。")
             lines.append("")
 
         # ========== 配置信息 ==========

@@ -161,8 +161,10 @@ def _render_paper(item: dict):
 
     header = f"{badge} {item['title']}{like_icon}"
     with st.expander(f"[{score_text}] {header}"):
+        sources = item.get("sources") or [item.get("source")]
+        sources = [str(value) for value in sources if value]
         meta_parts = [
-            f"{t('ps_col_source')}: {item.get('source', '—')}",
+            f"{t('ps_col_sources')}: {', '.join(sources) or '—'}",
             f"{t('ps_col_completed')}: {(item.get('completed_at') or '—')[:19]}",
         ]
         if item.get("published_date"):
@@ -179,10 +181,11 @@ def _render_paper(item: dict):
             )
         if item.get("tldr"):
             st.markdown(f"**TL;DR**: {item['tldr']}")
-        if item.get("extracted_keywords"):
+        merged_keywords = item.get("merged_keywords") or item.get("extracted_keywords")
+        if merged_keywords:
             st.markdown(
-                f"**{t('ps_col_keywords')}**: "
-                + " · ".join(item["extracted_keywords"])
+                f"**{t('ps_merged_keywords')}**: "
+                + " · ".join(merged_keywords)
             )
         if item.get("categories"):
             st.caption(
@@ -196,6 +199,64 @@ def _render_paper(item: dict):
             links.append(f"[{t('ps_link_pdf')}]({item['pdf_url']})")
         if links:
             st.markdown(" ｜ ".join(links))
+
+        variants = item.get("variants") or []
+        if variants:
+            st.divider()
+            st.markdown(f"**{t('ps_variants_title')}**")
+            for variant in variants:
+                _render_source_variant(variant)
+
+
+def _render_source_variant(variant: dict) -> None:
+    """Render non-mergeable source output inside one logical paper result."""
+    source = str(variant.get("source") or "—")
+    completed = str(variant.get("completed_at") or "—")[:19]
+    with st.container(border=True):
+        st.markdown(
+            f"**{t('ps_variant_title').format(source=source, completed=completed)}**"
+        )
+        status_parts = []
+        if variant.get("strategy_id"):
+            status_parts.append(f"{t('ps_col_strategy')}: `{variant['strategy_id']}`")
+        for label, key in (
+            (t("ps_variant_score_status"), "score_status"),
+            (t("ps_variant_translation_status"), "translation_status"),
+            (t("ps_variant_analysis_status"), "analysis_status"),
+        ):
+            if variant.get(key):
+                status_parts.append(f"{label}: {variant[key]}")
+        if status_parts:
+            st.caption(" ｜ ".join(status_parts))
+        if variant.get("tldr"):
+            st.markdown(f"**TL;DR**: {variant['tldr']}")
+        if variant.get("abstract_cn"):
+            st.markdown(
+                f"**{t('ps_variant_translation')}**: {variant['abstract_cn']}"
+            )
+        if variant.get("extracted_keywords"):
+            st.markdown(
+                f"**{t('ps_variant_keywords')}**: "
+                + " · ".join(variant["extracted_keywords"])
+            )
+        analysis = variant.get("analysis")
+        if isinstance(analysis, dict) and analysis:
+            st.markdown(f"**{t('ps_variant_analysis')}**")
+            st.json(analysis, expanded=False)
+        if variant.get("last_error"):
+            st.caption(f"{t('ps_variant_error')}: {variant['last_error']}")
+
+        links = []
+        if variant.get("url"):
+            links.append(f"[{t('ps_link_abs')}]({variant['url']})")
+        if variant.get("pdf_url"):
+            links.append(f"[{t('ps_link_pdf')}]({variant['pdf_url']})")
+        if links:
+            st.markdown(" ｜ ".join(links))
+        if variant.get("report_path"):
+            st.caption(
+                t("ps_variant_report_path").format(path=variant["report_path"])
+            )
 
 
 def _render_pagination(total: int, page: int):

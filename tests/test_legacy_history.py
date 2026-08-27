@@ -409,7 +409,7 @@ class LegacyImportIntegrationTests(unittest.TestCase):
         self.assertEqual(rows[0]["paper_id"], "2602.03848v1")
         self.assertEqual(rows[0]["reason"], "missing_data")
 
-    def test_lightweight_import_skips_json_and_non_arxiv_cards(self):
+    def test_lightweight_import_indexes_non_arxiv_html_without_reading_json(self):
         (self.history_dir / "arxiv_history.json").write_text(
             json.dumps({"2602.03848v1": "2026-02-04T23:48:23.286228"}),
             encoding="utf-8",
@@ -420,9 +420,13 @@ class LegacyImportIntegrationTests(unittest.TestCase):
         summary = self._import()
         self.assertFalse(summary["full_repair_enabled"])
         self.assertEqual(summary["cards_found"], 1)
-        self.assertEqual(summary["cards_selected"], 0)
+        self.assertEqual(summary["cards_selected"], 1)
         self.assertEqual(summary["history_files"], {})
-        self.assertEqual(summary["delivered_ledger_rows"], 0)
+        self.assertEqual(summary["delivered_ledger_rows"], 1)
+        self.assertEqual(summary["source_breakdown"], {"prl": 1})
+        record = self.store.get_paper_record("prl", "https://doi.org/10.1103/ab12-cd34")
+        self.assertIsNotNone(record)
+        self.assertEqual(json.loads(record["paper_json"])["doi"], "10.1103/ab12-cd34")
         self.assertEqual(self.store.supplement_backlog_summary()["pending"], 0)
 
     def test_lightweight_import_never_reads_old_keyword_cache(self):

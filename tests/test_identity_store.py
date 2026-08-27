@@ -854,7 +854,7 @@ class IdentityStoreTests(unittest.TestCase):
             filtered = _exclude_sqlite_delivered_papers(store, {"arxiv": [paper]})
             self.assertEqual(filtered, {"arxiv": []})
 
-    def test_cross_source_arxiv_mirror_dedup_prefers_same_run_arxiv(self):
+    def test_cross_source_arxiv_mirror_keeps_each_source_record(self):
         arxiv = _paper("2501.12345v2")
         mirror = _hf_paper("2501.12345")
 
@@ -864,9 +864,9 @@ class IdentityStoreTests(unittest.TestCase):
         )
 
         self.assertEqual(filtered["arxiv"], [arxiv])
-        self.assertEqual(filtered["huggingface_papers"], [])
+        self.assertEqual(filtered["huggingface_papers"], [mirror])
 
-    def test_delivered_arxiv_suppresses_late_hf_mirror_but_not_arxiv_revision(self):
+    def test_delivered_arxiv_keeps_late_hf_record_and_arxiv_revision(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = DailyResearchStore(Path(temp_dir) / "daily.db")
             run_id = store.start_run(1)
@@ -906,7 +906,7 @@ class IdentityStoreTests(unittest.TestCase):
                 {"arxiv": [v2]},
             )
 
-        self.assertEqual(mirror_only["huggingface_papers"], [])
+        self.assertEqual(mirror_only["huggingface_papers"], [mirror])
         self.assertEqual(revision_batch["arxiv"], [v2])
 
     def test_hf_only_item_remains_when_no_arxiv_mirror_was_delivered(self):
