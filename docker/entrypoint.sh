@@ -178,6 +178,8 @@ fi
 TRIGGER_DIR="/app/data/run/webui_triggers"
 PID_FILE="/app/data/run/webui_triggered.pid"
 adr_run_as_user mkdir -p "$TRIGGER_DIR/status"
+WATCHER_HEARTBEAT="$TRIGGER_DIR/.watcher-heartbeat"
+adr_run_as_user touch "$WATCHER_HEARTBEAT"
 
 # A container restart kills the child process with it.  Return an atomically
 # claimed request to the queue so a SIGKILL/redeploy cannot silently lose a
@@ -197,6 +199,7 @@ trigger_watcher() {
     # The marker is archived (never deleted) so restarts stay auditable.
     RESTART_MARKER="$TRIGGER_DIR/restart_worker.request"
     while true; do
+        adr_run_as_user touch "$WATCHER_HEARTBEAT"
         if [ -e "$RESTART_MARKER" ]; then
             mv "$RESTART_MARKER" \
                "$RESTART_MARKER.done-$(date +%Y%m%dT%H%M%S)" 2>/dev/null || true

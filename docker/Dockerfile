@@ -94,8 +94,8 @@ RUN mkdir -p /app/data/reports/daily_research/markdown \
              /app/data/downloaded_pdfs /app/logs \
     && chown -R adr:adr /app/data /app/logs
 
-HEALTHCHECK --interval=300s --timeout=10s --retries=3 \
-    CMD python -c "import sys; sys.path.insert(0,'src'); import config; print('OK')" || exit 1
+HEALTHCHECK --interval=60s --timeout=20s --retries=3 --start-period=30s \
+    CMD python /app/src/utils/container_health.py worker || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 
@@ -114,6 +114,7 @@ COPY src/utils/scoring_evaluation.py ./src/utils/
 COPY src/utils/source_registry.py ./src/utils/
 COPY src/utils/webdav_sync.py ./src/utils/
 COPY src/utils/webui_trigger.py ./src/utils/
+COPY src/utils/container_health.py ./src/utils/
 COPY src/webui/ ./src/webui/
 COPY VERSION* ./
 COPY .env.example ./
@@ -130,8 +131,8 @@ RUN chmod 0755 /webui-entrypoint.sh
 
 EXPOSE 8501
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=15s --retries=3 --start-period=20s \
+    CMD python /app/src/utils/container_health.py webui || exit 1
 
 ENTRYPOINT ["/webui-entrypoint.sh"]
 CMD ["streamlit", "run", "src/webui/config_panel.py", "--server.port=8501"]
