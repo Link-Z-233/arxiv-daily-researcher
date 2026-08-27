@@ -683,47 +683,63 @@ def _fetch_backfill_papers(
     run_id: str,
     target_date: date,
 ) -> Dict[str, List[PaperMetadata]]:
-    """过去日期补跑：抓取 target_date 当天提交的 arXiv 论文。
+    """Fetch every enabled source for one past calendar day.
 
-    仅扫描 arXiv 主源（其他来源按当前配置不参与历史补跑）；记录一条
-    succeeded 收据供数据源健康观测，但不调用 prepare_scan——补跑不要求
-    收据完整性，也不会推进任何来源的扫描水位线。
+    Backfill receipts are observational only: this path never calls
+    ``prepare_scan`` and therefore cannot advance ordinary daily watermarks.
     """
-    from sources.arxiv_source import ArxivSource
-
-    arxiv_source = ArxivSource(
+    agent = SearchAgent(
         history_dir=settings.HISTORY_DIR,
-        proxy_dict=settings.get_proxy_dict("arxiv"),
-        load_legacy_history=False,
+        enabled_sources=settings.ENABLED_SOURCES,
+        arxiv_domains=settings.TARGET_DOMAINS,
+        journals=settings.TARGET_JOURNALS,
+        enable_openalex=getattr(settings, "ENABLE_OPENALEX", True),
+        openalex_api_key=settings.OPENALEX_API_KEY,
+        enable_semantic_scholar=settings.ENABLE_SEMANTIC_SCHOLAR_TLDR,
+        semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
+        extra_source_definitions=getattr(settings, "EXTRA_SOURCE_DEFINITIONS", []),
+        use_legacy_history_filter=False,
     )
-    domains = list(getattr(settings, "TARGET_DOMAINS", []) or [])
-    if set(settings.ENABLED_SOURCES) - {"arxiv"}:
-        logger.info(
-            "过去日报补跑仅扫描 arXiv 源，其他启用来源跳过: %s",
-            sorted(set(settings.ENABLED_SOURCES) - {"arxiv"}),
-        )
-    papers = arxiv_source.fetch_domain_papers_between(target_date, target_date, domains)
-    papers_by_source: Dict[str, List[PaperMetadata]] = {"arxiv": papers} if papers else {}
     try:
-        store.record_scan_receipt(
-            run_id,
-            "arxiv",
-            {
-                "source": "arxiv",
-                "status": "succeeded",
-                "scanned_at": datetime.now().isoformat(),
-                "backfill_date": target_date.isoformat(),
-                "domains": domains,
-                "total_new_candidates": len(papers),
-                "domain_receipts": [],
-            },
+        callbacks = {
+            source: (
+                lambda receipt, source=source: store.record_scan_receipt(
+                    run_id,
+                    source,
+                    {**receipt, "backfill_date": target_date.isoformat()},
+                )
+            )
+            for source in agent.get_enabled_sources()
+        }
+        papers_by_source = agent.fetch_papers_between(
+            target_date,
+            target_date,
+            scan_receipt_callbacks=callbacks,
         )
-    except Exception as exc:
-        logger.warning("过去日报收据记录失败（不影响补跑）: %s", exc)
+    finally:
+        agent.close()
     logger.info(
-        "过去日报补跑 %s：当天提交论文 %s 篇", target_date.isoformat(), len(papers)
+        "过去日报补跑 %s：%s 个来源共发现 %s 篇",
+        target_date.isoformat(),
+        len(papers_by_source),
+        sum(len(papers) for papers in papers_by_source.values()),
     )
     return papers_by_source
+
+
+def _enabled_backfill_sources() -> List[str]:
+    """Return report sources that the current provider switches can fetch."""
+    enabled: List[str] = []
+    for source in list(getattr(settings, "ENABLED_SOURCES", []) or []):
+        normalized = str(source or "").strip().lower()
+        if not normalized or normalized in enabled:
+            continue
+        if normalized not in {"arxiv", "huggingface_papers"} and not getattr(
+            settings, "ENABLE_OPENALEX", True
+        ):
+            continue
+        enabled.append(normalized)
+    return enabled
 
 
 def _delivered_papers_for_finalization(
@@ -1128,8 +1144,9 @@ class DailyResearchPipeline:
                 # temporary arXiv outage cannot strand the remainder of an
                 # otherwise successful historical day.
                 limit = int(getattr(settings, "DAILY_MAX_PAPERS_PER_RUN", 0) or 0)
+                enabled_backfill_sources = _enabled_backfill_sources()
                 papers_by_source, pending_paper_count = store.select_pending_papers(
-                    ["arxiv"],
+                    enabled_backfill_sources,
                     limit,
                     queue_scope="backfill",
                     backfill_target_date=target_date,
@@ -1158,7 +1175,7 @@ class DailyResearchPipeline:
                         backfill_target_date=target_date,
                     )
                     papers_by_source, pending_paper_count = store.select_pending_papers(
-                        ["arxiv"],
+                        enabled_backfill_sources,
                         limit,
                         queue_scope="backfill",
                         backfill_target_date=target_date,

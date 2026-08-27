@@ -33,6 +33,20 @@ def _paper(pid: str, published: datetime) -> PaperMetadata:
     )
 
 
+def _journal_paper(pid: str, published: datetime) -> PaperMetadata:
+    return PaperMetadata(
+        paper_id=pid,
+        title=f"Journal paper {pid}",
+        authors=["Bob"],
+        abstract=f"Abstract {pid}",
+        published_date=published,
+        url=f"https://doi.org/{pid}",
+        source="prl",
+        doi=pid,
+        journal="Physical Review Letters",
+    )
+
+
 class _Agent:
     deep_template = {}
 
@@ -122,21 +136,32 @@ class BackfillPipelineTests(unittest.TestCase):
                 def generate_reports_by_source(self, **kwargs):
                     reporter_calls.append(kwargs)
                     stamp = kwargs["report_timestamp"].strftime("%Y-%m-%d_%H-%M-%S_%f")
-                    path = reports_root / f"arxiv" / f"ARXIV_Report_{stamp}.html"
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text("<html>backfill</html>", encoding="utf-8")
-                    return {"arxiv_html": path}
+                    result = {}
+                    for source in kwargs["scored_papers_by_source"]:
+                        path = reports_root / source / f"{source.upper()}_Report_{stamp}.html"
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text("<html>backfill</html>", encoding="utf-8")
+                        result[f"{source}_html"] = path
+                    return result
 
-            scanned = [
-                _paper("2601.1v1", datetime(2026, 1, 1, tzinfo=timezone.utc)),
-                _paper("2601.2v1", datetime(2026, 1, 1, tzinfo=timezone.utc)),
-            ]
+            scanned = {
+                "arxiv": [
+                    _paper("2601.1v1", datetime(2026, 1, 1, tzinfo=timezone.utc)),
+                    _paper("2601.2v1", datetime(2026, 1, 1, tzinfo=timezone.utc)),
+                ],
+                "prl": [
+                    _journal_paper(
+                        "10.1103/physrevlett.1",
+                        datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    )
+                ],
+            }
 
             overrides = {
                 "TOKEN_TRACKING_ENABLED": False,
                 "DAILY_RESEARCH_DB_PATH": db_path,
                 "ENABLE_NOTIFICATIONS": False,
-                "ENABLED_SOURCES": ["arxiv"],
+                "ENABLED_SOURCES": ["arxiv", "prl"],
                 "TARGET_DOMAINS": ["quant-ph"],
                 "TARGET_JOURNALS": [],
                 "ENABLE_REFERENCE_EXTRACTION": False,
@@ -145,11 +170,12 @@ class BackfillPipelineTests(unittest.TestCase):
                 "SCORE_STRATEGY": "legacy_weighted_keyword_v1",
                 "HISTORY_DIR": root / "history",
                 "OPENALEX_API_KEY": "",
+                "ENABLE_OPENALEX": True,
                 "ENABLE_SEMANTIC_SCHOLAR_TLDR": False,
                 "SEMANTIC_SCHOLAR_API_KEY": "",
                 "KEYWORD_TRACKER_ENABLED": False,
                 "DAILY_ENABLE_DEEP_ANALYSIS": False,
-                "DAILY_MAX_PAPERS_PER_RUN": 1,
+                "DAILY_MAX_PAPERS_PER_RUN": 2,
                 "ENABLE_CONCURRENCY": False,
                 "ENABLE_MARKDOWN_REPORT": False,
                 "ENABLE_HTML_REPORT": True,
@@ -179,9 +205,12 @@ class BackfillPipelineTests(unittest.TestCase):
                 )
                 fetch_between = stack.enter_context(
                     patch(
-                        "sources.arxiv_source.ArxivSource.fetch_domain_papers_between",
+                        "modes.daily_research.SearchAgent.fetch_papers_between",
                         return_value=scanned,
                     )
+                )
+                stack.enter_context(
+                    patch("modes.daily_research.SearchAgent.close", return_value=None)
                 )
                 result = DailyResearchPipeline().run(
                     run_kind="backfill", target_date=target
@@ -191,8 +220,8 @@ class BackfillPipelineTests(unittest.TestCase):
                 )
 
             self.assertTrue(result.success)
-            # 上限 1：只交付当天 1 篇，另一篇留在候选状态。
-            self.assertEqual(result.total_papers_fetched, 1)
+            # 上限 2：跨来源候选共 3 篇，第二批从 SQLite 续跑且不重复抓取。
+            self.assertEqual(result.total_papers_fetched, 2)
             self.assertEqual(result.deferred_paper_count, 1)
             self.assertTrue(second_result.success)
             self.assertEqual(second_result.total_papers_fetched, 1)
@@ -206,16 +235,19 @@ class BackfillPipelineTests(unittest.TestCase):
             store = DailyResearchStore(db_path)
             self.assertTrue(store.is_paper_delivered_strict("arxiv", "2601.1v1"))
             self.assertTrue(store.is_paper_delivered_strict("arxiv", "2601.2v1"))
+            self.assertTrue(
+                store.is_paper_delivered_strict("prl", "10.1103/physrevlett.1")
+            )
             # Backfill rows stay isolated from the ordinary daily queue during
             # the automatic continuation, so today's report cannot consume
             # old papers between batches.
             ordinary_pending, ordinary_count = store.select_pending_papers(
-                ["arxiv"], limit=0
+                ["arxiv", "prl"], limit=0
             )
             self.assertEqual(ordinary_pending, {})
             self.assertEqual(ordinary_count, 0)
             backfill_pending, backfill_count = store.select_pending_papers(
-                ["arxiv"],
+                ["arxiv", "prl"],
                 limit=0,
                 queue_scope="backfill",
                 backfill_target_date=target,
