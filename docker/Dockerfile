@@ -32,7 +32,7 @@ RUN chmod 0755 /usr/local/bin/adr-runtime-user.sh
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir \
       -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
-      json5==0.13.0 requests==2.32.5 webdavclient3>=3.14.0 && \
+      json5==0.13.0 requests==2.32.5 'webdavclient3>=3.14.0' && \
     find /usr/local/lib/python3.12 -name '__pycache__' -type d -prune -exec rm -rf {} +
 
 # ==================== Worker 依赖层 ====================
