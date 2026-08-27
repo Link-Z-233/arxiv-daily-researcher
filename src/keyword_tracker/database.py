@@ -62,6 +62,12 @@ _PAPER_KEYWORDS_SQL = """
 SELECT LOWER(je.value) AS keyword,
        dp.source AS source,
        dp.paper_id AS paper_id,
+       COALESCE(
+           NULLIF(dp.entity_id, ''),
+           'source:' || LOWER(dp.source) || ':'
+               || LOWER(COALESCE(NULLIF(dp.canonical_id, ''), dp.paper_id))
+               || '@v' || CAST(dp.version AS TEXT)
+       ) AS entity_id,
        substr(dp.completed_at, 1, 10) AS day
 FROM daily_papers dp, json_each(dp.score_json, '$.extracted_keywords') je
 WHERE dp.completed_at IS NOT NULL
@@ -79,6 +85,15 @@ UNION ALL
 SELECT LOWER(legacy.keyword) AS keyword,
        legacy.source AS source,
        legacy.paper_id AS paper_id,
+       COALESCE(
+           (
+               SELECT NULLIF(dp.entity_id, '')
+               FROM daily_papers dp
+               WHERE dp.source = legacy.source AND dp.paper_id = legacy.paper_id
+               LIMIT 1
+           ),
+           'legacy:' || LOWER(legacy.source) || ':' || LOWER(legacy.paper_id)
+       ) AS entity_id,
        legacy.extracted_date AS day
 FROM legacy_keyword_records legacy
 WHERE legacy.keyword != ''
@@ -532,7 +547,7 @@ class KeywordDatabase:
         with self._get_connection() as conn:
             cursor = conn.execute(
                 f"""
-                SELECT COUNT(DISTINCT paper_id) FROM ({_PAPER_KEYWORDS_SQL})
+                SELECT COUNT(DISTINCT entity_id) FROM ({_PAPER_KEYWORDS_SQL})
                 WHERE keyword = ?
                 """,
                 (raw_keyword.strip().lower(),),
@@ -614,7 +629,7 @@ class KeywordDatabase:
             conn.execute(
                 f"""
                 INSERT INTO keyword_daily_counts (normalized_keyword_id, count_date, paper_count)
-                SELECT ka.normalized_keyword_id, pk.day, COUNT(DISTINCT pk.paper_id)
+                SELECT ka.normalized_keyword_id, pk.day, COUNT(DISTINCT pk.entity_id)
                 FROM ({_PAPER_KEYWORDS_SQL}) pk
                 JOIN keyword_aliases ka ON ka.raw_keyword = pk.keyword
                 GROUP BY ka.normalized_keyword_id, pk.day

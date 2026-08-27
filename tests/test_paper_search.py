@@ -172,6 +172,164 @@ class SearchPapersTests(unittest.TestCase):
         self.assertTrue(item["is_qualified"])
         self.assertEqual(item["extracted_keywords"], ["diffusion", "speech synthesis"])
 
+    def test_cross_source_records_merge_one_entity_and_keep_variants(self):
+        run_id = self.store.start_run(2, run_kind="legacy_import")
+        records = [
+            {
+                "source": "arxiv",
+                "paper_id": "2601.12345v1",
+                "canonical_id": "2601.12345",
+                "version": 1,
+                "paper_json": {
+                    "paper_id": "2601.12345v1",
+                    "source": "arxiv",
+                    "title": "Shared Quantum Result",
+                    "authors": ["Alice"],
+                    "abstract": "arXiv abstract",
+                    "url": "https://arxiv.org/abs/2601.12345v1",
+                    "doi": "10.1000/shared-result",
+                    "arxiv_id": "2601.12345v1",
+                    "categories": ["quant-ph"],
+                },
+                "score": {
+                    "total_score": 11.0,
+                    "is_qualified": True,
+                    "tldr": "arXiv TLDR",
+                    "extracted_keywords": ["Quantum", "Optics"],
+                },
+                "abstract_cn": "arXiv 翻译",
+                "analysis": {"summary": "arXiv analysis"},
+            },
+            {
+                "source": "prl",
+                "paper_id": "https://doi.org/10.1000/shared-result",
+                "canonical_id": "10.1000/shared-result",
+                "version": 0,
+                "paper_json": {
+                    "paper_id": "https://doi.org/10.1000/shared-result",
+                    "source": "prl",
+                    "title": "Shared quantum result",
+                    "authors": ["Alice", "Bob"],
+                    "abstract": "Journal abstract",
+                    "url": "https://doi.org/10.1000/shared-result",
+                    "doi": "10.1000/shared-result",
+                    "arxiv_id": "2601.12345v1",
+                    "arxiv_url": "https://arxiv.org/abs/2601.12345v1",
+                    "categories": ["journal"],
+                },
+                "score": {
+                    "total_score": 12.0,
+                    "is_qualified": True,
+                    "tldr": "Journal TLDR",
+                    "extracted_keywords": ["optics", "Journal"],
+                },
+                "abstract_cn": "期刊翻译",
+                "analysis": {"summary": "Journal analysis"},
+            },
+        ]
+        for record in records:
+            payload = {
+                "source": record["source"],
+                "paper_id": record["paper_id"],
+                "canonical_id": record["canonical_id"],
+                "version": record["version"],
+                "paper_json": record["paper_json"],
+                "score_json": json.dumps(record["score"], ensure_ascii=False),
+                "abstract_cn": record["abstract_cn"],
+                "analysis_json": json.dumps(record["analysis"], ensure_ascii=False),
+                "score_status": "succeeded",
+                "tldr_status": "succeeded",
+                "translation_status": "succeeded",
+                "analysis_status": "succeeded",
+                "completed_at": "2026-08-20T08:00:00",
+                "report_path": f"/reports/{record['source']}.html",
+                "report_at": "2026-08-20T08:00:00",
+                "delivered_at": "2026-08-20T08:00:00",
+                "delivery_run_id": run_id,
+            }
+            self.store.import_legacy_paper(payload, delivered=True)
+
+        result = self.store.search_papers(query="shared")
+        self.assertEqual(result["total"], 1)
+        item = result["items"][0]
+        self.assertEqual(item["sources"], ["arxiv", "prl"])
+        self.assertEqual(item["merged_keywords"], ["Quantum", "Optics", "Journal"])
+        self.assertEqual(len(item["variants"]), 2)
+        self.assertEqual(
+            {variant["tldr"] for variant in item["variants"]},
+            {"arXiv TLDR", "Journal TLDR"},
+        )
+        self.assertEqual(self.store.search_papers(source="prl")["total"], 1)
+        entity = self.store.get_paper_entity("prl", records[1]["paper_id"])
+        self.assertIsNotNone(entity)
+        self.assertEqual(entity["entity_id"], item["entity_id"])
+
+    def test_versionless_mirror_merges_when_arxiv_version_arrives_later(self):
+        run_id = self.store.start_run(2, run_kind="legacy_import")
+        base = {
+            "score_json": json.dumps(
+                {
+                    "total_score": 8.0,
+                    "is_qualified": True,
+                    "tldr": "summary",
+                    "extracted_keywords": ["mirror"],
+                }
+            ),
+            "score_status": "succeeded",
+            "tldr_status": "succeeded",
+            "translation_status": "not_required",
+            "analysis_status": "not_required",
+            "completed_at": "2026-08-21T08:00:00",
+            "report_at": "2026-08-21T08:00:00",
+            "delivered_at": "2026-08-21T08:00:00",
+            "delivery_run_id": run_id,
+        }
+        mirror_id = "hf:2601.54321"
+        self.store.import_legacy_paper(
+            {
+                **base,
+                "source": "huggingface_papers",
+                "paper_id": mirror_id,
+                "canonical_id": mirror_id,
+                "version": 0,
+                "paper_json": {
+                    "paper_id": mirror_id,
+                    "source": "huggingface_papers",
+                    "title": "Mirror first",
+                    "authors": [],
+                    "abstract": "",
+                    "url": "https://arxiv.org/abs/2601.54321",
+                    "arxiv_id": "2601.54321",
+                },
+            },
+            delivered=True,
+        )
+        self.store.import_legacy_paper(
+            {
+                **base,
+                "source": "arxiv",
+                "paper_id": "2601.54321v1",
+                "canonical_id": "2601.54321",
+                "version": 1,
+                "paper_json": {
+                    "paper_id": "2601.54321v1",
+                    "source": "arxiv",
+                    "title": "Canonical later",
+                    "authors": [],
+                    "abstract": "",
+                    "url": "https://arxiv.org/abs/2601.54321v1",
+                    "arxiv_id": "2601.54321v1",
+                },
+            },
+            delivered=True,
+        )
+
+        result = self.store.search_papers(query="Canonical later")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(
+            result["items"][0]["sources"], ["arxiv", "huggingface_papers"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

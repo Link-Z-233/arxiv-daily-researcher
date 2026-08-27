@@ -1,6 +1,7 @@
 """Authoritative SQLite history and resumable state for daily research."""
 
 import json
+import re
 import sqlite3
 import threading
 import uuid
@@ -156,6 +157,7 @@ class DailyResearchStore:
                     paper_id TEXT NOT NULL,
                     canonical_id TEXT NOT NULL DEFAULT '',
                     version INTEGER NOT NULL DEFAULT 0,
+                    entity_id TEXT,
                     first_seen_at TEXT NOT NULL,
                     last_seen_at TEXT NOT NULL,
                     run_id TEXT,
@@ -476,6 +478,7 @@ class DailyResearchStore:
                 "CREATE INDEX IF NOT EXISTS idx_backfill_queue_pending "
                 "ON backfill_queue(status, requested_at, target_date, backfill_id)"
             )
+            self._migrate_paper_entities(conn)
 
     @staticmethod
     def _migrate_run_scan_state(conn):
@@ -751,6 +754,507 @@ class DailyResearchStore:
         }
         if "score_audit_json" not in columns:
             conn.execute("ALTER TABLE daily_papers ADD COLUMN score_audit_json TEXT")
+
+    # ─── 跨来源论文实体 ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _decode_json_object(value: Any) -> Dict[str, Any]:
+        """Decode a persisted JSON object without letting malformed history abort a migration."""
+        try:
+            payload = json.loads(value) if value else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _decode_json_strings(value: Any) -> list[str]:
+        """Decode one persisted JSON string list, accepting malformed legacy rows."""
+        try:
+            payload = json.loads(value) if value else []
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, str)]
+
+    @staticmethod
+    def _normalized_doi(value: Any) -> Optional[str]:
+        """Return a stable DOI key, or ``None`` for non-DOI source identifiers.
+
+        DOI equality is one of the two deliberately trusted cross-source
+        merge signals.  A title, author list, or fuzzy URL is never used for
+        automatic matching: those fields vary enough across indexers to risk
+        joining two different papers.
+        """
+        text = str(value or "").strip()
+        if not text:
+            return None
+        text = re.sub(r"^doi:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(
+            r"^https?://(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE
+        )
+        text = text.split("?", 1)[0].split("#", 1)[0].strip().rstrip("/.")
+        if not re.match(r"^10\.\d{4,9}/\S+$", text, flags=re.IGNORECASE):
+            return None
+        return text.casefold()
+
+    @staticmethod
+    def _arxiv_identity_from_value(value: Any) -> tuple[Optional[str], Optional[int]]:
+        """Extract a validated arXiv canonical ID and optional explicit version."""
+        text = str(value or "").strip()
+        if not text:
+            return None, None
+        url_match = re.search(
+            r"arxiv\.org/(?:abs|pdf)/(?P<identifier>[^/?#]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if url_match:
+            text = url_match.group("identifier")
+        text = re.sub(r"^arxiv:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\.pdf$", "", text, flags=re.IGNORECASE)
+        match = re.fullmatch(
+            r"(?P<canonical>(?:\d{4}\.\d{4,5}|[A-Za-z][A-Za-z0-9.-]*/\d{7}))"
+            r"(?:v(?P<version>[1-9]\d*))?",
+            text,
+        )
+        if match is None:
+            return None, None
+        return (
+            match.group("canonical").casefold(),
+            int(match.group("version")) if match.group("version") else None,
+        )
+
+    @classmethod
+    def _paper_entity_identity_data(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        """Build trusted entity aliases for one source-level paper record.
+
+        Each source record always receives a source-local alias.  DOI and an
+        *exact* arXiv version are additionally shared aliases.  A versionless
+        arXiv link is retained only as a lookup hint and is linked later only
+        when it identifies exactly one entity; this prevents a mirror from
+        being accidentally attached to an unrelated newer revision.
+        """
+        source = str(row["source"] or "").strip().casefold()
+        paper_id = str(row["paper_id"] or "").strip()
+        canonical_id = str(row["canonical_id"] or paper_id).strip()
+        try:
+            version = max(0, int(row["version"] or 0))
+        except (TypeError, ValueError):
+            version = 0
+        metadata = cls._decode_json_object(row["paper_json"])
+
+        doi_candidates = [
+            metadata.get("doi"),
+            canonical_id if source != "arxiv" else None,
+            paper_id if source != "arxiv" else None,
+        ]
+        doi = next(
+            (normalized for value in doi_candidates if (normalized := cls._normalized_doi(value))),
+            None,
+        )
+
+        arxiv_candidates: list[Any] = []
+        if source == "arxiv":
+            arxiv_candidates.extend([paper_id, canonical_id])
+        arxiv_candidates.extend(
+            [
+                metadata.get("arxiv_id"),
+                metadata.get("arxiv_url"),
+                metadata.get("url"),
+            ]
+        )
+        arxiv_canonical: Optional[str] = None
+        arxiv_version: Optional[int] = None
+        for value in arxiv_candidates:
+            candidate_canonical, candidate_version = cls._arxiv_identity_from_value(value)
+            if candidate_canonical is None:
+                continue
+            arxiv_canonical = candidate_canonical
+            arxiv_version = candidate_version
+            if source == "arxiv" and version:
+                arxiv_version = version
+            break
+
+        aliases: list[str] = []
+        if doi:
+            aliases.append(f"doi:{doi}")
+        if arxiv_canonical and arxiv_version:
+            aliases.append(f"arxiv:{arxiv_canonical}@v{arxiv_version}")
+        local_canonical = canonical_id.casefold() or paper_id.casefold()
+        aliases.append(f"source:{source}:{local_canonical}@v{version}")
+        # ``dict.fromkeys`` preserves the strongest alias first, which makes
+        # a new entity's primary key deterministic and readable in SQLite.
+        aliases = list(dict.fromkeys(aliases))
+        return {
+            "source": source,
+            "paper_id": paper_id,
+            "canonical_id": canonical_id,
+            "version": version,
+            "metadata": metadata,
+            "doi": doi,
+            "arxiv_canonical": arxiv_canonical,
+            "arxiv_version": arxiv_version,
+            "aliases": aliases,
+            "versionless_arxiv": (
+                arxiv_canonical if arxiv_canonical and arxiv_version is None else None
+            ),
+        }
+
+    @staticmethod
+    def _dedupe_display_strings(values: list[Any]) -> list[str]:
+        """Case-insensitively merge display strings while retaining stable spelling."""
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            text = " ".join(value.split())
+            key = text.casefold()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            result.append(text)
+        return result
+
+    def _merge_paper_entities(
+        self, conn: sqlite3.Connection, entity_ids: set[str]
+    ) -> str:
+        """Join entities that a newly observed trusted alias proves identical."""
+        entity_ids = {str(item) for item in entity_ids if item}
+        if not entity_ids:
+            raise ValueError("cannot merge an empty entity set")
+        if len(entity_ids) == 1:
+            return next(iter(entity_ids))
+        placeholders = ", ".join("?" for _ in entity_ids)
+        rows = conn.execute(
+            "SELECT entity_id, created_at FROM paper_entities WHERE entity_id IN ("
+            + placeholders
+            + ")",
+            sorted(entity_ids),
+        ).fetchall()
+        if not rows:
+            raise RuntimeError("论文实体别名指向不存在的实体")
+        target = min(
+            rows, key=lambda item: (str(item["created_at"] or ""), item["entity_id"])
+        )["entity_id"]
+        for row in rows:
+            source_entity_id = row["entity_id"]
+            if source_entity_id == target:
+                continue
+            conn.execute(
+                "UPDATE paper_entity_aliases SET entity_id = ? WHERE entity_id = ?",
+                (target, source_entity_id),
+            )
+            conn.execute(
+                "UPDATE daily_papers SET entity_id = ? WHERE entity_id = ?",
+                (target, source_entity_id),
+            )
+            conn.execute(
+                "DELETE FROM paper_entities WHERE entity_id = ?", (source_entity_id,)
+            )
+        return str(target)
+
+    def _refresh_paper_entity(
+        self, conn: sqlite3.Connection, entity_id: str
+    ) -> None:
+        """Rebuild derived, safely mergeable metadata from all source records."""
+        rows = conn.execute(
+            """
+            SELECT source, paper_id, canonical_id, version, first_seen_at,
+                   last_seen_at, completed_at, paper_json, score_json
+            FROM daily_papers
+            WHERE entity_id = ?
+            ORDER BY COALESCE(completed_at, '') DESC, last_seen_at DESC, source, paper_id
+            """,
+            (entity_id,),
+        ).fetchall()
+        if not rows:
+            return
+        existing = conn.execute(
+            "SELECT * FROM paper_entities WHERE entity_id = ?", (entity_id,)
+        ).fetchone()
+        if existing is None:
+            return
+
+        titles: list[str] = []
+        abstracts: list[str] = []
+        authors: list[Any] = []
+        categories: list[Any] = []
+        keywords: list[Any] = []
+        doi_values: list[str] = []
+        arxiv_values: list[tuple[str, Optional[int]]] = []
+        first_seen_values: list[str] = []
+        last_seen_values: list[str] = []
+        completed_values: list[str] = []
+        for row in rows:
+            data = self._paper_entity_identity_data(row)
+            metadata = data["metadata"]
+            title = metadata.get("title")
+            abstract = metadata.get("abstract")
+            if isinstance(title, str) and title.strip():
+                titles.append(title)
+            if isinstance(abstract, str) and abstract.strip():
+                abstracts.append(abstract)
+            authors.extend(metadata.get("authors") or [])
+            categories.extend(metadata.get("categories") or [])
+            score = self._decode_json_object(row["score_json"])
+            keywords.extend(score.get("extracted_keywords") or [])
+            if data["doi"]:
+                doi_values.append(data["doi"])
+            if data["arxiv_canonical"]:
+                arxiv_values.append((data["arxiv_canonical"], data["arxiv_version"]))
+            if row["first_seen_at"]:
+                first_seen_values.append(str(row["first_seen_at"]))
+            if row["last_seen_at"]:
+                last_seen_values.append(str(row["last_seen_at"]))
+            if row["completed_at"]:
+                completed_values.append(str(row["completed_at"]))
+
+        merged_authors = self._dedupe_display_strings(authors)
+        merged_categories = self._dedupe_display_strings(categories)
+        merged_keywords = self._dedupe_display_strings(keywords)
+        existing_authors = self._decode_json_strings(existing["authors_json"])
+        existing_categories = self._decode_json_strings(existing["categories_json"])
+        existing_keywords = self._decode_json_strings(existing["merged_keywords_json"])
+        now = datetime.now().isoformat()
+        arxiv_canonical = (
+            arxiv_values[0][0] if arxiv_values else existing["arxiv_canonical_id"]
+        )
+        arxiv_version = (
+            arxiv_values[0][1] if arxiv_values else existing["arxiv_version"]
+        )
+        conn.execute(
+            """
+            UPDATE paper_entities
+            SET arxiv_canonical_id = ?, arxiv_version = ?, doi = ?,
+                title = ?, authors_json = ?, abstract = ?, categories_json = ?,
+                merged_keywords_json = ?, first_seen_at = ?, last_seen_at = ?,
+                completed_at = ?, updated_at = ?
+            WHERE entity_id = ?
+            """,
+            (
+                arxiv_canonical,
+                arxiv_version,
+                doi_values[0] if doi_values else existing["doi"],
+                titles[0] if titles else existing["title"],
+                json.dumps(merged_authors or existing_authors, ensure_ascii=False),
+                abstracts[0] if abstracts else existing["abstract"],
+                json.dumps(merged_categories or existing_categories, ensure_ascii=False),
+                json.dumps(merged_keywords or existing_keywords, ensure_ascii=False),
+                min(first_seen_values) if first_seen_values else existing["first_seen_at"],
+                max(last_seen_values) if last_seen_values else existing["last_seen_at"],
+                max(completed_values) if completed_values else existing["completed_at"],
+                now,
+                entity_id,
+            ),
+        )
+
+    def _sync_paper_entity_for_record(
+        self,
+        conn: sqlite3.Connection,
+        source: str,
+        paper_id: str,
+        *,
+        refresh: bool = True,
+    ) -> Optional[str]:
+        """Attach one source record to its logical paper entity inside a transaction."""
+        row = conn.execute(
+            "SELECT * FROM daily_papers WHERE source = ? AND paper_id = ?",
+            (source, paper_id),
+        ).fetchone()
+        if row is None:
+            return None
+        data = self._paper_entity_identity_data(row)
+        entity_ids: set[str] = set()
+        existing_entity_id = row["entity_id"] if "entity_id" in row.keys() else None
+        if existing_entity_id:
+            present = conn.execute(
+                "SELECT 1 FROM paper_entities WHERE entity_id = ?", (existing_entity_id,)
+            ).fetchone()
+            if present is not None:
+                entity_ids.add(str(existing_entity_id))
+        aliases = data["aliases"]
+        if aliases:
+            placeholders = ", ".join("?" for _ in aliases)
+            alias_rows = conn.execute(
+                "SELECT DISTINCT entity_id FROM paper_entity_aliases WHERE alias_key IN ("
+                + placeholders
+                + ")",
+                aliases,
+            ).fetchall()
+            entity_ids.update(str(item["entity_id"]) for item in alias_rows if item["entity_id"])
+
+        # A source may expose only an arXiv work ID without its version. It is
+        # safe to join it only while exactly one known entity has that work ID.
+        versionless_arxiv = data["versionless_arxiv"]
+        if versionless_arxiv:
+            candidates = conn.execute(
+                "SELECT DISTINCT entity_id FROM paper_entities WHERE arxiv_canonical_id = ?",
+                (versionless_arxiv,),
+            ).fetchall()
+            candidate_ids = {str(item["entity_id"]) for item in candidates}
+            if len(candidate_ids) == 1:
+                entity_ids.update(candidate_ids)
+        elif data["arxiv_canonical"] and data["arxiv_version"]:
+            # The reverse order is common in live scans: a curated source can
+            # first expose a versionless arXiv work, then the canonical API
+            # supplies v1.  Joining exactly one versionless entity is safe;
+            # later v2/v3 records see the now-versioned entity and remain
+            # distinct unless a DOI explicitly links them.
+            candidates = conn.execute(
+                """
+                SELECT DISTINCT entity_id FROM paper_entities
+                WHERE arxiv_canonical_id = ? AND arxiv_version IS NULL
+                """,
+                (data["arxiv_canonical"],),
+            ).fetchall()
+            candidate_ids = {str(item["entity_id"]) for item in candidates}
+            if len(candidate_ids) == 1:
+                entity_ids.update(candidate_ids)
+
+        if entity_ids:
+            entity_id = self._merge_paper_entities(conn, entity_ids)
+        else:
+            entity_id = uuid.uuid4().hex
+            now = datetime.now().isoformat()
+            conn.execute(
+                """
+                INSERT INTO paper_entities(
+                    entity_id, primary_key, arxiv_canonical_id, arxiv_version,
+                    doi, title, authors_json, abstract, categories_json,
+                    merged_keywords_json, first_seen_at, last_seen_at,
+                    completed_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, NULL, '[]', NULL, '[]', '[]', ?, ?, NULL, ?, ?)
+                """,
+                (
+                    entity_id,
+                    aliases[0],
+                    data["arxiv_canonical"],
+                    data["arxiv_version"],
+                    data["doi"],
+                    row["first_seen_at"] or now,
+                    row["last_seen_at"] or now,
+                    now,
+                    now,
+                ),
+            )
+
+        for alias in aliases:
+            alias_row = conn.execute(
+                "SELECT entity_id FROM paper_entity_aliases WHERE alias_key = ?", (alias,)
+            ).fetchone()
+            if alias_row is not None and alias_row["entity_id"] != entity_id:
+                # The exact alias itself is proof of identity, including a
+                # race between two workers that registered the same paper.
+                entity_id = self._merge_paper_entities(
+                    conn, {entity_id, str(alias_row["entity_id"])}
+                )
+            conn.execute(
+                """
+                INSERT INTO paper_entity_aliases(alias_key, entity_id, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(alias_key) DO UPDATE SET entity_id = excluded.entity_id
+                """,
+                (alias, entity_id, datetime.now().isoformat()),
+            )
+        conn.execute(
+            "UPDATE daily_papers SET entity_id = ? WHERE source = ? AND paper_id = ?",
+            (entity_id, source, paper_id),
+        )
+        if refresh:
+            self._refresh_paper_entity(conn, entity_id)
+        return entity_id
+
+    def _migrate_paper_entities(self, conn: sqlite3.Connection) -> None:
+        """Create and lazily backfill the logical-paper layer for upgraded databases."""
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(daily_papers)").fetchall()
+        }
+        if "entity_id" not in columns:
+            conn.execute("ALTER TABLE daily_papers ADD COLUMN entity_id TEXT")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_entities (
+                entity_id TEXT PRIMARY KEY,
+                primary_key TEXT NOT NULL UNIQUE,
+                arxiv_canonical_id TEXT,
+                arxiv_version INTEGER,
+                doi TEXT,
+                title TEXT,
+                authors_json TEXT NOT NULL DEFAULT '[]',
+                abstract TEXT,
+                categories_json TEXT NOT NULL DEFAULT '[]',
+                merged_keywords_json TEXT NOT NULL DEFAULT '[]',
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                completed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_entity_aliases (
+                alias_key TEXT PRIMARY KEY,
+                entity_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_papers_entity ON daily_papers(entity_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_paper_entities_arxiv ON paper_entities(arxiv_canonical_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_paper_entities_doi ON paper_entities(doi)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_paper_entity_aliases_entity "
+            "ON paper_entity_aliases(entity_id)"
+        )
+
+        missing_rows = conn.execute(
+            """
+            SELECT source, paper_id
+            FROM daily_papers
+            WHERE entity_id IS NULL
+               OR NOT EXISTS (
+                   SELECT 1 FROM paper_entities entities
+                   WHERE entities.entity_id = daily_papers.entity_id
+               )
+            ORDER BY first_seen_at, source, paper_id
+            """
+        ).fetchall()
+        entity_ids: set[str] = set()
+        for row in missing_rows:
+            entity_id = self._sync_paper_entity_for_record(
+                conn, row["source"], row["paper_id"], refresh=False
+            )
+            if entity_id:
+                entity_ids.add(entity_id)
+        for entity_id in entity_ids:
+            self._refresh_paper_entity(conn, entity_id)
+
+    def _ensure_paper_entity_coverage(self) -> None:
+        """Backfill rows inserted by older tools or direct compatibility callers."""
+        with self._lock, self._connect() as conn:
+            missing = conn.execute(
+                """
+                SELECT 1 FROM daily_papers
+                WHERE entity_id IS NULL
+                   OR NOT EXISTS (
+                       SELECT 1 FROM paper_entities entities
+                       WHERE entities.entity_id = daily_papers.entity_id
+                   )
+                LIMIT 1
+                """
+            ).fetchone()
+            if missing is not None:
+                self._migrate_paper_entities(conn)
 
     @staticmethod
     def _migrate_delivery_identity(conn):
@@ -1495,6 +1999,10 @@ class DailyResearchStore:
                     ),
                 )
 
+            # Preserve the source-specific legacy report while refreshing the
+            # logical entity's shared metadata/keyword projection.
+            self._sync_paper_entity_for_record(conn, source, paper_id)
+
             if delivered:
                 conn.execute(
                     """
@@ -1657,12 +2165,15 @@ class DailyResearchStore:
 
             qualified = bool(score_payload.get("is_qualified", False))
             pdf_url = str(payload.get("pdf_url") or "").strip()
+            arxiv_canonical, _ = self._arxiv_identity_from_value(
+                payload.get("arxiv_id") or payload.get("arxiv_url")
+            )
+            has_pdf_access = bool(pdf_url or arxiv_canonical)
             if (
                 include_deep_analysis
-                and str(row["source"] or "").lower() == "arxiv"
                 and score_ready
                 and qualified
-                and pdf_url
+                and has_pdf_access
                 and (
                     row["analysis_status"] != "succeeded"
                     or not str(row["analysis_json"] or "").strip()
@@ -2874,6 +3385,142 @@ class DailyResearchStore:
         )
         return f"%{escaped}%"
 
+    def _entity_variants_with_conn(
+        self, conn: sqlite3.Connection, entity_id: str
+    ) -> list[Dict[str, Any]]:
+        """Return every source-level view of one entity, including non-mergeable output."""
+        rows = conn.execute(
+            """
+            SELECT dp.source, dp.paper_id, dp.canonical_id, dp.version,
+                   dp.completed_at, dp.paper_json, dp.score_json, dp.abstract_cn,
+                   dp.analysis_json, dp.score_status, dp.translation_status,
+                   dp.analysis_status, dp.last_error,
+                   deliveries.report_path, deliveries.report_at, deliveries.delivered_at,
+                   (SELECT pp.preference FROM paper_preferences pp
+                    WHERE pp.source = dp.source AND pp.paper_id = dp.paper_id) AS preference
+            FROM daily_papers dp
+            LEFT JOIN paper_deliveries deliveries
+              ON deliveries.source = dp.source AND deliveries.paper_id = dp.paper_id
+            WHERE dp.entity_id = ?
+            ORDER BY COALESCE(dp.completed_at, '') DESC, dp.last_seen_at DESC,
+                     dp.source, dp.paper_id
+            """,
+            (entity_id,),
+        ).fetchall()
+        variants: list[Dict[str, Any]] = []
+        for row in rows:
+            metadata = self._decode_json_object(row["paper_json"])
+            score = self._decode_json_object(row["score_json"])
+            analysis = self._decode_json_object(row["analysis_json"])
+            variants.append(
+                {
+                    "source": row["source"],
+                    "paper_id": row["paper_id"],
+                    "canonical_id": row["canonical_id"],
+                    "version": int(row["version"] or 0),
+                    "completed_at": row["completed_at"],
+                    "title": str(metadata.get("title") or row["paper_id"]),
+                    "authors": self._dedupe_display_strings(metadata.get("authors") or []),
+                    "abstract": str(metadata.get("abstract") or ""),
+                    "abstract_cn": str(row["abstract_cn"] or ""),
+                    "url": metadata.get("url"),
+                    "pdf_url": metadata.get("pdf_url"),
+                    "doi": metadata.get("doi"),
+                    "arxiv_id": metadata.get("arxiv_id"),
+                    "arxiv_url": metadata.get("arxiv_url"),
+                    "categories": self._dedupe_display_strings(
+                        metadata.get("categories") or []
+                    ),
+                    "published_date": metadata.get("published_date"),
+                    "total_score": score.get("total_score"),
+                    "is_qualified": score.get("is_qualified"),
+                    "strategy_id": score.get("strategy_id"),
+                    "tldr": score.get("tldr"),
+                    "extracted_keywords": self._dedupe_display_strings(
+                        score.get("extracted_keywords") or []
+                    ),
+                    "analysis": analysis,
+                    "score_status": row["score_status"],
+                    "translation_status": row["translation_status"],
+                    "analysis_status": row["analysis_status"],
+                    "last_error": row["last_error"],
+                    "report_path": row["report_path"],
+                    "report_at": row["report_at"],
+                    "delivered_at": row["delivered_at"],
+                    "preference": row["preference"],
+                }
+            )
+        return variants
+
+    def get_entity_variants(self, entity_id: str) -> list[Dict[str, Any]]:
+        """Public read API for source-specific TL;DRs, translations and analyses."""
+        self._ensure_paper_entity_coverage()
+        with self._connect() as conn:
+            return self._entity_variants_with_conn(conn, str(entity_id))
+
+    def get_paper_entity(
+        self, source: str, paper_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the logical paper that owns a source-level record, if present."""
+        self._ensure_paper_entity_coverage()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT entities.* FROM daily_papers papers
+                JOIN paper_entities entities ON entities.entity_id = papers.entity_id
+                WHERE papers.source = ? AND papers.paper_id = ?
+                """,
+                (str(source).strip().casefold(), paper_id),
+            ).fetchone()
+            if row is None:
+                return None
+            variants = self._entity_variants_with_conn(conn, row["entity_id"])
+        return self._entity_search_item(row, variants)
+
+    def _entity_search_item(
+        self, row: sqlite3.Row, variants: list[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Shape one entity and all of its source variants for archive consumers."""
+        representative = variants[0] if variants else {}
+        sources = list(dict.fromkeys(item["source"] for item in variants))
+        preferences = {item.get("preference") for item in variants}
+        preference = "like" if "like" in preferences else (
+            "dislike" if "dislike" in preferences else None
+        )
+        return {
+            "entity_id": row["entity_id"],
+            # Compatibility fields point to the newest source variant. New
+            # callers should use ``sources``/``variants`` instead of treating
+            # this representative as a destructive merge.
+            "source": representative.get("source"),
+            "sources": sources,
+            "source_count": len(sources),
+            "paper_id": representative.get("paper_id"),
+            "canonical_id": representative.get("canonical_id"),
+            "version": representative.get("version"),
+            "completed_at": row["completed_at"] or representative.get("completed_at"),
+            "title": str(row["title"] or representative.get("title") or "—"),
+            "authors": self._decode_json_strings(row["authors_json"]),
+            "abstract": str(row["abstract"] or representative.get("abstract") or ""),
+            "doi": row["doi"],
+            "arxiv_canonical_id": row["arxiv_canonical_id"],
+            "arxiv_version": row["arxiv_version"],
+            "categories": self._decode_json_strings(row["categories_json"]),
+            "merged_keywords": self._decode_json_strings(row["merged_keywords_json"]),
+            "url": representative.get("url"),
+            "pdf_url": representative.get("pdf_url"),
+            "published_date": representative.get("published_date"),
+            "total_score": representative.get("total_score"),
+            "is_qualified": representative.get("is_qualified"),
+            "strategy_id": representative.get("strategy_id"),
+            "tldr": representative.get("tldr"),
+            "extracted_keywords": self._decode_json_strings(
+                row["merged_keywords_json"]
+            ),
+            "preference": preference,
+            "variants": variants,
+        }
+
     def search_papers(
         self,
         *,
@@ -2886,118 +3533,82 @@ class DailyResearchStore:
         limit: int = 50,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        """Full-archive metadata search over completed papers.
+        """Search logical papers while keeping each source's output inspectable.
 
-        The query matches literally (LIKE wildcards escaped) against the
-        paper JSON (title, authors, abstract) and the stored score JSON
-        (TLDR, extracted keywords). Data is never deleted, so this is the
-        primary way back into old reports as the archive grows.
+        The outer query paginates one ``paper_entities`` row per logical
+        paper.  Source, date and score filters are evaluated against at least
+        one completed source record; text search spans all variants.  This
+        prevents a DOI/arXiv mirror pair from occupying two archive rows while
+        retaining both independent TL;DRs, translations and analyses.
         """
-        conditions = ["dp.completed_at IS NOT NULL"]
-        params: list[Any] = []
+        self._ensure_paper_entity_coverage()
+        conditions: list[str] = []
+        variant_conditions = ["dp.completed_at IS NOT NULL"]
+        variant_params: list[Any] = []
+        normalized_source = (source or "").strip().casefold()
+        if normalized_source:
+            variant_conditions.append("dp.source = ?")
+            variant_params.append(normalized_source)
+        if min_score is not None:
+            variant_conditions.append("json_extract(dp.score_json, '$.total_score') >= ?")
+            variant_params.append(float(min_score))
+        if completed_from:
+            variant_conditions.append("substr(dp.completed_at, 1, 10) >= ?")
+            variant_params.append(str(completed_from))
+        if completed_to:
+            variant_conditions.append("substr(dp.completed_at, 1, 10) <= ?")
+            variant_params.append(str(completed_to))
+        conditions.append(
+            "EXISTS (SELECT 1 FROM daily_papers dp WHERE dp.entity_id = pe.entity_id AND "
+            + " AND ".join(variant_conditions)
+            + ")"
+        )
+        params: list[Any] = [*variant_params]
 
         stripped = (query or "").strip()
         if stripped:
             pattern = self._like_pattern(stripped)
             conditions.append(
-                "(dp.paper_json LIKE ? ESCAPE '\\' OR dp.score_json LIKE ? ESCAPE '\\')"
+                """EXISTS (
+                    SELECT 1 FROM daily_papers dp
+                    WHERE dp.entity_id = pe.entity_id
+                      AND (dp.paper_json LIKE ? ESCAPE '\\'
+                           OR dp.score_json LIKE ? ESCAPE '\\')
+                )"""
             )
             params.extend([pattern, pattern])
-        normalized_source = (source or "").strip().lower()
-        if normalized_source:
-            conditions.append("dp.source = ?")
-            params.append(normalized_source)
         if liked_only:
             conditions.append(
-                "EXISTS (SELECT 1 FROM paper_preferences pp "
-                "WHERE pp.source = dp.source "
-                "AND pp.paper_id = dp.paper_id "
-                "AND pp.preference = 'like')"
+                """EXISTS (
+                    SELECT 1 FROM paper_preferences pp
+                    JOIN daily_papers dp
+                      ON dp.source = pp.source AND dp.paper_id = pp.paper_id
+                    WHERE dp.entity_id = pe.entity_id AND pp.preference = 'like'
+                )"""
             )
-        if min_score is not None:
-            conditions.append(
-                "json_extract(dp.score_json, '$.total_score') >= ?"
-            )
-            params.append(float(min_score))
-        if completed_from:
-            conditions.append("substr(dp.completed_at, 1, 10) >= ?")
-            params.append(str(completed_from))
-        if completed_to:
-            conditions.append("substr(dp.completed_at, 1, 10) <= ?")
-            params.append(str(completed_to))
 
         where_clause = " AND ".join(conditions)
         bounded_limit = max(1, min(int(limit), 200))
         bounded_offset = max(0, int(offset))
-
         with self._connect() as conn:
             total_row = conn.execute(
-                f"SELECT COUNT(*) FROM daily_papers dp WHERE {where_clause}", params
+                f"SELECT COUNT(*) FROM paper_entities pe WHERE {where_clause}", params
             ).fetchone()
             rows = conn.execute(
                 f"""
-                SELECT dp.source, dp.paper_id, dp.canonical_id, dp.version,
-                       dp.completed_at, dp.paper_json, dp.score_json,
-                       (SELECT pp.preference FROM paper_preferences pp
-                        WHERE pp.source = dp.source
-                          AND pp.paper_id = dp.paper_id) AS preference
-                FROM daily_papers dp
+                SELECT pe.* FROM paper_entities pe
                 WHERE {where_clause}
-                ORDER BY dp.completed_at DESC
+                ORDER BY COALESCE(pe.completed_at, pe.last_seen_at) DESC, pe.entity_id DESC
                 LIMIT ? OFFSET ?
                 """,
                 [*params, bounded_limit, bounded_offset],
             ).fetchall()
-
-        items = []
-        for row in rows:
-            try:
-                metadata = (
-                    json.loads(row["paper_json"]) if row["paper_json"] else {}
+            items = [
+                self._entity_search_item(
+                    row, self._entity_variants_with_conn(conn, row["entity_id"])
                 )
-            except (TypeError, ValueError, json.JSONDecodeError):
-                metadata = {}
-            if not isinstance(metadata, dict):
-                metadata = {}
-            try:
-                score = json.loads(row["score_json"]) if row["score_json"] else {}
-            except (TypeError, ValueError, json.JSONDecodeError):
-                score = {}
-            if not isinstance(score, dict):
-                score = {}
-            items.append(
-                {
-                    "source": row["source"],
-                    "paper_id": row["paper_id"],
-                    "canonical_id": row["canonical_id"],
-                    "version": row["version"],
-                    "completed_at": row["completed_at"],
-                    "title": str(metadata.get("title") or row["paper_id"]),
-                    "authors": [
-                        author
-                        for author in (metadata.get("authors") or [])
-                        if isinstance(author, str)
-                    ],
-                    "url": metadata.get("url"),
-                    "pdf_url": metadata.get("pdf_url"),
-                    "categories": [
-                        category
-                        for category in (metadata.get("categories") or [])
-                        if isinstance(category, str)
-                    ],
-                    "published_date": metadata.get("published_date"),
-                    "total_score": score.get("total_score"),
-                    "is_qualified": score.get("is_qualified"),
-                    "strategy_id": score.get("strategy_id"),
-                    "tldr": score.get("tldr"),
-                    "extracted_keywords": [
-                        keyword
-                        for keyword in (score.get("extracted_keywords") or [])
-                        if isinstance(keyword, str)
-                    ],
-                    "preference": row["preference"],
-                }
-            )
+                for row in rows
+            ]
         return {"total": int(total_row[0]), "items": items}
 
     def get_source_health(self, window: int = 20) -> Dict[str, Dict[str, Any]]:
@@ -3289,6 +3900,7 @@ class DailyResearchStore:
                         """,
                         (run_id, now, source, paper_id),
                     )
+                    self._sync_paper_entity_for_record(conn, source, paper_id)
 
             for entry in entries:
                 try:
@@ -3954,6 +4566,9 @@ class DailyResearchStore:
                         json.dumps(paper.to_dict(), ensure_ascii=False),
                     ),
                 )
+                self._sync_paper_entity_for_record(
+                    conn, normalized_source, paper.paper_id
+                )
                 registered += 1
         return registered
 
@@ -4206,6 +4821,7 @@ class DailyResearchStore:
                     analysis_fingerprint,
                 ),
             )
+            self._sync_paper_entity_for_record(conn, source, paper.paper_id)
 
     def update_scored_paper(
         self,
@@ -4286,6 +4902,7 @@ class DailyResearchStore:
                     fingerprints.get("analysis"),
                 ),
             )
+            self._sync_paper_entity_for_record(conn, source, scored["paper_id"])
 
     def update_score(
         self,
@@ -4322,6 +4939,7 @@ class DailyResearchStore:
                     scored["paper_id"],
                 ),
             )
+            self._sync_paper_entity_for_record(conn, source, scored["paper_id"])
 
     def update_score_tldr(
         self,
@@ -4373,6 +4991,7 @@ class DailyResearchStore:
                     paper_id,
                 ),
             )
+            self._sync_paper_entity_for_record(conn, source, paper_id)
 
     def update_translation(
         self,
@@ -4496,6 +5115,7 @@ class DailyResearchStore:
                 """,
                 (run_id, now, error[:4000], stage, stage, stage, stage, source, paper_id),
             )
+            self._sync_paper_entity_for_record(conn, source, paper_id)
 
     def mark_completed(self, run_id: str, source: str, paper_id: str):
         now = datetime.now().isoformat()
@@ -4508,6 +5128,7 @@ class DailyResearchStore:
                 """,
                 (run_id, now, source, paper_id),
             )
+            self._sync_paper_entity_for_record(conn, source, paper_id)
 
     def hydrate_scored_paper(
         self, paper: "PaperMetadata", record: sqlite3.Row, require_translation: bool = True
