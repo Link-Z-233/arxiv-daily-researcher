@@ -195,6 +195,8 @@ docker compose up -d --build
 
 Open <http://127.0.0.1:8503> and configure LLMs, sources, keywords, scoring, notifications, and the run time. The WebUI binds to the local host, which works well with a VPN or an authenticated reverse proxy.
 
+Docker writes `data`, `logs`, `configs`, and `.env` as the `PUID` / `PGID` in `.env`, preventing root-owned files on NAS bind mounts. When upgrading from an old root-running image, set `ADR_REPAIR_OWNERSHIP=true` for one start, verify ownership, then remove it.
+
 <details>
 <summary><b>Manual configuration</b></summary>
 

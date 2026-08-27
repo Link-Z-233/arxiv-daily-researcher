@@ -44,33 +44,38 @@ echo "Timezone: $TZ"
 echo "Cron Schedule: $CRON_SCHEDULE"
 echo "Run on Startup: $RUN_ON_STARTUP"
 
-# Ensure data directories exist
-mkdir -p /app/data/reports/daily_research/markdown \
-         /app/data/reports/daily_research/html \
-         /app/data/reports/trend_research/markdown \
-         /app/data/reports/trend_research/html \
-         /app/data/reports/keyword_trend/markdown \
-         /app/data/reports/keyword_trend/html \
-         /app/data/history \
-         /app/data/reference_pdfs /app/data/downloaded_pdfs \
-         /app/logs
-
 adr_configure_runtime_user
+
+# Create and verify all host-mounted application paths as the mapped NAS user.
+# Root only touches container-internal cron/account files below, so new reports,
+# SQLite files, logs and configuration backups never become root-owned.
+for APP_DIRECTORY in \
+    /app/data \
+    /app/data/reports/daily_research/markdown \
+    /app/data/reports/daily_research/html \
+    /app/data/reports/trend_research/markdown \
+    /app/data/reports/trend_research/html \
+    /app/data/reports/keyword_trend/markdown \
+    /app/data/reports/keyword_trend/html \
+    /app/data/history \
+    /app/data/reference_pdfs \
+    /app/data/downloaded_pdfs \
+    /app/logs \
+    /app/configs; do
+    adr_prepare_writable_directory "$APP_DIRECTORY"
+done
+adr_require_writable_file_if_present /app/.env
 
 # Clean up stale log files
 LOG_KEEP_DAYS="${LOG_KEEP_DAYS:-30}"
-find /app/logs -name "cron_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "startup_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "daily_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "trend_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "webdav_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "keyword_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "legacy_import_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "history_data_repair_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "history_omission_scan_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "supplement_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "backfill_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
-find /app/logs -name "update_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
+for LOG_PATTERN in \
+    'cron_*.log' 'startup_*.log' 'daily_*.log' 'trend_*.log' \
+    'webdav_*.log' 'keyword_*.log' 'legacy_import_*.log' \
+    'history_data_repair_*.log' 'history_omission_scan_*.log' \
+    'supplement_*.log' 'backfill_*.log' 'update_*.log'; do
+    adr_run_as_user find /app/logs -name "$LOG_PATTERN" -type f \
+        -mtime +"$LOG_KEEP_DAYS" -delete 2>/dev/null || true
+done
 
 # ==================== Interactive Setup Wizard ====================
 # Run setup wizard on first deployment (no .env file) or when SETUP_WIZARD=true
@@ -183,7 +188,7 @@ adr_run_as_user touch "$WATCHER_HEARTBEAT"
 # Status receipts and archived restart markers are bounded operational audit
 # data. Run a startup pass so stale files are cleaned even when no new WebUI
 # request is submitted for a while.
-python /app/src/utils/webui_trigger.py \
+adr_run_as_user python /app/src/utils/webui_trigger.py \
     --maintain-trigger-files --data-dir /app/data \
     || echo "[trigger-watcher] Trigger-file maintenance failed; will retry on the next startup/request"
 
@@ -194,7 +199,8 @@ for CLAIMED_FILE in "$TRIGGER_DIR"/*.running; do
     [ -e "$CLAIMED_FILE" ] || continue
     REQUEST_FILE="${CLAIMED_FILE%.running}.json"
     if [ ! -e "$REQUEST_FILE" ]; then
-        mv "$CLAIMED_FILE" "$REQUEST_FILE" || echo "[trigger-watcher] Failed to recover $CLAIMED_FILE"
+        adr_run_as_user mv "$CLAIMED_FILE" "$REQUEST_FILE" \
+            || echo "[trigger-watcher] Failed to recover $CLAIMED_FILE"
     fi
 done
 
@@ -215,8 +221,8 @@ trigger_watcher() {
                 RESTART_ARCHIVE="$RESTART_MARKER.done-$(date +%Y%m%dT%H%M%S%N)-$RESTART_ARCHIVE_SUFFIX"
                 RESTART_ARCHIVE_SUFFIX=$((RESTART_ARCHIVE_SUFFIX + 1))
             done
-            if mv "$RESTART_MARKER" "$RESTART_ARCHIVE" 2>/dev/null; then
-                python /app/src/utils/webui_trigger.py \
+            if adr_run_as_user mv "$RESTART_MARKER" "$RESTART_ARCHIVE" 2>/dev/null; then
+                adr_run_as_user python /app/src/utils/webui_trigger.py \
                     --maintain-trigger-files --data-dir /app/data \
                     || echo "[trigger-watcher] Trigger-file maintenance failed after restart request"
                 echo "[trigger-watcher] WebUI restart request: restarting container..."
@@ -227,12 +233,12 @@ trigger_watcher() {
                 echo "[trigger-watcher] Failed to archive WebUI restart request; leaving it queued"
             fi
         fi
-        REQUEST_FILE=$(find "$TRIGGER_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | head -n 1)
+        REQUEST_FILE=$(adr_run_as_user find "$TRIGGER_DIR" -maxdepth 1 -type f -name '*.json' -print | sort | head -n 1)
         if [ -n "$REQUEST_FILE" ]; then
             CLAIMED_FILE="${REQUEST_FILE%.json}.running"
             # Atomic claim prevents a future watcher implementation or a manual
             # operator invocation from executing the same request twice.
-            if mv "$REQUEST_FILE" "$CLAIMED_FILE" 2>/dev/null; then
+            if adr_run_as_user mv "$REQUEST_FILE" "$CLAIMED_FILE" 2>/dev/null; then
                 LOG_FILE="/app/logs/manual_$(date +%Y%m%d_%H%M%S).log"
                 echo "[trigger-watcher] Claimed request: $CLAIMED_FILE"
                 # Run synchronously to preserve FIFO ordering and avoid two

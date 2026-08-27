@@ -195,6 +195,8 @@ docker compose up -d --build
 
 打开 <http://127.0.0.1:8503>，填写 LLM、数据源、关键词、评分、通知和运行时间。WebUI 默认绑定本机地址，适合配合 VPN 或带认证的反向代理访问。
 
+Docker 会以 `.env` 中的 `PUID` / `PGID` 写入 `data`、`logs`、`configs` 和 `.env`，避免 NAS 挂载目录出现 root 所有文件。升级自旧镜像且已有 root 所有文件时，可临时加入 `ADR_REPAIR_OWNERSHIP=true` 启动一次，确认权限恢复后删除该项。
+
 <details>
 <summary><b>手动配置</b></summary>
 
