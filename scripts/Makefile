@@ -21,11 +21,12 @@ logs:
 
 # 立即运行一次 (容器运行完即退出)
 run-once:
-	docker compose -f $(COMPOSE_FILE) run --rm -e MODE=run-once arxiv-researcher
+	docker compose -f $(COMPOSE_FILE) run --rm -e MODE=run-once arxiv-daily-researcher
 
 # 启动并立即运行一次 (之后继续按计划定时运行)
 run-now:
-	docker compose -f $(COMPOSE_FILE) up -d -e RUN_ON_STARTUP=true
+	docker compose -f $(COMPOSE_FILE) up -d
+	docker compose -f $(COMPOSE_FILE) exec -T --user adr arxiv-daily-researcher python main.py
 
 # 多架构构建 (支持 NAS ARM64)
 build-multi:
