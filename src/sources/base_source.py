@@ -12,7 +12,7 @@ import threading
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
@@ -100,6 +100,9 @@ class PaperMetadata:
     canonical_id: Optional[str] = None  # 稳定的论文标识（arXiv 去除 vN 后的 ID）
     version: Optional[int] = None  # arXiv 版本号，如 1、2
     updated_date: Optional[datetime] = None  # arXiv 最后更新时间
+    # 论文在该数据源中出现的日期。多数来源等于发布日期；对于 Hugging
+    # Face Papers 等精选日榜，它是日榜日期，用于过去日报和遗漏扫描。
+    source_date: Optional[date] = None
 
     def __post_init__(self):
         if self.source == "arxiv":
@@ -109,6 +112,8 @@ class PaperMetadata:
                 self.version = parsed_version
         else:
             self.canonical_id = self.canonical_id or self.paper_id
+        if self.source_date is None and self.published_date is not None:
+            self.source_date = self.published_date.date()
 
     @property
     def identity(self) -> tuple[str, Optional[int]]:
@@ -163,6 +168,7 @@ class PaperMetadata:
             "canonical_id": self.canonical_id,
             "version": self.version,
             "updated_date": self.updated_date.isoformat() if self.updated_date else None,
+            "source_date": self.source_date.isoformat() if self.source_date else None,
         }
 
     @classmethod
@@ -210,6 +216,19 @@ class PaperMetadata:
                     f"paper metadata field {name} must be an ISO timestamp"
                 ) from exc
 
+        def parsed_date(name: str) -> Optional[date]:
+            value = payload.get(name)
+            if value is None:
+                return None
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"paper metadata field {name} must be an ISO date")
+            try:
+                return date.fromisoformat(value.strip())
+            except ValueError as exc:
+                raise ValueError(
+                    f"paper metadata field {name} must be an ISO date"
+                ) from exc
+
         version = payload.get("version")
         if version is not None:
             if isinstance(version, bool) or not isinstance(version, int) or version < 1:
@@ -233,6 +252,7 @@ class PaperMetadata:
             canonical_id=optional_text("canonical_id"),
             version=version,
             updated_date=parsed_datetime("updated_date"),
+            source_date=parsed_date("source_date"),
         )
 
 

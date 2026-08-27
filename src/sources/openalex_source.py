@@ -8,7 +8,7 @@ OpenAlex 期刊数据源
 import logging
 import re
 import requests
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, List, Dict, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
@@ -209,6 +209,64 @@ class OpenAlexSource(BasePaperSource):
         logger.info(f"[OpenAlex] 总计发现 {len(all_papers)} 篇新论文")
         return all_papers
 
+    def fetch_papers_between(
+        self,
+        date_from: date,
+        date_to: date,
+        journals: Optional[List[str]] = None,
+    ) -> List[PaperMetadata]:
+        """Fetch configured journal works in an inclusive publication range.
+
+        This path is used by past daily reports and omission scans. It bypasses
+        legacy JSON history because SQLite performs exact source/version
+        de-duplication after the complete range has been fetched.
+        """
+        if not isinstance(date_from, date) or not isinstance(date_to, date):
+            raise ValueError("OpenAlex 历史范围必须是 date")
+        if date_from > date_to:
+            raise ValueError("OpenAlex 历史范围起始日期不能晚于结束日期")
+
+        selected = list(journals) if journals is not None else list(self.journals)
+        if not selected:
+            return []
+        normalized: List[str] = []
+        for configured_code in selected:
+            if not isinstance(configured_code, str) or not configured_code.strip():
+                raise OpenAlexFetchError(
+                    f"OpenAlex 期刊代码必须是非空字符串: {configured_code!r}"
+                )
+            code = configured_code.strip().lower()
+            if code not in self.journal_catalog:
+                raise OpenAlexFetchError(f"OpenAlex 未知期刊代码: {configured_code}")
+            if code not in normalized:
+                normalized.append(code)
+
+        logger.info(
+            "[OpenAlex] 历史期刊扫描: %s 至 %s（期刊: %s）",
+            date_from,
+            date_to,
+            normalized,
+        )
+        all_papers: List[PaperMetadata] = []
+        for journal_code in normalized:
+            journal_info = self.get_journal_info(journal_code)
+            try:
+                papers = self._fetch_journal_papers(
+                    issn_list=journal_info["issn"],
+                    journal_code=journal_code,
+                    journal_name=journal_info["full_name"],
+                    from_date=date_from.isoformat(),
+                    to_date=date_to.isoformat(),
+                    filter_processed=False,
+                )
+            except Exception as exc:
+                raise OpenAlexFetchError(
+                    f"OpenAlex 期刊 {journal_code} ({journal_info['display_name']}) "
+                    f"历史抓取未完成: {exc}"
+                ) from exc
+            all_papers.extend(papers)
+        return all_papers
+
     def _fetch_from_arxiv(
         self, arxiv_id: str, journal_code: str, journal_name: str, doi: str
     ) -> Optional[PaperMetadata]:
@@ -361,7 +419,13 @@ class OpenAlexSource(BasePaperSource):
         )
 
     def _fetch_journal_papers(
-        self, issn_list: List[str], journal_code: str, journal_name: str, from_date: str
+        self,
+        issn_list: List[str],
+        journal_code: str,
+        journal_name: str,
+        from_date: str,
+        to_date: Optional[str] = None,
+        filter_processed: bool = True,
     ) -> List[PaperMetadata]:
         """
         抓取单个期刊的论文。
@@ -403,8 +467,11 @@ class OpenAlexSource(BasePaperSource):
                 raise OpenAlexFetchError("OpenAlex 分页 cursor 重复，无法确认抓取完整性")
             seen_cursors.add(cursor)
             page += 1
+            date_filter = f"from_publication_date:{from_date}"
+            if to_date:
+                date_filter += f",to_publication_date:{to_date}"
             params = {
-                "filter": f"primary_location.source.issn:{issn_filter},from_publication_date:{from_date}",
+                "filter": f"primary_location.source.issn:{issn_filter},{date_filter}",
                 "per-page": per_page,
                 "cursor": cursor,
                 "sort": "publication_date:desc",
@@ -454,7 +521,7 @@ class OpenAlexSource(BasePaperSource):
 
                 # 去重检查必须在身份字段验证之后进行。无身份条目既无法
                 # 去重，也不能安全地被当作“已处理”。
-                if self.is_processed(doi):
+                if filter_processed and self.is_processed(doi):
                     continue
 
                 # 提取 URL
@@ -573,7 +640,9 @@ class OpenAlexSource(BasePaperSource):
 
                 # 🎯 优先策略：如果找到 arXiv 版本，使用 ArXiv 源获取完整元数据
                 if arxiv_id:
-                    if self._has_legacy_arxiv_history(arxiv_history_id or arxiv_id):
+                    if filter_processed and self._has_legacy_arxiv_history(
+                        arxiv_history_id or arxiv_id
+                    ):
                         logger.info(
                             "    ↪ [%s...] 已由旧版历史记录处理，跳过重复期刊论文",
                             title[:30],
@@ -586,6 +655,7 @@ class OpenAlexSource(BasePaperSource):
                         arxiv_id, journal_code, journal_name, doi
                     )
                     if arxiv_metadata:
+                        arxiv_metadata.source_date = published_date.date()
                         papers.append(arxiv_metadata)
                         continue  # 跳过 OpenAlex 的元数据提取，直接处理下一篇论文
                     logger.warning(f"    ⚠️  从 ArXiv 获取失败，回退到 OpenAlex 元数据")

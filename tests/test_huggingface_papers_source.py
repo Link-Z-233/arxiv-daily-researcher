@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -142,6 +142,29 @@ class HuggingFacePapersFetchTests(unittest.TestCase):
         self.assertEqual(
             [day.isoformat() for day in dates],
             ["2026-08-11", "2026-08-10", "2026-08-09", "2026-08-08", "2026-08-07"],
+        )
+
+    def test_historical_range_fetches_each_feed_and_persists_source_date(self):
+        requested_dates = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = self._source(temp_dir)
+
+            def entries(feed_date):
+                requested_dates.append(feed_date)
+                return [_entry(int(feed_date.strftime("%d")))]
+
+            source._entries_for_feed_date = entries
+            papers = source.fetch_papers_between(
+                date(2026, 8, 10), date(2026, 8, 12)
+            )
+
+        self.assertEqual(
+            requested_dates,
+            [date(2026, 8, 12), date(2026, 8, 11), date(2026, 8, 10)],
+        )
+        self.assertEqual(
+            {paper.source_date for paper in papers},
+            {date(2026, 8, 10), date(2026, 8, 11), date(2026, 8, 12)},
         )
 
     def test_processed_hf_items_use_own_history_and_are_not_returned_again(self):

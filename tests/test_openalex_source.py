@@ -1,7 +1,7 @@
 import sys
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -93,6 +93,24 @@ class OpenAlexFetchTests(unittest.TestCase):
 
         self.assertEqual(source.session.headers.get("Authorization"), "Bearer test-key")
         self.assertNotIn("api_key", requests[0])
+
+    def test_historical_range_uses_inclusive_date_filters_and_ignores_legacy_history(self):
+        requests = []
+        work = _work(1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = OpenAlexSource(Path(temp_dir), journals=["prl"])
+            source.history[work["doi"]] = "2026-08-12T00:00:00"
+            source._api_request = (
+                lambda _url, params: requests.append(params.copy())
+                or {"results": [work]}
+            )
+            papers = source.fetch_papers_between(
+                date(2026, 8, 10), date(2026, 8, 12), journals=["prl"]
+            )
+
+        self.assertEqual([paper.paper_id for paper in papers], [work["doi"]])
+        self.assertIn("from_publication_date:2026-08-10", requests[0]["filter"])
+        self.assertIn("to_publication_date:2026-08-12", requests[0]["filter"])
 
     def test_second_journal_failure_does_not_return_partial_first_journal_results(self):
         with tempfile.TemporaryDirectory() as temp_dir:

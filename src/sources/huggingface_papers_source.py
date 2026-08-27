@@ -288,6 +288,7 @@ class HuggingFacePapersSource(BasePaperSource):
             pdf_url=f"https://arxiv.org/pdf/{arxiv_id}.pdf",
             arxiv_id=arxiv_id,
             arxiv_url=arxiv_url,
+            source_date=feed_date,
         )
 
     def _validated_next_page(
@@ -401,6 +402,37 @@ class HuggingFacePapersSource(BasePaperSource):
         )
         logger.info("  抓取策略: 每个日期完整跟随分页至空页（不受结果数量限制）")
 
+        return self._fetch_feed_dates(feed_dates, filter_processed=True)
+
+    def fetch_papers_between(
+        self, date_from: date, date_to: date
+    ) -> List[PaperMetadata]:
+        """Fetch every dated feed in an inclusive historical range.
+
+        Historical scans deliberately bypass the legacy JSON filter. The
+        caller compares the returned source identities with SQLite, which is
+        the authoritative delivery ledger.
+        """
+        if not isinstance(date_from, date) or not isinstance(date_to, date):
+            raise ValueError("Hugging Face Papers 历史范围必须是 date")
+        if date_from > date_to:
+            raise ValueError("Hugging Face Papers 历史范围起始日期不能晚于结束日期")
+        feed_dates = [
+            date_to - timedelta(days=offset)
+            for offset in range((date_to - date_from).days + 1)
+        ]
+        logger.info(
+            "[Hugging Face Papers] 历史日榜扫描: %s 至 %s（%s 天）",
+            date_from,
+            date_to,
+            len(feed_dates),
+        )
+        return self._fetch_feed_dates(feed_dates, filter_processed=False)
+
+    def _fetch_feed_dates(
+        self, feed_dates: List[date], *, filter_processed: bool
+    ) -> List[PaperMetadata]:
+        """Fetch and de-duplicate an explicit ordered list of feed dates."""
         papers: List[PaperMetadata] = []
         seen_paper_ids = set()
         for feed_date in feed_dates:
@@ -412,7 +444,7 @@ class HuggingFacePapersSource(BasePaperSource):
                     if paper.paper_id in seen_paper_ids:
                         continue
                     seen_paper_ids.add(paper.paper_id)
-                    if self.is_processed(paper.paper_id):
+                    if filter_processed and self.is_processed(paper.paper_id):
                         continue
                     papers.append(paper)
                 logger.info(

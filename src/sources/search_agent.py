@@ -5,7 +5,7 @@
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, List, Dict, Optional
 
@@ -429,6 +429,92 @@ class SearchAgent:
         logger.info(f">>> 总计抓取 {total} 篇论文，来自 {len(results)} 个数据源")
 
         return results
+
+    def fetch_source_papers_between(
+        self,
+        source_name: str,
+        date_from: date,
+        date_to: date,
+        *,
+        scan_receipt_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> List[PaperMetadata]:
+        """Fetch one enabled report source in an inclusive historical range."""
+        normalized = str(source_name or "").strip().lower()
+        if normalized not in self.get_enabled_sources():
+            raise ValueError(f"无法历史扫描未启用的数据源: {source_name}")
+        backend_name = self._source_backends.get(normalized)
+        backend = self.sources.get(backend_name or "")
+        if backend is None:
+            raise ValueError(f"数据源没有可用的历史抓取后端: {source_name}")
+
+        try:
+            if normalized == "arxiv":
+                papers = backend.fetch_domain_papers_between(
+                    date_from, date_to, self.arxiv_domains
+                )
+            elif backend_name == "openalex":
+                papers = backend.fetch_papers_between(
+                    date_from, date_to, journals=[normalized]
+                )
+                if self.enable_semantic_scholar and self.semantic_scholar_enricher:
+                    papers = self._enrich_with_semantic_scholar(papers)
+            elif normalized == HUGGINGFACE_PAPERS_SOURCE_NAME:
+                papers = backend.fetch_papers_between(date_from, date_to)
+            else:  # pragma: no cover - registry and backend map are exhaustive
+                raise ValueError(f"数据源不支持历史范围抓取: {source_name}")
+        except Exception:
+            self._emit_source_scan_receipt(
+                scan_receipt_callback, normalized, "failed"
+            )
+            raise
+
+        mismatched = [paper.source for paper in papers if paper.source != normalized]
+        if mismatched:
+            raise RuntimeError(
+                f"历史抓取返回了错误来源数据: 请求 {normalized}，得到 {mismatched[0]}"
+            )
+        self._emit_source_scan_receipt(
+            scan_receipt_callback, normalized, "succeeded", len(papers)
+        )
+        return papers
+
+    def fetch_papers_between(
+        self,
+        date_from: date,
+        date_to: date,
+        *,
+        scan_receipt_callbacks: Optional[
+            Dict[str, Callable[[Dict[str, Any]], None]]
+        ] = None,
+    ) -> Dict[str, List[PaperMetadata]]:
+        """Fetch every enabled report source for an inclusive historical range."""
+        if not isinstance(date_from, date) or not isinstance(date_to, date):
+            raise ValueError("历史范围必须是 date")
+        if date_from > date_to:
+            raise ValueError("历史范围起始日期不能晚于结束日期")
+        callbacks = scan_receipt_callbacks or {}
+        results: Dict[str, List[PaperMetadata]] = {}
+        for source_name in self.get_enabled_sources():
+            papers = self.fetch_source_papers_between(
+                source_name,
+                date_from,
+                date_to,
+                scan_receipt_callback=callbacks.get(source_name),
+            )
+            if papers:
+                results[source_name] = papers
+        return results
+
+    def close(self) -> None:
+        """Close source and enrichment HTTP sessions owned by this agent."""
+        for source in self.sources.values():
+            close = getattr(source, "close", None)
+            if callable(close):
+                close()
+        enricher_session = getattr(self.semantic_scholar_enricher, "session", None)
+        close = getattr(enricher_session, "close", None)
+        if callable(close):
+            close()
 
     def _enrich_with_semantic_scholar(self, papers: List[PaperMetadata]) -> List[PaperMetadata]:
         """
