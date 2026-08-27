@@ -14,10 +14,13 @@ from webui.secret_fields import render_secret_input, resolve_secret_value
 from webui.tabs.run_manager import _daily_db_path_from_config
 from utils.backup import (
     LOCAL_BACKUP_RETENTION_DAYS,
+    LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
     MIN_LOCAL_BACKUP_RETENTION_DAYS,
+    MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
     export_backup_zip,
     restore_backup_archive,
     validate_local_backup_retention_days,
+    validate_local_backup_same_day_max_count,
 )
 from utils.legacy_history import LEGACY_IMPORT_STATE_KEY
 from utils.webui_trigger import enqueue_trigger, read_trigger_payload, trigger_directory
@@ -245,6 +248,24 @@ def render(env_values: dict, config_values: dict):
         step=1,
         key="backup_local_retention_days",
         help=t("dm_backup_retention_days_help"),
+    )
+
+    configured_same_day_max = flat.get(
+        "backup_local_same_day_max_count", LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+    )
+    if (
+        isinstance(configured_same_day_max, bool)
+        or not isinstance(configured_same_day_max, int)
+        or configured_same_day_max < MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+    ):
+        configured_same_day_max = LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+    st.number_input(
+        t("dm_backup_same_day_max_label"),
+        min_value=MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
+        value=configured_same_day_max,
+        step=1,
+        key="backup_local_same_day_max_count",
+        help=t("dm_backup_same_day_max_help"),
     )
 
     if st.session_state.get("backup_enabled", flat.get("backup_enabled", True)):
@@ -660,6 +681,9 @@ def collect(env_values: dict, _config_values: dict) -> tuple:
         "backup_local_retention_days": current_cfg(
             "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
         ),
+        "backup_local_same_day_max_count": current_cfg(
+            "backup_local_same_day_max_count", LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+        ),
         "legacy_import_full_repair_enabled": current_cfg(
             "legacy_import_full_repair_enabled", False
         ),
@@ -791,6 +815,12 @@ def _do_backup(env_values: dict, config_values: dict | None = None):
                 "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
             )
         )
+        same_day_max_count = validate_local_backup_same_day_max_count(
+            st.session_state.get(
+                "backup_local_same_day_max_count",
+                LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
+            )
+        )
         data_dir, database = _configured_backup_paths(config_values)
 
         with st.spinner(t("dm_backup_running")):
@@ -798,6 +828,7 @@ def _do_backup(env_values: dict, config_values: dict | None = None):
                 data_dir,
                 database=database,
                 retention_days=retention_days,
+                same_day_max_count=same_day_max_count,
                 webdav_sync=webdav_sync,
             )
 

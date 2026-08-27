@@ -73,6 +73,7 @@ class LazyPageCollectTests(unittest.TestCase):
             "webdav_enabled": True,
             "webdav_cron_schedule": "30 22 * * *",
             "backup_local_retention_days": 14,
+            "backup_local_same_day_max_count": 6,
             "pdf_parser_mode": "pymupdf",
             "concurrency_workers": 6,
             "trend_max_results": 250,
@@ -119,6 +120,7 @@ class LazyPageCollectTests(unittest.TestCase):
         self.assertEqual(adv["concurrency_workers"], 6)
         self.assertEqual(adv["pdf_parser_mode"], "pymupdf")
         self.assertEqual(dm["backup_local_retention_days"], 14)
+        self.assertEqual(dm["backup_local_same_day_max_count"], 6)
         self.assertEqual(tr["trend_max_results"], 250)
         self.assertEqual(tr["trend_sort_order"], "descending")
         self.assertEqual(tr["trend_enabled_skills"], ["comprehensive_analysis"])
@@ -214,6 +216,7 @@ class LazyPageCollectTests(unittest.TestCase):
             / "daily_research.db",
         )
         self.assertEqual(kwargs["retention_days"], 0)
+        self.assertEqual(kwargs["same_day_max_count"], 0)
         self.assertIsNone(kwargs["webdav_sync"])
         self.assertEqual(fake_st.reruns, 1)
 

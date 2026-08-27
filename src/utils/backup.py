@@ -3,10 +3,11 @@
 The daily-research database is the sole durable authority for the pending
 queue, reader preferences and usage statistics. A backup takes a consistent
 snapshot through SQLite's backup API (never a raw copy of a live WAL file)
-and compresses it before any network transfer. Local copies keep every
-snapshot made today, then compact each earlier calendar day to its newest
-snapshot before applying the configured age window (seven days by default;
-zero keeps the compacted daily history forever).
+and compresses it before any network transfer. Local copies can cap the
+number of snapshots made today (zero keeps all of them), then compact each
+earlier calendar day to its newest snapshot before applying the configured
+age window (seven days by default; zero keeps the compacted daily history
+forever).
 The WebDAV mirror is
 incremental: an archive is uploaded only when the database content actually
 changed since the last upload, and remote copies are never deleted, so the
@@ -31,6 +32,8 @@ BACKUP_PREFIX = "daily_research_"
 BACKUP_SUFFIX = ".db.gz"
 LOCAL_BACKUP_RETENTION_DAYS = 7
 MIN_LOCAL_BACKUP_RETENTION_DAYS = 0
+LOCAL_BACKUP_SAME_DAY_MAX_COUNT = 0
+MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT = 0
 _GZIP_CHUNK_BYTES = 1024 * 1024
 _HASH_CHUNK_BYTES = 1024 * 1024
 _BACKUP_NAME_RE = re.compile(r"^daily_research_(\d{8}_\d{6})(?:_(\d+))?\.db\.gz$")
@@ -55,6 +58,27 @@ def validate_local_backup_retention_days(value: Any) -> int:
         raise ValueError(
             "backup.local_retention_days 必须是 "
             f"大于或等于 {MIN_LOCAL_BACKUP_RETENTION_DAYS} 的整数（0 表示不按天数过期）"
+        )
+    return value
+
+
+def validate_local_backup_same_day_max_count(value: Any) -> int:
+    """Return a valid cap for snapshots created during the current day.
+
+    ``0`` deliberately means unlimited, preserving the existing default
+    behaviour. Positive values retain the newest N current-day snapshots.
+    Earlier days are always compacted to one archive independently of this
+    setting, and there is no artificial maximum for an operator-provided cap.
+    """
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+    ):
+        raise ValueError(
+            "backup.same_day_max_count 必须是 "
+            f"大于或等于 {MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT} 的整数"
+            "（0 表示保留当天全部备份）"
         )
     return value
 
@@ -147,18 +171,24 @@ def _backup_order_key(name: str) -> Optional[tuple[datetime, int, str]]:
 def _rotate_local(
     directory: Path,
     retention_days: int,
+    same_day_max_count: int = LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
     *,
     now: Optional[datetime] = None,
 ) -> List[str]:
-    """Prune expired archives and compact prior days to one newest snapshot.
+    """Prune expired archives and compact local snapshots by calendar day.
 
-    All snapshots whose filename date is today remain available for rapid
-    rollback. For yesterday and earlier, only the most recent dated archive
+    The current calendar day keeps every snapshot by default; when
+    ``same_day_max_count`` is positive, it instead keeps only its newest N
+    archives. For yesterday and earlier, only the most recent dated archive
     of each calendar day remains. The configured age window is applied first;
     ``retention_days=0`` disables only age expiry, not per-day compaction.
-    Files without a parseable timestamp are left untouched rather than guessed
-    at or deleted.
+    Files without a parseable timestamp (and future-dated files) are left
+    untouched rather than guessed at or deleted.
     """
+    retention_days = validate_local_backup_retention_days(retention_days)
+    same_day_max_count = validate_local_backup_same_day_max_count(
+        same_day_max_count
+    )
     rotation_now = now or datetime.now()
     cutoff = (
         rotation_now - timedelta(days=retention_days)
@@ -166,6 +196,7 @@ def _rotate_local(
         else None
     )
     removed = []
+    current_day_entries: List[tuple[tuple[datetime, int, str], Path]] = []
     prior_day_entries: Dict[date, List[tuple[tuple[datetime, int, str], Path]]] = {}
 
     for item in directory.iterdir():
@@ -181,11 +212,25 @@ def _rotate_local(
             except OSError:
                 continue
             continue
-        if stamp.date() >= rotation_now.date():
+        if stamp.date() == rotation_now.date():
+            key = _backup_order_key(item.name)
+            if key is not None:
+                current_day_entries.append((key, item))
+            continue
+        if stamp.date() > rotation_now.date():
             continue
         key = _backup_order_key(item.name)
         if key is not None:
             prior_day_entries.setdefault(stamp.date(), []).append((key, item))
+
+    if same_day_max_count > 0:
+        current_day_entries.sort(key=lambda entry: entry[0], reverse=True)
+        for _key, item in current_day_entries[same_day_max_count:]:
+            try:
+                os.remove(item)
+                removed.append(item.name)
+            except OSError:
+                continue
 
     for entries in prior_day_entries.values():
         entries.sort(key=lambda entry: entry[0], reverse=True)
@@ -309,6 +354,7 @@ def create_backup(
     *,
     database: Optional[Path] = None,
     retention_days: int = LOCAL_BACKUP_RETENTION_DAYS,
+    same_day_max_count: int = LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
     webdav_sync: Any = None,
     logger: Any = None,
 ) -> Dict[str, Any]:
@@ -320,9 +366,13 @@ def create_backup(
     discards the local snapshot. ``database`` lets installations that keep
     their SQLite file outside the conventional ``data_dir/daily_research``
     location snapshot the exact configured database while still storing local
-    archives under ``data_dir/backups``.
+    archives under ``data_dir/backups``. ``same_day_max_count`` caps only the
+    current day's local snapshots; ``0`` retains all of them.
     """
     retention_days = validate_local_backup_retention_days(retention_days)
+    same_day_max_count = validate_local_backup_same_day_max_count(
+        same_day_max_count
+    )
     if _backup_lock.locked():
         return {"created": False, "reason": "backup_already_running"}
 
@@ -363,7 +413,10 @@ def create_backup(
             "name": archive_path.name,
             "size_bytes": archive_path.stat().st_size,
             "local_rotated": _rotate_local(
-                directory, retention_days, now=created_at
+                directory,
+                retention_days,
+                same_day_max_count,
+                now=created_at,
             ),
             "uploaded": False,
             "remote_path": None,
@@ -391,8 +444,8 @@ def run_scheduled_backup(logger: Any = None) -> Optional[Dict[str, Any]]:
     """Worker hook after a daily run; honours the ``backup`` config section.
 
     备份始终先压缩再上传；只要 WebDAV 已启用并配置了凭据就镜像上传
-    （增量：内容未变化时跳过），本地保留当天全部副本、旧日期每日最新
-    副本后再按配置的保留天数轮转。
+    （增量：内容未变化时跳过），本地按当天数量上限和旧日期每日最新副本
+    后再按配置的保留天数轮转。
     """
     from config import settings
 
@@ -412,10 +465,23 @@ def run_scheduled_backup(logger: Any = None) -> Optional[Dict[str, Any]]:
             LOCAL_BACKUP_RETENTION_DAYS,
         )
     )
+    try:
+        configured_same_day_max_count = getattr(
+            settings, "BACKUP_LOCAL_SAME_DAY_MAX_COUNT"
+        )
+    except (AttributeError, KeyError):
+        # Third-party integrations and old test doubles may not yet expose
+        # the new setting; preserve the historical unlimited-current-day
+        # behaviour until their configuration is refreshed.
+        configured_same_day_max_count = LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+    same_day_max_count = validate_local_backup_same_day_max_count(
+        configured_same_day_max_count
+    )
     return create_backup(
         Path(settings.DATA_DIR),
         database=Path(settings.DAILY_RESEARCH_DB_PATH),
         retention_days=retention_days,
+        same_day_max_count=same_day_max_count,
         webdav_sync=webdav_sync,
         logger=logger,
     )

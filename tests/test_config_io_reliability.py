@@ -277,25 +277,37 @@ class ConfigIOReliabilityTests(unittest.TestCase):
                     )
 
     def test_local_backup_retention_round_trips_without_an_upper_limit(self):
-        config = build_config_dict(backup_local_retention_days=21)
+        config = build_config_dict(
+            backup_local_retention_days=21,
+            backup_local_same_day_max_count=4,
+        )
         self.assertEqual(config["backup"]["local_retention_days"], 21)
+        self.assertEqual(config["backup"]["same_day_max_count"], 4)
         self.assertEqual(
             flatten_config_dict(config)["backup_local_retention_days"], 21
+        )
+        self.assertEqual(
+            flatten_config_dict(config)["backup_local_same_day_max_count"], 4
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "config.json"
             path.write_text(
-                "{backup: {local_retention_days: 21}}", encoding="utf-8"
+                "{backup: {local_retention_days: 21, same_day_max_count: 4}}",
+                encoding="utf-8",
             )
             runtime = Settings()
             runtime.load_from_search_config(path)
             self.assertEqual(runtime.BACKUP_LOCAL_RETENTION_DAYS, 21)
+            self.assertEqual(runtime.BACKUP_LOCAL_SAME_DAY_MAX_COUNT, 4)
 
         permanent = build_config_dict(backup_local_retention_days=0)
         self.assertEqual(permanent["backup"]["local_retention_days"], 0)
         self.assertEqual(
             flatten_config_dict(permanent)["backup_local_retention_days"], 0
+        )
+        self.assertEqual(
+            flatten_config_dict(permanent)["backup_local_same_day_max_count"], 0
         )
 
         # The UI intentionally has no maximum.  Large valid values must stay
@@ -303,6 +315,12 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         large_window = 10**9
         unbounded = build_config_dict(backup_local_retention_days=large_window)
         self.assertEqual(unbounded["backup"]["local_retention_days"], large_window)
+        unbounded_same_day = build_config_dict(
+            backup_local_same_day_max_count=large_window
+        )
+        self.assertEqual(
+            unbounded_same_day["backup"]["same_day_max_count"], large_window
+        )
 
         for invalid in (-1, True, "21"):
             with self.subTest(invalid=invalid):
@@ -311,6 +329,15 @@ class ConfigIOReliabilityTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "local_retention_days"):
                     validate_config_document(
                         {"backup": {"local_retention_days": invalid}}
+                    )
+
+        for invalid in (-1, True, "4"):
+            with self.subTest(same_day_invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "same_day_max_count"):
+                    build_config_dict(backup_local_same_day_max_count=invalid)
+                with self.assertRaisesRegex(ValueError, "same_day_max_count"):
+                    validate_config_document(
+                        {"backup": {"same_day_max_count": invalid}}
                     )
 
     def test_runtime_rejects_negative_daily_queue_limit(self):

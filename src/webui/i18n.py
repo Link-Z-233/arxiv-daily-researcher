@@ -1255,8 +1255,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_webdav_sync_error": {"zh": "❌ 同步失败", "en": "❌ Sync failed"},
     "dm_backup_title": {"zh": "数据库备份", "en": "Database Backup"},
     "dm_backup_hint": {
-        "zh": "每日运行结束后自动对 SQLite 数据库做 gzip 压缩备份：本地保留当天所有副本，昨天及更早每天只保留最新一份，再按下方保留期清理（默认最近 7 天；填 0 不按天数过期）；WebDAV 为增量备份，仅当数据库内容变化时上传，远端永不删除；也可手动立即备份。",
-        "en": "After each daily run a gzip-compressed SQLite backup is created automatically: all of today's local copies are retained, while each earlier day keeps only its newest copy before the retention window is applied (7 days by default; 0 disables age expiry); WebDAV mirrors incrementally — uploads happen only when the database content changed and remote copies are never deleted. Manual backup is also available.",
+        "zh": "每日运行结束后自动对 SQLite 数据库做 gzip 压缩备份：当天按数量上限保留副本（默认不限），昨天及更早每天只保留最新一份，再按下方保留期清理（默认最近 7 天；填 0 不按天数过期）；WebDAV 为增量备份，仅当数据库内容变化时上传，远端永不删除；也可手动立即备份。",
+        "en": "After each daily run a gzip-compressed SQLite backup is created automatically: current-day copies follow the optional count limit (unlimited by default), while each earlier day keeps only its newest copy before the retention window is applied (7 days by default; 0 disables age expiry); WebDAV mirrors incrementally — uploads happen only when the database content changed and remote copies are never deleted. Manual backup is also available.",
     },
     "dm_backup_enable": {"zh": "启用自动备份", "en": "Enable automatic backup"},
     "dm_backup_retention_days_label": {
@@ -1264,8 +1264,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Local backup retention (days)",
     },
     "dm_backup_retention_days_help": {
-        "zh": "自动删除早于此天数的本地 SQLite 备份；当天所有副本保留，昨天及更早每天只留最新一份。默认 7 天，填 0 不按天数过期。WebDAV 增量归档不受此设置影响。",
-        "en": "Automatically delete local SQLite backups older than this many days. All of today's copies are retained; each earlier day keeps only its newest copy. Default: 7; enter 0 to disable age expiry. WebDAV incremental archives are unaffected.",
+        "zh": "自动删除早于此天数的本地 SQLite 备份；昨天及更早每天只留最新一份。默认 7 天，填 0 不按天数过期。WebDAV 增量归档不受此设置影响。",
+        "en": "Automatically delete local SQLite backups older than this many days. Each earlier day keeps only its newest copy. Default: 7; enter 0 to disable age expiry. WebDAV incremental archives are unaffected.",
+    },
+    "dm_backup_same_day_max_label": {
+        "zh": "当天备份最多保留数量",
+        "en": "Maximum current-day backups",
+    },
+    "dm_backup_same_day_max_help": {
+        "zh": "仅限制当天的本地 SQLite 备份。填 0 保留当天全部备份；正整数保留最新的 N 个。昨天及更早每天只留最新一份。",
+        "en": "Limits only local SQLite backups created today. Enter 0 to keep all of them; a positive number keeps the newest N. Each earlier day keeps only its newest copy.",
     },
     "dm_backup_now_btn": {"zh": "🗄️ 立即备份", "en": "🗄️ Back Up Now"},
     "dm_backup_export_btn": {"zh": "📤 生成导出（zip）", "en": "📤 Build export (zip)"},

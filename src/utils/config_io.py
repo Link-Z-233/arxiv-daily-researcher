@@ -117,10 +117,15 @@ def validate_config_document(config: object) -> Dict[str, Any]:
     if backup is not None:
         if not isinstance(backup, dict):
             raise ValueError("backup 配置段必须是对象")
-        if "local_retention_days" in backup:
-            from utils.backup import validate_local_backup_retention_days
+        from utils.backup import (
+            validate_local_backup_retention_days,
+            validate_local_backup_same_day_max_count,
+        )
 
+        if "local_retention_days" in backup:
             validate_local_backup_retention_days(backup["local_retention_days"])
+        if "same_day_max_count" in backup:
+            validate_local_backup_same_day_max_count(backup["same_day_max_count"])
     legacy_history = config.get("legacy_history")
     if legacy_history is not None:
         if not isinstance(legacy_history, dict):
@@ -728,6 +733,7 @@ def build_config_dict(
     webdav_sync_reports: bool = False,
     backup_enabled: bool = True,
     backup_local_retention_days: int = 7,
+    backup_local_same_day_max_count: int = 0,
 ) -> Dict[str, Any]:
     """Build a nested config.json dict from flat parameters."""
 
@@ -751,10 +757,16 @@ def build_config_dict(
 
     if not isinstance(extra_sources_enabled, bool):
         raise ValueError("extra_sources_enabled 必须是布尔值")
-    from utils.backup import validate_local_backup_retention_days
+    from utils.backup import (
+        validate_local_backup_retention_days,
+        validate_local_backup_same_day_max_count,
+    )
 
     backup_local_retention_days = validate_local_backup_retention_days(
         backup_local_retention_days
+    )
+    backup_local_same_day_max_count = validate_local_backup_same_day_max_count(
+        backup_local_same_day_max_count
     )
     raw_enabled = enabled_sources if enabled_sources is not None else ["arxiv"]
     if not isinstance(raw_enabled, list):
@@ -991,6 +1003,7 @@ def build_config_dict(
         "backup": {
             "enabled": backup_enabled,
             "local_retention_days": backup_local_retention_days,
+            "same_day_max_count": backup_local_same_day_max_count,
         },
         "trend_research": {
             "default_date_range_days": trend_default_date_range_days,
@@ -1324,16 +1337,24 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from utils.backup import (
             LOCAL_BACKUP_RETENTION_DAYS,
+            LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
             validate_local_backup_retention_days,
+            validate_local_backup_same_day_max_count,
         )
 
         flat["backup_local_retention_days"] = validate_local_backup_retention_days(
             bk.get("local_retention_days", LOCAL_BACKUP_RETENTION_DAYS)
         )
+        flat["backup_local_same_day_max_count"] = (
+            validate_local_backup_same_day_max_count(
+                bk.get("same_day_max_count", LOCAL_BACKUP_SAME_DAY_MAX_COUNT)
+            )
+        )
     except (ImportError, ValueError):
         # A manually edited invalid value should not prevent the WebUI from
         # opening; show the safe default so the next save repairs it.
         flat["backup_local_retention_days"] = 7
+        flat["backup_local_same_day_max_count"] = 0
 
     # Trend research
     tr = config.get("trend_research", {})

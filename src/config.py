@@ -308,6 +308,8 @@ class Settings(BaseSettings):
     BACKUP_ENABLED: bool = True  # 每日运行结束后自动做一次 gzip 数据库备份
     # 本地全量备份按年龄自动清理；0 表示永久保留。WebDAV 增量归档始终不删除。
     BACKUP_LOCAL_RETENTION_DAYS: int = 7
+    # 当天可保留的本地快照上限；0 表示保留当天全部备份。
+    BACKUP_LOCAL_SAME_DAY_MAX_COUNT: int = 0
 
     # ==================== 运行锁配置 ====================
     RUN_LOCK_MAX_AGE_HOURS: int = 12  # 锁超龄告警阈值（小时），不会按 PID 自动终止任务
@@ -917,7 +919,10 @@ class Settings(BaseSettings):
                 if not isinstance(bk_cfg, dict):
                     raise ValueError("backup 必须是对象")
                 self.BACKUP_ENABLED = bk_cfg.get("enabled", self.BACKUP_ENABLED)
-                from utils.backup import validate_local_backup_retention_days
+                from utils.backup import (
+                    validate_local_backup_retention_days,
+                    validate_local_backup_same_day_max_count,
+                )
 
                 self.BACKUP_LOCAL_RETENTION_DAYS = (
                     validate_local_backup_retention_days(
@@ -927,8 +932,17 @@ class Settings(BaseSettings):
                         )
                     )
                 )
-                # Legacy ``keep`` counts are ignored.  Local retention is an
-                # explicit age window; WebDAV keeps every incremental upload.
+                self.BACKUP_LOCAL_SAME_DAY_MAX_COUNT = (
+                    validate_local_backup_same_day_max_count(
+                        bk_cfg.get(
+                            "same_day_max_count",
+                            self.BACKUP_LOCAL_SAME_DAY_MAX_COUNT,
+                        )
+                    )
+                )
+                # Legacy ``keep`` counts are ignored. Local rotation now uses
+                # an explicit age window and optional current-day cap; WebDAV
+                # keeps every incremental upload.
 
             # 加载研究趋势模式配置
             if "trend_research" in config:

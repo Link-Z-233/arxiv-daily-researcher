@@ -16,11 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from utils.backup import (  # noqa: E402
     BACKUP_SUFFIX,
     LOCAL_BACKUP_RETENTION_DAYS,
+    LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
+    _rotate_local,
     create_backup,
     list_local_backups,
     restore_backup_archive,
     run_scheduled_backup,
     validate_local_backup_retention_days,
+    validate_local_backup_same_day_max_count,
 )
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 
@@ -215,11 +218,55 @@ class BackupCreationTests(unittest.TestCase):
             },
         )
 
+    def test_rotation_limits_current_day_to_newest_requested_count(self):
+        directory = self.data_dir / "backups"
+        directory.mkdir()
+        now = datetime.now().replace(hour=23, minute=59, second=59, microsecond=0)
+        first = _write_dated_backup(
+            directory, now.replace(hour=8, minute=0, second=0)
+        )
+        second = _write_dated_backup(
+            directory, now.replace(hour=9, minute=0, second=0)
+        )
+        third = _write_dated_backup(
+            directory, now.replace(hour=10, minute=0, second=0)
+        )
+
+        removed = _rotate_local(
+            directory,
+            retention_days=0,
+            same_day_max_count=2,
+            now=now,
+        )
+
+        survivors = {entry["name"] for entry in list_local_backups(self.data_dir)}
+        self.assertEqual(survivors, {second, third})
+        self.assertEqual(removed, [first])
+
+        # Zero remains the backward-compatible unlimited default.
+        _write_dated_backup(directory, now.replace(hour=11, minute=0, second=0))
+        self.assertEqual(
+            _rotate_local(
+                directory,
+                retention_days=0,
+                same_day_max_count=LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
+                now=now,
+            ),
+            [],
+        )
+        self.assertEqual(len(list_local_backups(self.data_dir)), 3)
+
     def test_retention_window_rejects_negative_and_non_integers(self):
         for invalid in (-1, True, "7"):
             with self.subTest(invalid=invalid):
                 with self.assertRaisesRegex(ValueError, "local_retention_days"):
                     validate_local_backup_retention_days(invalid)
+
+    def test_same_day_max_count_rejects_negative_and_non_integers(self):
+        for invalid in (-1, True, "3"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "same_day_max_count"):
+                    validate_local_backup_same_day_max_count(invalid)
 
     def test_missing_database_reports_reason(self):
         empty = self.data_dir / "empty"
