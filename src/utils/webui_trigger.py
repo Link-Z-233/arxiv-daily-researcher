@@ -9,6 +9,8 @@ validated again in the worker so malformed files cannot turn into shell input.
 from __future__ import annotations
 
 import argparse
+from collections import deque
+import io
 import json
 import os
 import re
@@ -38,6 +40,37 @@ _STATUS_RECORD_NAME_RE = re.compile(r"^(?:[0-9a-f]{32}|rejected_[0-9a-f]{32})\.j
 _RESTART_DONE_NAME_RE = re.compile(
     r"^restart_worker\.request\.done-\d{8}T\d{6}(?:\d{1,9})?(?:-\d+)?$"
 )
+_STATUS_OUTPUT_TAIL_LINES = 120
+_STATUS_SUMMARY_MAX_CHARS = 420
+_URL_RE = re.compile(r"\bhttps?://[^\s<>()\[\]{}\"']+", re.IGNORECASE)
+_BEARER_TOKEN_RE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"""(?ix)
+    (?P<key>
+        [\"']?(?:api[_-]?key|apikey|access[_-]?token|token|secret|password|
+        authorization|x[_-]?api[_-]?key|webhook(?:[_-]?url)?)[\"']?
+    )
+    (?P<separator>\s*[:=]\s*)
+    (?P<value>\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)
+    """
+)
+_LOG_PREFIX_RE = re.compile(
+    r"^\s*\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\s*\|\s*"
+    r"(?:DEBUG|INFO|WARNING|ERROR|CRITICAL)\s*\|\s*[^|]*\|\s*"
+)
+_STAGE_MARKER_RE = re.compile(r"(?:>{2,}\s*)?阶段\s*\d+\s*[:：]\s*(.+)")
+_ERROR_MARKER_RE = re.compile(
+    r"(?i)(?:任务失败|程序执行失败|异常终止|发生异常|failed|failure|error|exception|错误|失败)"
+)
+_MODE_STAGE_LABELS = {
+    "daily_research": "每日研究",
+    "trend_research": "趋势研究",
+    "legacy_import": "旧历史导入",
+    "history_data_repair": "历史数据补全",
+    "history_omission_scan": "历史遗漏扫描",
+    "supplement_run": "补充报告",
+    "backfill_run": "过去日报补跑",
+}
 SUPPORTED_MODES = frozenset(
     {
         "daily_research",
@@ -182,6 +215,96 @@ def run_trigger_maintenance(data_dir: Path) -> Dict[str, list[str]]:
         "status_removed": rotate_trigger_statuses(data_dir),
         "restart_markers_removed": rotate_restart_request_markers(data_dir),
     }
+
+
+def sanitize_task_error_summary(value: Any, *, max_chars: int = _STATUS_SUMMARY_MAX_CHARS) -> str:
+    """Return a compact operator-facing error without credentials or URLs.
+
+    Trigger status files are read by the WebUI and survive worker restarts.
+    They must contain enough context to identify a failed stage without
+    becoming a copy of a stack trace, request body, API key, or webhook URL.
+    """
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 1:
+        max_chars = _STATUS_SUMMARY_MAX_CHARS
+    text = str(value or "").replace("\x00", " ").strip()
+    if not text:
+        return ""
+    text = _LOG_PREFIX_RE.sub("", text)
+    text = _URL_RE.sub("<链接已隐藏>", text)
+    text = _BEARER_TOKEN_RE.sub("Bearer <凭据已隐藏>", text)
+    text = _SECRET_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group('key')}{match.group('separator')}<凭据已隐藏>",
+        text,
+    )
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > max_chars:
+        text = text[: max_chars - 1].rstrip() + "…"
+    return text
+
+
+def _stage_from_output_line(line: str, fallback: str) -> str:
+    marker = _STAGE_MARKER_RE.search(line)
+    if marker:
+        detail = sanitize_task_error_summary(marker.group(1), max_chars=120)
+        return f"阶段：{detail}" if detail else fallback
+    lowered = line.lower()
+    if "[historyrepair]" in lowered:
+        return "历史数据补全"
+    if "[historyomission]" in lowered:
+        return "历史遗漏扫描"
+    if "[legacy" in lowered:
+        return "旧历史导入"
+    if "[backfill" in lowered:
+        return "过去日报补跑"
+    return fallback
+
+
+def summarize_trigger_failure_output(mode: str, lines: Sequence[str]) -> str:
+    """Extract one sanitized stage-level failure summary from worker output."""
+    stage = _MODE_STAGE_LABELS.get(str(mode), "后台任务")
+    error = ""
+    for raw_line in lines:
+        line = sanitize_task_error_summary(raw_line, max_chars=700)
+        if not line:
+            continue
+        stage = _stage_from_output_line(line, stage)
+        # Retried warnings and tracebacks are useful in the full log but do
+        # not explain the terminal failure on their own.
+        lowered = line.lower()
+        if "retrying" in lowered or lowered.startswith("traceback"):
+            continue
+        if _ERROR_MARKER_RE.search(line):
+            error = line
+
+    if error:
+        if error.startswith(stage) or stage in error:
+            return sanitize_task_error_summary(error)
+        return sanitize_task_error_summary(f"{stage}：{error}")
+    return sanitize_task_error_summary(f"{stage} 未正常完成，请查看运行日志")
+
+
+def _forward_child_output(child: subprocess.Popen) -> list[str]:
+    """Forward child output to the watcher log while retaining a tiny tail."""
+    stream = getattr(child, "stdout", None)
+    # Test doubles and legacy integrations may expose a mock/None stream.
+    # Preserve their old wait-only behaviour instead of assuming a real pipe.
+    if not isinstance(stream, io.TextIOBase):
+        return []
+
+    tail: deque[str] = deque(maxlen=_STATUS_OUTPUT_TAIL_LINES)
+    try:
+        for line in iter(stream.readline, ""):
+            if not line:
+                break
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            tail.append(line)
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+    return list(tail)
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -467,13 +590,17 @@ def build_main_command(payload: Mapping[str, Any], project_root: Path) -> list[s
 
 
 def _write_status(data_dir: Path, payload: Mapping[str, Any], state: str, **details: Any) -> Path:
+    safe_details = dict(details)
+    for key in ("error", "error_summary"):
+        if key in safe_details:
+            safe_details[key] = sanitize_task_error_summary(safe_details[key])
     status_payload: Dict[str, Any] = {
         "request_id": payload["request_id"],
         "mode": payload["mode"],
         "created_at": payload.get("created_at", ""),
         "state": state,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        **details,
+        **safe_details,
     }
     status_path = trigger_status_directory(data_dir) / f"{payload['request_id']}.json"
     _atomic_write_json(status_path, status_payload)
@@ -583,6 +710,7 @@ def execute_trigger_request(
     data_dir = request_path.parent.parent.parent
     payload: Optional[Dict[str, Any]] = None
     child: Optional[subprocess.Popen] = None
+    output_tail: list[str] = []
 
     try:
         payload = read_trigger_payload(request_path)
@@ -592,7 +720,16 @@ def execute_trigger_request(
 
         command = build_main_command(payload, root)
         _write_status(data_dir, payload, "running", command=command)
-        child = subprocess.Popen(command, cwd=str(root))
+        child = subprocess.Popen(
+            command,
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
         stop_monitor = threading.Thread(
             target=_monitor_stop_requests,
             args=(child, data_dir),
@@ -602,6 +739,7 @@ def execute_trigger_request(
         stop_monitor.start()
         if pid_file is not None:
             _write_pid_file(Path(pid_file), child.pid)
+        output_tail = _forward_child_output(child)
         return_code = child.wait()
         if return_code == 0:
             state = "succeeded"
@@ -614,7 +752,14 @@ def execute_trigger_request(
             state = "skipped_busy"
         else:
             state = "failed"
-        _write_status(data_dir, payload, state, return_code=return_code, command=command)
+        details: Dict[str, Any] = {"return_code": return_code, "command": command}
+        if state == "failed":
+            details["error_summary"] = summarize_trigger_failure_output(
+                payload["mode"], output_tail
+            )
+        elif state == "interrupted":
+            details["error_summary"] = "任务已中断；未完成工作已保留供后续重试"
+        _write_status(data_dir, payload, state, **details)
         return return_code
     except KeyboardInterrupt:
         if child is not None and child.poll() is None:
@@ -629,7 +774,12 @@ def execute_trigger_request(
         return 130
     except Exception as exc:
         if payload is not None:
-            _write_status(data_dir, payload, "rejected", error=str(exc)[:4000])
+            _write_status(
+                data_dir,
+                payload,
+                "rejected",
+                error_summary=sanitize_task_error_summary(str(exc)),
+            )
         else:
             # A malformed request has no trustworthy request_id.  Keep a small
             # status record for diagnostics, then consume it so the watcher
@@ -642,7 +792,7 @@ def execute_trigger_request(
                 {
                     "state": "rejected",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "error": str(exc)[:4000],
+                    "error_summary": sanitize_task_error_summary(str(exc)),
                 },
             )
             rotate_trigger_statuses(data_dir, protected_names={error_path.name})

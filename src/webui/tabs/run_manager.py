@@ -21,7 +21,11 @@ from typing import Optional
 import streamlit as st
 
 from utils.run_lock import is_lock_held
-from utils.webui_trigger import enqueue_trigger, trigger_directory
+from utils.webui_trigger import (
+    enqueue_trigger,
+    sanitize_task_error_summary,
+    trigger_directory,
+)
 from webui.i18n import t
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -523,9 +527,6 @@ def _render_live_status_body() -> None:
         st.success(t("rm_trigger_state_succeeded").format(mode=mode))
         _show_last_run_hint()
     elif status and status.get("state") in {"failed", "rejected", "interrupted"}:
-        # The worker-owned status may contain an exception string.
-        # Keep that detail in the worker log: local WebUI feedback
-        # only needs the terminal state and a safe numeric exit code.
         return_code = status.get("return_code")
         suffix = (
             f" (exit {return_code})"
@@ -533,6 +534,12 @@ def _render_live_status_body() -> None:
             else ""
         )
         st.warning(t("rm_trigger_state_failed").format(state=status["state"], suffix=suffix))
+        # Only the worker-generated, pre-sanitized summary is eligible for
+        # the panel. Older raw ``error`` fields may contain request details,
+        # so the full log remains their sole diagnostic location.
+        summary = sanitize_task_error_summary(status.get("error_summary"))
+        if summary:
+            st.caption(t("rm_trigger_error_summary").format(summary=summary))
     else:
         _show_last_run_hint()
 

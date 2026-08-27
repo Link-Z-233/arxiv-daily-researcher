@@ -313,7 +313,15 @@ class WebUiRunObservabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             with (
                 patch.object(run_manager, "st", fake_st),
-                patch.object(run_manager, "t", side_effect=lambda key: key),
+                patch.object(
+                    run_manager,
+                    "t",
+                    side_effect=lambda key: (
+                        "问题摘要：{summary}"
+                        if key == "rm_trigger_error_summary"
+                        else key
+                    ),
+                ),
                 patch.object(run_manager, "_IS_DOCKER_WEBUI", True),
                 patch.object(run_manager, "_trigger_age_seconds", return_value=None),
                 patch.object(run_manager, "_get_all_running_locks", return_value=[]),
@@ -330,6 +338,7 @@ class WebUiRunObservabilityTests(unittest.TestCase):
                         "state": "failed",
                         "return_code": 1,
                         "error": "supersecret-worker-error https://leaky.example/?token=1",
+                        "error_summary": "评分阶段失败：api_key=supersecret https://leaky.example/?token=1",
                     },
                 ),
             ):
@@ -343,6 +352,7 @@ class WebUiRunObservabilityTests(unittest.TestCase):
 
         rendered = repr(fake_st.calls)
         self.assertIn("failed", rendered)
+        self.assertIn("评分阶段失败", rendered)
         self.assertNotIn("supersecret", rendered)
         self.assertNotIn("https://", rendered)
 

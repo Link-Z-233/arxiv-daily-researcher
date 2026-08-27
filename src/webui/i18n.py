@@ -81,6 +81,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "上次请求 {state}{suffix}；详情见运行日志。",
         "en": "Last request {state}{suffix}; see run logs.",
     },
+    "rm_trigger_error_summary": {
+        "zh": "问题摘要：{summary}",
+        "en": "Issue summary: {summary}",
+    },
     "rm_trigger_state_succeeded": {
         "zh": "上次面板请求已完成（{mode}）；详情见运行日志。",
         "en": "Last panel request completed ({mode}); see run logs.",

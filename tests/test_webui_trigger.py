@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import tempfile
@@ -18,6 +19,7 @@ from utils.webui_trigger import (  # noqa: E402
     read_trigger_payload,
     rotate_restart_request_markers,
     rotate_trigger_statuses,
+    sanitize_task_error_summary,
     trigger_status_directory,
     validate_trigger_payload,
 )
@@ -33,6 +35,12 @@ class _CompletedProcess:
 
     def poll(self):
         return self.return_code
+
+
+class _OutputProcess(_CompletedProcess):
+    def __init__(self, return_code: int, output: str):
+        super().__init__(return_code)
+        self.stdout = io.StringIO(output)
 
 
 class WebUITriggerTests(unittest.TestCase):
@@ -163,6 +171,49 @@ class WebUITriggerTests(unittest.TestCase):
             statuses = list(trigger_status_directory(data_dir).glob("*.json"))
             self.assertEqual(len(statuses), 2)
             self.assertIn("rejected", {json.loads(path.read_text())["state"] for path in statuses})
+
+    def test_failed_request_records_sanitized_stage_summary_from_worker_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            request_path = enqueue_trigger(data_dir, "daily_research")
+            claimed_path = request_path.with_suffix(".running")
+            os.replace(request_path, claimed_path)
+            (root / "main.py").write_text("# worker placeholder\n", encoding="utf-8")
+            output = (
+                "2026-08-27 10:00:00 | INFO | Main | >>> 阶段3: 从数据源抓取论文\n"
+                "2026-08-27 10:01:00 | ERROR | Main | 任务失败: "
+                "api_key=supersecret https://hooks.example.test/path?token=leak\n"
+            )
+
+            with patch(
+                "utils.webui_trigger.subprocess.Popen",
+                return_value=_OutputProcess(1, output),
+            ):
+                self.assertEqual(execute_trigger_request(claimed_path, project_root=root), 1)
+
+            status = json.loads(
+                next(trigger_status_directory(data_dir).glob("*.json")).read_text(
+                    encoding="utf-8"
+                )
+            )
+            summary = status["error_summary"]
+            self.assertIn("阶段", summary)
+            self.assertIn("<凭据已隐藏>", summary)
+            self.assertIn("<链接已隐藏>", summary)
+            self.assertNotIn("supersecret", summary)
+            self.assertNotIn("https://", summary)
+
+    def test_error_summary_sanitizer_bounds_request_like_text(self):
+        summary = sanitize_task_error_summary(
+            "password: hidden-value; Bearer abcdefghijklmnopqrstuvwxyz "
+            "https://example.test/webhook?token=leak "
+            + "x" * 2000
+        )
+        self.assertLessEqual(len(summary), 420)
+        self.assertNotIn("hidden-value", summary)
+        self.assertNotIn("abcdefghijklmnopqrstuvwxyz", summary)
+        self.assertNotIn("https://", summary)
 
     def test_trigger_status_and_restart_audits_are_rotated_by_count_and_age(self):
         with tempfile.TemporaryDirectory() as temp_dir:
