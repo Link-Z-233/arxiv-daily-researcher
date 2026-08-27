@@ -9,18 +9,25 @@ FROM python:3.12-slim AS common
 LABEL maintainer="yzr278892"
 
 ENV TZ=Asia/Shanghai \
+    HOME=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     PIP_TRUSTED_HOST=mirrors.aliyun.com
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends tzdata && \
+    apt-get install -y --no-install-recommends gosu tzdata && \
     rm -rf /var/lib/apt/lists/* && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
     echo $TZ > /etc/timezone
 
 WORKDIR /app
+
+RUN groupadd --gid 1000 adr && \
+    useradd --uid 1000 --gid adr --home-dir /app --shell /bin/bash --no-create-home adr
+
+COPY docker/runtime-user.sh /usr/local/bin/adr-runtime-user.sh
+RUN chmod 0755 /usr/local/bin/adr-runtime-user.sh
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir \
@@ -85,7 +92,7 @@ RUN mkdir -p /app/data/reports/daily_research/markdown \
              /app/data/reports/keyword_trend/html \
              /app/data/history /app/data/reference_pdfs \
              /app/data/downloaded_pdfs /app/logs \
-    && chmod -R 777 /app/data /app/logs
+    && chown -R adr:adr /app/data /app/logs
 
 HEALTHCHECK --interval=300s --timeout=10s --retries=3 \
     CMD python -c "import sys; sys.path.insert(0,'src'); import config; print('OK')" || exit 1
@@ -114,12 +121,17 @@ COPY configs/ ./configs/
 
 RUN touch ./src/__init__.py ./src/utils/__init__.py
 
-RUN mkdir -p /root/.streamlit && \
-    printf '[server]\nheadless = true\nport = 8501\naddress = "0.0.0.0"\nenableCORS = true\nenableXsrfProtection = true\nfileWatcherType = "none"\n\n[browser]\ngatherUsageStats = false\n' > /root/.streamlit/config.toml
+RUN mkdir -p /app/.streamlit /app/data /app/logs && \
+    printf '[server]\nheadless = true\nport = 8501\naddress = "0.0.0.0"\nenableCORS = true\nenableXsrfProtection = true\nfileWatcherType = "none"\n\n[browser]\ngatherUsageStats = false\n' > /app/.streamlit/config.toml && \
+    chown -R adr:adr /app/.streamlit /app/data /app/logs
+
+COPY docker/webui-entrypoint.sh /webui-entrypoint.sh
+RUN chmod 0755 /webui-entrypoint.sh
 
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
 
+ENTRYPOINT ["/webui-entrypoint.sh"]
 CMD ["streamlit", "run", "src/webui/config_panel.py", "--server.port=8501"]

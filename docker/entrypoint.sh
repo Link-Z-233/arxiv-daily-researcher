@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+source /usr/local/bin/adr-runtime-user.sh
+
 echo "================================================"
 echo "  ArXiv Daily Researcher - Docker Container"
 echo "  $(date '+%Y-%m-%d %H:%M:%S')"
@@ -53,6 +55,8 @@ mkdir -p /app/data/reports/daily_research/markdown \
          /app/data/reference_pdfs /app/data/downloaded_pdfs \
          /app/logs
 
+adr_configure_runtime_user
+
 # Clean up stale log files
 LOG_KEEP_DAYS="${LOG_KEEP_DAYS:-30}"
 find /app/logs -name "cron_*.log" -type f -mtime +${LOG_KEEP_DAYS} -delete 2>/dev/null || true
@@ -74,14 +78,14 @@ SETUP_WIZARD="${SETUP_WIZARD:-auto}"
 if [ "$SETUP_WIZARD" = "true" ]; then
     echo ""
     echo "Running interactive setup wizard..."
-    cd /app && python src/utils/setup_wizard.py
+    adr_run_as_user bash -c 'cd /app && exec python src/utils/setup_wizard.py'
     echo "Setup wizard complete."
     echo ""
 elif [ "$SETUP_WIZARD" = "auto" ] && [ ! -f /app/.env ]; then
     echo ""
     echo "No .env file detected — first deployment."
     echo "Running interactive setup wizard..."
-    cd /app && python src/utils/setup_wizard.py
+    adr_run_as_user bash -c 'cd /app && exec python src/utils/setup_wizard.py'
     echo "Setup wizard complete."
     echo ""
 fi
@@ -94,9 +98,9 @@ fi
 if [ "$MODE" != "run-once" ] && [ "$RUN_ON_STARTUP" != "true" ]; then
     UPDATE_CHECK_LOG="/app/logs/update_$(date +%Y%m%d).log"
     echo "Checking published release availability in background..."
-    (
-        cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m utils.updater
-    ) >> "$UPDATE_CHECK_LOG" 2>&1 &
+    adr_run_as_user bash -c \
+        'cd /app && PYTHONPATH=/app/src exec /usr/local/bin/python -m utils.updater >> "$1" 2>&1' \
+        _ "$UPDATE_CHECK_LOG" &
 fi
 
 # ==================== Single Execution Mode ====================
@@ -104,8 +108,11 @@ if [ "$MODE" = "run-once" ]; then
     LOG_FILE="/app/logs/cron_$(date +%Y%m%d_%H%M%S).log"
     echo "Running in single-execution mode..."
     echo "Log: $LOG_FILE"
-    cd /app && python main.py 2>&1 | tee "$LOG_FILE"
-    exit ${PIPESTATUS[0]}
+    RESULT=0
+    adr_run_as_user bash -c \
+        'set -o pipefail; cd /app && python main.py 2>&1 | tee "$1"' \
+        _ "$LOG_FILE" || RESULT=$?
+    exit "$RESULT"
 fi
 
 # ==================== Cron Mode ====================
@@ -147,16 +154,19 @@ UPDATE_CRON_CMD="cd /app && PYTHONPATH=/app/src /usr/local/bin/python -m utils.u
     echo "17 9 * * * $UPDATE_CRON_CMD"
 } > /etc/cron.d/arxiv-daily
 chmod 0644 /etc/cron.d/arxiv-daily
-crontab /etc/cron.d/arxiv-daily
+crontab -u "$ADR_APP_USER" /etc/cron.d/arxiv-daily
 
 echo "Cron job installed:"
-crontab -l
+crontab -u "$ADR_APP_USER" -l
 
 # Run immediately on startup if configured
 if [ "$RUN_ON_STARTUP" = "true" ]; then
     echo ""
     echo "Running initial execution..."
-    cd /app && python main.py 2>&1 | tee /app/logs/startup_$(date +%Y%m%d_%H%M%S).log
+    STARTUP_LOG="/app/logs/startup_$(date +%Y%m%d_%H%M%S).log"
+    adr_run_as_user bash -c \
+        'set -o pipefail; cd /app && python main.py 2>&1 | tee "$1"' \
+        _ "$STARTUP_LOG"
     echo "Initial execution complete."
     echo ""
 fi
@@ -167,7 +177,7 @@ fi
 # are durable user actions and must survive a worker restart.
 TRIGGER_DIR="/app/data/run/webui_triggers"
 PID_FILE="/app/data/run/webui_triggered.pid"
-mkdir -p "$TRIGGER_DIR/status"
+adr_run_as_user mkdir -p "$TRIGGER_DIR/status"
 
 # A container restart kills the child process with it.  Return an atomically
 # claimed request to the queue so a SIGKILL/redeploy cannot silently lose a
@@ -209,7 +219,9 @@ trigger_watcher() {
                 # failed manual request from terminating the watcher loop (and
                 # therefore the otherwise healthy cron container).
                 RESULT=0
-                python /app/src/utils/webui_trigger.py "$CLAIMED_FILE" --pid-file "$PID_FILE" >> "$LOG_FILE" 2>&1 || RESULT=$?
+                adr_run_as_user bash -c \
+                    'exec python /app/src/utils/webui_trigger.py "$1" --pid-file "$2" >> "$3" 2>&1' \
+                    _ "$CLAIMED_FILE" "$PID_FILE" "$LOG_FILE" || RESULT=$?
                 echo "[trigger-watcher] Request finished with exit=$RESULT"
             fi
         fi
@@ -234,7 +246,7 @@ echo ""
 # so the restart path works by installing a TERM handler that terminates
 # the tail and lets this script (PID 1) exit normally. The same handler
 # also gives `docker stop` a clean, fast shutdown.
-touch /app/logs/system.log
+adr_run_as_user touch /app/logs/system.log
 tail -f /app/logs/system.log &
 TAIL_PID=$!
 trap 'kill -TERM "$TAIL_PID" 2>/dev/null' TERM INT

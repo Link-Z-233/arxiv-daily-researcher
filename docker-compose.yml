@@ -21,6 +21,8 @@ services:
 
     environment:
       - TZ=Asia/Shanghai
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - RUN_ON_STARTUP=false
       - MODE=cron
       - SETUP_WIZARD=auto
@@ -69,6 +71,8 @@ services:
 
     environment:
       - TZ=Asia/Shanghai
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
 
     volumes:
       - ./configs:/app/configs
