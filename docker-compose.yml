@@ -64,10 +64,17 @@ services:
     container_name: arxiv-daily-researcher-config-panel
     restart: unless-stopped
 
-    ports:
-      # This panel can edit .env and export its secrets.  Keep it local unless
-      # the operator deliberately places an authenticated reverse proxy in front.
-      - "127.0.0.1:8503:8501"
+    # Match the worker's localhost semantics so WebUI connection tests can
+    # reach host-side proxies and local LLM services exactly as scheduled jobs
+    # do.  Streamlit itself stays bound to loopback unless an authenticated
+    # reverse proxy is deliberately configured by the operator.
+    network_mode: host
+    command:
+      - streamlit
+      - run
+      - src/webui/config_panel.py
+      - --server.address=127.0.0.1
+      - --server.port=8503
 
     environment:
       - TZ=Asia/Shanghai
@@ -89,7 +96,7 @@ services:
           memory: 128M
 
     healthcheck:
-      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" ]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8503/_stcore/health')" ]
       interval: 30s
       timeout: 10s
       retries: 3
