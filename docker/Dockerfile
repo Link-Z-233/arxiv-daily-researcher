@@ -6,14 +6,18 @@
 # ==================== 公共层：基底 + 时区 + 共享 Python 依赖 ====================
 FROM python:3.12-slim AS common
 
+# 国内网络默认使用阿里云镜像；遇到镜像源异常时可在 compose 构建时覆盖。
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+
 LABEL maintainer="yzr278892"
 
 ENV TZ=Asia/Shanghai \
     HOME=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-    PIP_TRUSTED_HOST=mirrors.aliyun.com
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gosu tzdata && \
@@ -30,8 +34,7 @@ COPY docker/runtime-user.sh /usr/local/bin/adr-runtime-user.sh
 RUN chmod 0755 /usr/local/bin/adr-runtime-user.sh
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
+    pip install \
       json5==0.13.0 requests==2.32.5 'webdavclient3>=3.14.0' && \
     find /usr/local/lib/python3.12 -name '__pycache__' -type d -prune -exec rm -rf {} +
 
@@ -40,8 +43,7 @@ FROM common AS worker-deps
 
 COPY requirements-core.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
+    pip install \
       -r requirements-core.txt && \
     find /usr/local/lib/python3.12 -name '__pycache__' -type d -prune -exec rm -rf {} +
 
@@ -50,8 +52,7 @@ FROM common AS webui-deps
 
 COPY requirements-webui.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir \
-      -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
+    pip install \
       -r requirements-webui.txt && \
     find /usr/local/lib/python3.12 -name '__pycache__' -type d -prune -exec rm -rf {} +
 

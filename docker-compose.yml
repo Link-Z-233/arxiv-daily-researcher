@@ -6,6 +6,9 @@ services:
       target: worker
       # 与运行期一致使用宿主机网络，避免 NAS 的 bridge DNS/路由导致依赖构建极慢。
       network: host
+      args:
+        PIP_INDEX_URL: ${ADR_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        PIP_TRUSTED_HOST: ${ADR_PIP_TRUSTED_HOST:-mirrors.aliyun.com}
     # 默认使用本地构建镜像；部署者可通过 ADR_WORKER_IMAGE 覆盖为固定的
     # GHCR 版本标签。保留 build 以支持源码部署和本地开发。
     image: ${ADR_WORKER_IMAGE:-arxiv-daily-researcher:latest}
@@ -63,6 +66,9 @@ services:
       target: webui
       # WebUI 构建同样需要稳定访问 Python 软件源。
       network: host
+      args:
+        PIP_INDEX_URL: ${ADR_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        PIP_TRUSTED_HOST: ${ADR_PIP_TRUSTED_HOST:-mirrors.aliyun.com}
     # 与 worker 保持相同的版本来源，避免 WebUI 与后端协议错配。
     image: ${ADR_WEBUI_IMAGE:-arxiv-daily-researcher-config-panel:latest}
     container_name: arxiv-daily-researcher-config-panel
