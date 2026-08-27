@@ -49,7 +49,6 @@ jobs:
           SMART_LLM__BASE_URL=${{ secrets.SMART_LLM_BASE_URL }}
           SMART_LLM__MODEL_NAME=${{ secrets.SMART_LLM_MODEL_NAME }}
           SMART_LLM__TEMPERATURE=${{ secrets.SMART_LLM_TEMPERATURE }}
-          OPENALEX_EMAIL=${{ secrets.OPENALEX_EMAIL }}
           OPENALEX_API_KEY=${{ secrets.OPENALEX_API_KEY }}
           SEMANTIC_SCHOLAR_API_KEY=${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
           ENABLE_NOTIFICATIONS=${{ secrets.ENABLE_NOTIFICATIONS }}
