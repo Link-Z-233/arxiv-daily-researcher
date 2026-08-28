@@ -328,10 +328,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "health_window_14": {"zh": "近 14 天", "en": "14 days"},
     "health_window_30": {"zh": "近 30 天", "en": "30 days"},
     "health_window_all": {"zh": "全部", "en": "All"},
+    "pagination_page_size": {"zh": "每页显示", "en": "Rows per page"},
+    "pagination_page_size_value": {"zh": "{size} 条", "en": "{size} rows"},
+    "pagination_previous": {"zh": "← 上一页", "en": "← Previous"},
+    "pagination_next": {"zh": "下一页 →", "en": "Next →"},
+    "pagination_info": {
+        "zh": "第 {page} / {pages} 页 · {start}–{end} / 共 {total} 条",
+        "en": "Page {page} of {pages} · {start}–{end} of {total}",
+    },
     "an_diag_title": {"zh": "运行诊断", "en": "Run diagnostics"},
     "an_diag_runs_hint": {
-        "zh": "仅显示最近 5 次每日研究与过去日报；旧历史维护任务请在“系统 → 历史维护”查看。",
-        "en": "Shows the latest 5 daily-research and past-date runs. View history-maintenance tasks in System → History Maintenance.",
+        "zh": "显示所选时间范围内的每日研究与过去日报；旧历史维护任务请在“系统 → 历史维护”查看。",
+        "en": "Shows daily-research and past-date runs in the selected range. View history-maintenance tasks in System → History Maintenance.",
     },
     "an_diag_runs_empty": {
         "zh": "尚无每日研究或过去日报运行记录。",

@@ -16,14 +16,11 @@ import streamlit.components.v1 as components
 from utils.daily_research_store import DailyResearchStore
 from utils.source_registry import source_display_names
 from webui.i18n import t
+from webui.pagination import render_paginated_dataframe, render_paginated_table
 from webui.tabs.run_manager import _daily_db_path_from_config
 
 # GitHub 风格的五档绿色色阶；0 档为无数据灰。
 _HEAT_LEVEL_COLORS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
-_MAX_VISIBLE_TABLE_ROWS = 10
-_TABLE_SCROLL_HEIGHT_PX = 390
-
-
 def _week_labels() -> list[str]:
     return [t("usage_week_mon"), "", t("usage_week_wed"), "", t("usage_week_fri"), "", t("usage_week_sun")]
 
@@ -72,23 +69,18 @@ def components_html(html: str, *, height: int) -> None:
     components.html(html, height=height, scrolling=False)
 
 
-def _render_bounded_table(table: pd.DataFrame) -> None:
-    """Render every row with a 10-row native scrolling viewport when needed."""
-    if len(table) > _MAX_VISIBLE_TABLE_ROWS:
-        with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
-            st.table(table)
-    else:
-        st.table(table)
+def _render_bounded_table(table: pd.DataFrame, *, key: str = "analytics_table") -> None:
+    """Backward-compatible name for the shared 5/10-row table pager."""
+    render_paginated_table(table, key=key, ui=st, translate=t)
 
 
-def _render_bounded_dataframe(rows: list[dict]) -> None:
-    """Render diagnostic rows without letting a large source list grow the page."""
-    kwargs = {"hide_index": True, "width": "stretch"}
-    if len(rows) > _MAX_VISIBLE_TABLE_ROWS:
-        with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
-            st.dataframe(rows, **kwargs)
-    else:
-        st.dataframe(rows, **kwargs)
+def _render_bounded_dataframe(
+    rows: list[dict], *, key: str = "analytics_dataframe"
+) -> None:
+    """Backward-compatible name for the shared 5/10-row dataframe pager."""
+    render_paginated_dataframe(
+        rows, key=key, ui=st, translate=t, hide_index=True, width="stretch"
+    )
 
 
 def _scroll_right_document(body_html: str) -> str:
@@ -479,7 +471,8 @@ def _render_usage_section(_env_values: dict, config_values: dict) -> None:
                     "completion": t("usage_completion_tokens"),
                     "total": t("usage_total_tokens"),
                 }
-            )
+            ),
+            key="analytics_model_usage",
         )
 
 
@@ -603,7 +596,7 @@ def _render_llm_health_section(config_values: dict) -> None:
                 ),
             }
         )
-    _render_bounded_dataframe(rows)
+    _render_bounded_dataframe(rows, key="diagnostics_llm_health")
 
 
 def _render_source_health_section(_env_values: dict, config_values: dict) -> None:
@@ -676,16 +669,17 @@ def _render_source_health_section(_env_values: dict, config_values: dict) -> Non
                 ),
             }
         )
-    _render_bounded_dataframe(rows)
+    _render_bounded_dataframe(rows, key="diagnostics_source_health")
 
 
 def _render_diagnostics_section(config_values: dict) -> None:
-    """Show only the five latest normal daily or past-date report runs."""
+    """Show normal daily or past-date runs in the selected time window."""
     st.markdown(
         f'<p class="section-title">🩺 {t("an_diag_title")}</p>',
         unsafe_allow_html=True,
     )
     st.caption(t("an_diag_runs_hint"))
+    days = _selected_health_window("run_diagnostics_window_days")
 
     database_path = _daily_db_path_from_config(config_values)
     if not database_path.is_file():
@@ -693,7 +687,9 @@ def _render_diagnostics_section(config_values: dict) -> None:
         return
 
     try:
-        runs = DailyResearchStore(database_path).get_recent_operational_runs(limit=5)
+        runs = DailyResearchStore(database_path).get_recent_operational_runs(
+            limit=None, days=days
+        )
     except Exception:
         st.warning(t("rm_health_load_error"))
         return
@@ -712,7 +708,8 @@ def _render_diagnostics_section(config_values: dict) -> None:
                 t("an_diag_col_issue"): str(run.get("error_summary") or "—"),
             }
             for run in runs
-        ]
+        ],
+        key="diagnostics_operational_runs",
     )
 
 

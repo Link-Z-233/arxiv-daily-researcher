@@ -17,6 +17,7 @@ class _FakeStreamlit:
         self.tables = []
         self.dataframes = []
         self.markdowns = []
+        self.session_state = {}
 
     def container(self, **kwargs):
         self.containers.append(kwargs)
@@ -28,8 +29,23 @@ class _FakeStreamlit:
     def dataframe(self, value, **kwargs):
         self.dataframes.append((value, kwargs))
 
+    def selectbox(self, _label, options, index=0, **_kwargs):
+        return options[index]
+
+    def columns(self, spec):
+        count = spec if isinstance(spec, int) else len(spec)
+        return [_FakeColumn() for _ in range(count)]
+
     def markdown(self, value, **_kwargs):
         self.markdowns.append(value)
+
+    def caption(self, *_args, **_kwargs):
+        pass
+
+
+class _FakeColumn:
+    def button(self, *_args, **_kwargs):
+        return False
 
     def caption(self, *_args, **_kwargs):
         pass
@@ -73,22 +89,19 @@ class LongListViewportTests(unittest.TestCase):
         )
         self.assertEqual(len(fake_st.markdowns), 11)
 
-    def test_analytics_tables_use_the_same_ten_row_viewport_policy(self):
+    def test_analytics_tables_use_five_ten_row_paging_instead_of_scroll_frames(self):
         fake_st = _FakeStreamlit()
         rows = [{"source": f"source-{index}"} for index in range(11)]
-        with patch.object(analytics, "st", fake_st):
+        with (
+            patch.object(analytics, "st", fake_st),
+            patch.object(analytics, "t", side_effect=lambda key: key),
+        ):
             analytics._render_bounded_table(pd.DataFrame(rows))
             analytics._render_bounded_dataframe(rows)
 
-        self.assertEqual(
-            fake_st.containers,
-            [
-                {"height": analytics._TABLE_SCROLL_HEIGHT_PX, "border": True},
-                {"height": analytics._TABLE_SCROLL_HEIGHT_PX, "border": True},
-            ],
-        )
-        self.assertEqual(len(fake_st.tables[0]), 11)
-        self.assertEqual(len(fake_st.dataframes[0][0]), 11)
+        self.assertEqual(fake_st.containers, [])
+        self.assertEqual(len(fake_st.tables[0]), 5)
+        self.assertEqual(len(fake_st.dataframes[0][0]), 5)
 
 
 if __name__ == "__main__":

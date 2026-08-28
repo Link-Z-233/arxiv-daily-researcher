@@ -84,6 +84,24 @@ class DiagnosticsHealthWindowTests(unittest.TestCase):
         self.assertEqual(runs[0]["status"], "failed")
         self.assertNotIn("hidden", runs[0]["error_summary"])
 
+    def test_recent_operational_runs_supports_calendar_windows_without_hiding_rows(self):
+        recent_daily = self.store.start_run(2, run_kind="daily")
+        self.store.complete_run(recent_daily)
+        old_backfill = self.store.start_run(2, run_kind="backfill")
+        self.store.complete_run(old_backfill)
+        old_started = (datetime.now() - timedelta(days=8)).isoformat()
+        with self.store._connect() as conn:
+            conn.execute(
+                "UPDATE daily_runs SET started_at = ? WHERE run_id = ?",
+                (old_started, old_backfill),
+            )
+
+        recent = self.store.get_recent_operational_runs(limit=None, days=7)
+        complete = self.store.get_recent_operational_runs(limit=None, days=None)
+
+        self.assertEqual([row["run_id"] for row in recent], [recent_daily])
+        self.assertEqual({row["run_id"] for row in complete}, {recent_daily, old_backfill})
+
 
 if __name__ == "__main__":
     unittest.main()

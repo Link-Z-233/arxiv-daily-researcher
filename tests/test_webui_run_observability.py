@@ -100,6 +100,10 @@ class _FakeStreamlit:
     def dataframe(self, *args, **kwargs):
         self.calls.append(("dataframe", args, kwargs))
 
+    def segmented_control(self, *args, **kwargs):
+        self.calls.append(("segmented_control", args, kwargs))
+        return kwargs.get("default")
+
     def columns(self, count):
         column_count = count if isinstance(count, int) else len(count)
         return [_FakeColumn(self) for _ in range(column_count)]

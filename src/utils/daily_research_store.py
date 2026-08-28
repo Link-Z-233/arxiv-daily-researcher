@@ -4028,28 +4028,48 @@ class DailyResearchStore:
                 return f"{label}: {domain_error.strip()}".lstrip(": ")
         return None
 
-    def get_recent_operational_runs(self, limit: int = 5) -> list[Dict[str, Any]]:
+    def get_recent_operational_runs(
+        self, limit: Optional[int] = 5, *, days: Optional[int] = None
+    ) -> list[Dict[str, Any]]:
         """Return the latest daily or past-date reports for operator diagnosis.
 
         Historical import, repair, omission and supplement workflows own their
         progress in History Maintenance.  Keeping them out here makes the
         System diagnostics view answer one concise question: whether the
         normal daily schedule and explicitly queued past-date reports worked.
+        ``days=None`` covers all local history; ``limit=None`` intentionally
+        leaves result paging to the WebUI rather than discarding older rows.
         """
-        bounded_limit = max(1, min(int(limit), 20))
+        if days is not None and (
+            isinstance(days, bool) or not isinstance(days, int) or days < 1
+        ):
+            raise ValueError("运行诊断查看天数必须是正整数或 None")
+        bounded_limit = (
+            max(1, min(int(limit), 1_000)) if limit is not None else None
+        )
         visible_kinds = ("daily", "daily_research", "backfill", "backfill_run")
         placeholders = ", ".join("?" for _ in visible_kinds)
+        conditions = [f"run_kind IN ({placeholders})"]
+        params: list[Any] = list(visible_kinds)
+        if days is not None:
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            conditions.append("started_at >= ?")
+            params.append(cutoff)
+        limit_clause = ""
+        if bounded_limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(bounded_limit)
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
                 SELECT run_id, run_kind, started_at, completed_at, status,
                        total_papers, error
                 FROM daily_runs
-                WHERE run_kind IN ({placeholders})
+                WHERE {' AND '.join(conditions)}
                 ORDER BY started_at DESC, run_id DESC
-                LIMIT ?
+                {limit_clause}
                 """,
-                (*visible_kinds, bounded_limit),
+                params,
             ).fetchall()
         return [
             {
