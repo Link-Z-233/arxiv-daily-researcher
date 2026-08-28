@@ -1,13 +1,19 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from webui import auth  # noqa: E402
 from webui.auth import (  # noqa: E402
     _disabled_auth_values,
     WebUIAuthConfig,
+    accounts_for_config,
+    change_own_password,
+    create_managed_account,
     create_persistent_session_token,
+    find_account,
     hash_password,
     read_auth_config,
     validate_password,
@@ -54,6 +60,7 @@ class WebUIAuthTests(unittest.TestCase):
         self.assertFalse(read_auth_config(values).enabled)
         self.assertEqual(values["WEBUI_ADMIN_USERNAME"], "")
         self.assertEqual(values["WEBUI_ADMIN_PASSWORD_HASH"], "")
+        self.assertEqual(values["WEBUI_ACCOUNTS"], "")
 
     def test_username_and_password_validation(self):
         self.assertIsNone(validate_username("admin.user-1"))
@@ -85,6 +92,95 @@ class WebUIAuthTests(unittest.TestCase):
                 now=1_100,
             )
         )
+
+    def test_account_registry_keeps_legacy_owner_and_supports_secondary_login(self):
+        env_values = {
+            "WEBUI_AUTH_ENABLED": "true",
+            "WEBUI_ADMIN_USERNAME": "owner",
+            "WEBUI_ADMIN_PASSWORD_HASH": hash_password("secret"),
+        }
+        with (
+            patch.object(auth, "write_env") as write_env,
+            patch.object(auth.st.cache_data, "clear"),
+        ):
+            create_managed_account(
+                env_values,
+                actor_username="owner",
+                username="operator",
+                password="operator-secret",
+            )
+
+        saved = write_env.call_args.args[0]
+        config = read_auth_config(saved)
+        accounts = accounts_for_config(config)
+        self.assertEqual([account.username for account in accounts], ["owner", "operator"])
+        self.assertTrue(accounts[0].is_owner)
+        self.assertFalse(accounts[1].is_owner)
+        self.assertEqual(saved["WEBUI_ADMIN_USERNAME"], "owner")
+        self.assertIsNotNone(find_account(config, "operator"))
+        token = create_persistent_session_token(config, username="operator", now=1_000)
+        self.assertTrue(verify_persistent_session_token(config, token, now=1_100))
+
+    def test_password_change_invalidates_only_that_account_session(self):
+        env_values = {
+            "WEBUI_AUTH_ENABLED": "true",
+            "WEBUI_ADMIN_USERNAME": "owner",
+            "WEBUI_ADMIN_PASSWORD_HASH": hash_password("secret"),
+        }
+        with (
+            patch.object(auth, "write_env") as write_env,
+            patch.object(auth.st.cache_data, "clear"),
+        ):
+            create_managed_account(
+                env_values,
+                actor_username="owner",
+                username="operator",
+                password="operator-secret",
+            )
+            initial = write_env.call_args.args[0]
+            initial_config = read_auth_config(initial)
+            owner_token = create_persistent_session_token(
+                initial_config, username="owner", now=1_000
+            )
+            operator_token = create_persistent_session_token(
+                initial_config, username="operator", now=1_000
+            )
+            change_own_password(
+                initial,
+                username="operator",
+                current_password="operator-secret",
+                new_password="new-operator-secret",
+            )
+
+        updated_config = read_auth_config(write_env.call_args.args[0])
+        self.assertTrue(verify_persistent_session_token(updated_config, owner_token, now=1_100))
+        self.assertFalse(
+            verify_persistent_session_token(updated_config, operator_token, now=1_100)
+        )
+
+    def test_secondary_account_cannot_manage_the_registry(self):
+        env_values = {
+            "WEBUI_AUTH_ENABLED": "true",
+            "WEBUI_ADMIN_USERNAME": "owner",
+            "WEBUI_ADMIN_PASSWORD_HASH": hash_password("secret"),
+        }
+        with (
+            patch.object(auth, "write_env") as write_env,
+            patch.object(auth.st.cache_data, "clear"),
+        ):
+            create_managed_account(
+                env_values,
+                actor_username="owner",
+                username="operator",
+                password="operator-secret",
+            )
+            with self.assertRaisesRegex(ValueError, "auth_account_owner_required"):
+                create_managed_account(
+                    write_env.call_args.args[0],
+                    actor_username="operator",
+                    username="another-user",
+                    password="another-secret",
+                )
 
 
 if __name__ == "__main__":

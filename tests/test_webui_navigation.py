@@ -43,6 +43,7 @@ class WebUINavigationTests(unittest.TestCase):
                 "api",
                 "notifications",
                 "advanced",
+                "accounts",
                 "backup_sync",
                 "history_tasks",
                 "diagnostics",

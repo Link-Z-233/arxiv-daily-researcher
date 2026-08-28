@@ -42,6 +42,7 @@ NAVIGATION_GROUPS: Final[tuple[NavigationGroup, ...]] = (
             ("api", "nav_api"),
             ("notifications", "nav_notifications"),
             ("advanced", "nav_advanced"),
+            ("accounts", "nav_accounts"),
         ),
     ),
     (

@@ -36,7 +36,11 @@ from webui.tabs.analytics import (
     render_content as render_analytics,
     render_diagnostics,
 )
-from webui.auth import require_authentication, render_account_controls
+from webui.auth import (
+    render_account_controls,
+    render_account_management,
+    require_authentication,
+)
 from webui.i18n import t
 from webui.navigation import NAVIGATION_GROUP_IDS, NAVIGATION_GROUPS
 from webui.secret_fields import clear_secret_field_state
@@ -242,6 +246,7 @@ pages = {
     "api": llm.render,
     "notifications": notifications.render,
     "advanced": advanced.render,
+    "accounts": lambda env, _config: render_account_management(env),
     "backup_sync": data_management.render_backup_sync,
     "history_tasks": data_management.render_history_maintenance,
     "diagnostics": render_diagnostics,
