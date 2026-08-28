@@ -47,6 +47,22 @@ _LIVE_LOG_TAIL_HEIGHT_PX = 360
 # 进度面板用的配置快照：fragment 无法接收参数，经 session_state 传递
 _PROGRESS_CONFIG_KEY = "rm_status_config_values"
 _PROGRESS_SHOW_QUEUE_KEY = "rm_status_show_queue"
+_PROGRESS_EXCLUDE_HISTORY_KEY = "rm_status_exclude_history_tasks"
+
+# Historical maintenance is deliberately an idle-time workflow. Its detailed
+# queue/progress state belongs to System → History Maintenance, while its log
+# remains available from System → Run Logs. Keep it out of the daily landing
+# page so that page only reflects operational research work.
+_HISTORY_MAINTENANCE_MODES = frozenset(
+    {"legacy_import", "history_data_repair", "history_omission_scan"}
+)
+_HISTORY_MAINTENANCE_LOCK_NAMES = frozenset(
+    {
+        "legacy_import.lock",
+        "history_data_repair.lock",
+        "history_omission_scan.lock",
+    }
+)
 
 # 阶段心跳 → i18n key（交付提交后 run 即终态，无独立 deliver 阶段）
 _PHASE_LABEL_KEYS = {
@@ -243,16 +259,43 @@ def _get_all_running_locks() -> list[tuple[Path, Optional[int]]]:
 # ─── 触发文件机制 ─────────────────────────────────────────────────────────────
 
 
-def _trigger_age_seconds() -> Optional[float]:
-    """Return the age of the oldest queued (not already running) request."""
-    queued = list(_TRIGGER_QUEUE_DIR.glob("*.json")) if _TRIGGER_QUEUE_DIR.exists() else []
-    if not queued:
+def _trigger_age_seconds(
+    *, exclude_modes: frozenset[str] = frozenset()
+) -> Optional[float]:
+    """Return the age of the oldest queued request visible to this view."""
+    if not _TRIGGER_QUEUE_DIR.exists():
         return None
-    oldest = min(path.stat().st_mtime for path in queued)
+    try:
+        queued = list(_TRIGGER_QUEUE_DIR.glob("*.json"))
+    except OSError:
+        return None
+
+    timestamps: list[float] = []
+    for path in queued:
+        if exclude_modes:
+            try:
+                payload = read_trigger_payload(path)
+            except (OSError, ValueError):
+                # A malformed request is still operationally relevant. Leave
+                # it visible so the regular trigger diagnostics can flag it.
+                payload = None
+            if isinstance(payload, dict) and payload.get("mode") in exclude_modes:
+                continue
+        try:
+            timestamps.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    if not timestamps:
+        return None
+    oldest = min(timestamps)
     return time.time() - oldest
 
 
-def _trigger_queue_state(active_locks: Optional[list[tuple[Path, Optional[int]]]] = None) -> tuple[Optional[float], bool, bool]:
+def _trigger_queue_state(
+    active_locks: Optional[list[tuple[Path, Optional[int]]]] = None,
+    *,
+    exclude_modes: frozenset[str] = frozenset(),
+) -> tuple[Optional[float], bool, bool]:
     """Classify a queued trigger without mistaking deliberate idle waiting for failure.
 
     The worker consumes requests synchronously.  A user may queue a past-date
@@ -261,7 +304,7 @@ def _trigger_queue_state(active_locks: Optional[list[tuple[Path, Optional[int]]]
     Treat it as pending while a visible worker lock is held, and only mark it
     stale when no worker activity can explain the wait.
     """
-    trigger_age = _trigger_age_seconds()
+    trigger_age = _trigger_age_seconds(exclude_modes=exclude_modes)
     if trigger_age is None:
         return None, False, False
     if active_locks is None:
@@ -270,21 +313,46 @@ def _trigger_queue_state(active_locks: Optional[list[tuple[Path, Optional[int]]]
     return trigger_age, not trigger_stale, trigger_stale
 
 
-def _latest_trigger_status() -> Optional[dict]:
-    """Load the newest worker-owned trigger status for concise UI feedback."""
+def _latest_trigger_status(
+    *, exclude_modes: frozenset[str] = frozenset()
+) -> Optional[dict]:
+    """Load the newest worker-owned trigger status visible to this view."""
     if not _TRIGGER_STATUS_DIR.exists():
         return None
-    status_files = list(_TRIGGER_STATUS_DIR.glob("*.json"))
+    try:
+        status_files = sorted(
+            _TRIGGER_STATUS_DIR.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return None
     if not status_files:
         return None
-    try:
-        import json
+    import json
 
-        latest = max(status_files, key=lambda path: path.stat().st_mtime)
-        payload = json.loads(latest.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else None
-    except (OSError, ValueError):
-        return None
+    for status_path in status_files:
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("mode") in exclude_modes:
+            continue
+        return payload
+    return None
+
+
+def _exclude_history_maintenance_locks(
+    active_locks: list[tuple[Path, Optional[int]]],
+) -> list[tuple[Path, Optional[int]]]:
+    """Hide idle-time history-maintenance locks from the daily status card."""
+    return [
+        lock
+        for lock in active_locks
+        if lock[0].name not in _HISTORY_MAINTENANCE_LOCK_NAMES
+    ]
 
 
 def _enqueue_worker_trigger(mode: str, **args) -> tuple[bool, str]:
@@ -473,12 +541,17 @@ def _render_run_progress(progress: dict) -> None:
             st.progress(min(1.0, analyzed / denominator))
 
 
-def _render_live_status_body() -> None:
+def _render_live_status_body(*, exclude_history_tasks: bool = False) -> None:
     """实时状态渲染体：运行锁 + 进度 + 触发状态 + 活跃日志尾部。
 
     作为普通函数被完整渲染调用一次，或被 fragment 以 5 秒周期调用。
     """
     active_locks = _get_all_running_locks()
+    excluded_modes = (
+        _HISTORY_MAINTENANCE_MODES if exclude_history_tasks else frozenset()
+    )
+    if exclude_history_tasks:
+        active_locks = _exclude_history_maintenance_locks(active_locks)
     is_running = bool(active_locks)
 
     if is_running:
@@ -514,13 +587,13 @@ def _render_live_status_body() -> None:
                     st.code(tail)
         return
 
-    trigger_age = _trigger_age_seconds()
+    trigger_age = _trigger_age_seconds(exclude_modes=excluded_modes)
     trigger_pending = trigger_age is not None and trigger_age <= 30
     if trigger_pending:
         st.caption(t("rm_trigger_pending_short"))
         return
 
-    status = _latest_trigger_status()
+    status = _latest_trigger_status(exclude_modes=excluded_modes)
     if status and status.get("state") == "skipped_busy":
         st.info(t("rm_status_skipped_busy"))
     elif status and status.get("state") == "succeeded":
@@ -550,24 +623,42 @@ if hasattr(st, "fragment"):
     def _live_status_fragment() -> None:
         config_values = st.session_state.get(_PROGRESS_CONFIG_KEY) or {}
         show_queue = bool(st.session_state.get(_PROGRESS_SHOW_QUEUE_KEY, True))
+        exclude_history_tasks = bool(
+            st.session_state.get(_PROGRESS_EXCLUDE_HISTORY_KEY, False)
+        )
         if show_queue:
-            _render_status_snapshot(config_values)
+            _render_status_snapshot(
+                config_values, exclude_history_tasks=exclude_history_tasks
+            )
         else:
-            _render_status_snapshot(config_values, show_queue=False)
+            _render_status_snapshot(
+                config_values,
+                show_queue=False,
+                exclude_history_tasks=exclude_history_tasks,
+            )
         # ``run_every`` is fixed when a fragment starts.  Once the task has
         # finished (and no newly submitted request is waiting for the worker),
         # rerun the app scope so the parent stops mounting this fragment;
         # otherwise an idle status panel would keep polling forever.
-        if not _status_needs_polling():
+        if not _status_needs_polling(exclude_history_tasks=exclude_history_tasks):
             st.rerun()
 else:  # Streamlit < 1.37：退化为静态渲染，功能不缺失。
     def _live_status_fragment() -> None:
         config_values = st.session_state.get(_PROGRESS_CONFIG_KEY) or {}
         show_queue = bool(st.session_state.get(_PROGRESS_SHOW_QUEUE_KEY, True))
+        exclude_history_tasks = bool(
+            st.session_state.get(_PROGRESS_EXCLUDE_HISTORY_KEY, False)
+        )
         if show_queue:
-            _render_status_snapshot(config_values)
+            _render_status_snapshot(
+                config_values, exclude_history_tasks=exclude_history_tasks
+            )
         else:
-            _render_status_snapshot(config_values, show_queue=False)
+            _render_status_snapshot(
+                config_values,
+                show_queue=False,
+                exclude_history_tasks=exclude_history_tasks,
+            )
 
 
 def _render_run_control() -> None:
@@ -776,14 +867,23 @@ def _daily_db_path_from_config(config_values: dict) -> Path:
 # ─── 状态面板 ────────────────────────────────────────────────────────────────
 
 
-def _render_status_snapshot(config_values: dict, *, show_queue: bool = True) -> None:
+def _render_status_snapshot(
+    config_values: dict,
+    *,
+    show_queue: bool = True,
+    exclude_history_tasks: bool = False,
+) -> None:
     """Render the status-card contents that need periodic updates."""
-    _render_live_status_body()
+    _render_live_status_body(exclude_history_tasks=exclude_history_tasks)
     if show_queue:
         _render_queue_metrics(config_values)
 
 
-def _status_needs_polling(active_locks: Optional[list[tuple[Path, Optional[int]]]] = None) -> bool:
+def _status_needs_polling(
+    active_locks: Optional[list[tuple[Path, Optional[int]]]] = None,
+    *,
+    exclude_history_tasks: bool = False,
+) -> bool:
     """Whether the status panel should keep its short-lived live fragment.
 
     A Docker launch first writes a trigger request; the worker can take up to
@@ -794,30 +894,51 @@ def _status_needs_polling(active_locks: Optional[list[tuple[Path, Optional[int]]
     """
     if active_locks is None:
         active_locks = _get_all_running_locks()
+    if exclude_history_tasks:
+        active_locks = _exclude_history_maintenance_locks(active_locks)
     if active_locks:
         return True
-    _age, trigger_pending, _trigger_stale = _trigger_queue_state(active_locks)
+    if exclude_history_tasks:
+        _age, trigger_pending, _trigger_stale = _trigger_queue_state(
+            active_locks, exclude_modes=_HISTORY_MAINTENANCE_MODES
+        )
+    else:
+        _age, trigger_pending, _trigger_stale = _trigger_queue_state(active_locks)
     return trigger_pending
 
 
-def _render_status_panel(config_values: dict, *, show_queue: bool = True) -> None:
+def _render_status_panel(
+    config_values: dict,
+    *,
+    show_queue: bool = True,
+    exclude_history_tasks: bool = False,
+) -> None:
     """运行状态 + 待处理队列；运行中（含刚提交的接手阶段）自动刷新。"""
     # 进度面板运行在自动刷新的 fragment 里，无法直接接收这里的参数；
     # 把配置快照放进 session_state 供 fragment 每次重绘时读取。
     st.session_state[_PROGRESS_CONFIG_KEY] = dict(config_values or {})
     st.session_state[_PROGRESS_SHOW_QUEUE_KEY] = show_queue
+    st.session_state[_PROGRESS_EXCLUDE_HISTORY_KEY] = exclude_history_tasks
     auto_refresh = st.toggle(
         t("rm_auto_refresh"),
         value=st.session_state.get("rm_auto_refresh_on", True),
         key="rm_auto_refresh_on",
         help=t("rm_auto_refresh_help"),
     )
-    should_poll = _status_needs_polling()
+    should_poll = _status_needs_polling(
+        exclude_history_tasks=exclude_history_tasks
+    )
     with st.container(border=True):
         if auto_refresh and should_poll:
             _live_status_fragment()
         else:
-            if show_queue:
+            if exclude_history_tasks:
+                _render_status_snapshot(
+                    config_values,
+                    show_queue=show_queue,
+                    exclude_history_tasks=True,
+                )
+            elif show_queue:
                 _render_status_snapshot(config_values)
             else:
                 _render_status_snapshot(config_values, show_queue=False)
@@ -1056,7 +1177,9 @@ def render_daily_research(_env_values: dict, config_values: dict) -> None:
     )
     # Queues live on their own page so the daily landing page stays focused
     # on the job currently being launched or monitored.
-    _render_status_panel(config_values, show_queue=False)
+    _render_status_panel(
+        config_values, show_queue=False, exclude_history_tasks=True
+    )
 
     # Daily timing/output switches are useful but do not belong in the first
     # screen of a run console. Keep them available without making that screen

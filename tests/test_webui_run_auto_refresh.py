@@ -1,3 +1,5 @@
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -144,6 +146,50 @@ class RunAutoRefreshTests(unittest.TestCase):
 
         live_fragment.assert_not_called()
         snapshot.assert_called_once_with({})
+
+
+class HistoryMaintenanceStatusIsolationTests(unittest.TestCase):
+    def test_daily_status_hides_history_locks_and_does_not_poll_for_them(self):
+        history_lock = (Path("/run/legacy_import.lock"), 10)
+        daily_lock = (Path("/run/daily_research.lock"), 20)
+
+        self.assertEqual(
+            run_manager._exclude_history_maintenance_locks(
+                [history_lock, daily_lock]
+            ),
+            [daily_lock],
+        )
+        with patch.object(
+            run_manager, "_trigger_queue_state", return_value=(None, False, False)
+        ):
+            self.assertFalse(
+                run_manager._status_needs_polling(
+                    [history_lock], exclude_history_tasks=True
+                )
+            )
+
+    def test_daily_status_skips_newer_history_receipt(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status_dir = Path(temp_dir)
+            daily_status = status_dir / "daily.json"
+            history_status = status_dir / "history.json"
+            daily_status.write_text(
+                json.dumps({"mode": "daily_research", "state": "succeeded"}),
+                encoding="utf-8",
+            )
+            history_status.write_text(
+                json.dumps({"mode": "legacy_import", "state": "succeeded"}),
+                encoding="utf-8",
+            )
+            os.utime(daily_status, (100, 100))
+            os.utime(history_status, (200, 200))
+
+            with patch.object(run_manager, "_TRIGGER_STATUS_DIR", status_dir):
+                status = run_manager._latest_trigger_status(
+                    exclude_modes=run_manager._HISTORY_MAINTENANCE_MODES
+                )
+
+        self.assertEqual(status, {"mode": "daily_research", "state": "succeeded"})
 
 
 class ConfiguredRunLockPathTests(unittest.TestCase):
