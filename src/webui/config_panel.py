@@ -38,6 +38,7 @@ from webui.tabs.analytics import (
 )
 from webui.auth import require_authentication, render_account_controls
 from webui.i18n import t
+from webui.navigation import NAVIGATION_GROUP_IDS, NAVIGATION_GROUPS
 from webui.secret_fields import clear_secret_field_state
 
 
@@ -55,54 +56,6 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # Initialize language (default: Chinese)
 if "lang" not in st.session_state:
     st.session_state["lang"] = "zh"
-
-
-# Streamlit does not provide a native vertical tab bar. Sidebar buttons give
-# the same single-page behavior as tabs, while keeping the selector compact,
-# keyboard accessible, and free of radio-button circles.
-_NAVIGATION_GROUPS = (
-    (
-        "nav_group_run",
-        (
-            ("daily_research", "nav_daily_research"),
-            ("past_daily", "nav_past_daily"),
-            ("trend_tasks", "nav_trend_tasks"),
-            ("queue", "nav_queue"),
-            ("logs", "nav_logs"),
-        ),
-    ),
-    (
-        "nav_group_content",
-        (
-            ("reports", "nav_reports"),
-            ("favorites", "nav_favorites"),
-            ("paper_search", "nav_paper_search"),
-            ("analytics", "nav_analytics"),
-        ),
-    ),
-    (
-        "nav_group_config",
-        (
-            ("keywords", "nav_keywords"),
-            ("data_sources", "nav_data_sources"),
-            ("scoring", "nav_scoring"),
-            ("api", "nav_api"),
-            ("notifications", "nav_notifications"),
-            ("advanced", "nav_advanced"),
-        ),
-    ),
-    (
-        "nav_group_system",
-        (
-            ("backup_sync", "nav_backup_sync"),
-            ("history_tasks", "nav_history_tasks"),
-            ("diagnostics", "nav_diagnostics"),
-        ),
-    ),
-)
-_NAVIGATION_PAGE_IDS = {
-    page_id for _group, items in _NAVIGATION_GROUPS for page_id, _label in items
-}
 
 
 # ==================== Data Loading ====================
@@ -191,29 +144,24 @@ def do_save():
 # ==================== Sidebar ====================
 
 
-if st.session_state.get("webui_active_page") not in _NAVIGATION_PAGE_IDS:
-    st.session_state["webui_active_page"] = "daily_research"
+if st.session_state.get("webui_active_group") not in NAVIGATION_GROUP_IDS:
+    st.session_state["webui_active_group"] = "run"
 
 
 with st.sidebar:
     st.markdown("### ArXiv Daily Researcher")
     st.caption(t("sidebar_caption"))
 
-    for group_key, items in _NAVIGATION_GROUPS:
-        st.markdown(
-            f'<p class="sidebar-nav-group">{t(group_key)}</p>',
-            unsafe_allow_html=True,
-        )
-        for page_id, label_key in items:
-            active = st.session_state.get("webui_active_page") == page_id
-            if st.button(
-                t(label_key),
-                key=f"nav_{page_id}",
-                type="primary" if active else "secondary",
-                width="stretch",
-            ):
-                st.session_state["webui_active_page"] = page_id
-                st.rerun()
+    for group_id, group_label_key, _items in NAVIGATION_GROUPS:
+        active = st.session_state.get("webui_active_group") == group_id
+        if st.button(
+            t(group_label_key),
+            key=f"nav_group_{group_id}",
+            type="primary" if active else "secondary",
+            width="stretch",
+        ):
+            st.session_state["webui_active_group"] = group_id
+            st.rerun()
 
     st.divider()
 
@@ -278,9 +226,6 @@ with st.sidebar:
 env_values = load_env()
 config_values = load_config()
 
-# Sidebar navigation renders one focused page at a time. Every collect()
-# function falls back to the persisted configuration for widgets that have not
-# been visited in this session, so Save remains safe with lazy page rendering.
 pages = {
     "daily_research": run_manager.render_daily_research,
     "past_daily": run_manager.render_past_daily_reports,
@@ -302,5 +247,16 @@ pages = {
     "diagnostics": render_diagnostics,
 }
 
-active_page = st.session_state.get("webui_active_page", "daily_research")
-pages.get(active_page, run_manager.render_daily_research)(env_values, config_values)
+# The sidebar selects a workflow-level group only. Its individual tools retain
+# the native horizontal Streamlit tabs that the panel used before the sidebar
+# reorganization, so familiar tab switching remains available in the main area.
+active_group = st.session_state.get("webui_active_group", "run")
+_group_id, _group_label_key, active_items = next(
+    group
+    for group in NAVIGATION_GROUPS
+    if group[0] == active_group
+)
+top_tabs = st.tabs([t(label_key) for _page_id, label_key in active_items])
+for tab, (page_id, _label_key) in zip(top_tabs, active_items):
+    with tab:
+        pages[page_id](env_values, config_values)

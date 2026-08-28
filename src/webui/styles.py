@@ -59,14 +59,7 @@ CUSTOM_CSS = """
     margin: 1rem 0;
 }
 
-/* Sidebar navigation: vertical tab-like buttons instead of radio controls. */
-[data-testid="stSidebar"] .sidebar-nav-group {
-    color: rgba(200,214,229,0.72) !important;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    margin: 1rem 0 0.25rem;
-}
+/* Sidebar navigation: the four workflow groups are vertical tab-like buttons. */
 [data-testid="stSidebar"] [data-testid="stButton"] button {
     justify-content: flex-start;
     min-height: 2.2rem;
