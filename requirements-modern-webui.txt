@@ -4,6 +4,9 @@
 json5==0.13.0
 requests==2.32.5
 webdavclient3>=3.14.0
+# API connection checks intentionally use the same OpenAI-compatible client
+# as the Streamlit panel and worker.
+openai==2.15.0
 starlette==1.6.0
 uvicorn==0.52.4
 itsdangerous==2.2.0
