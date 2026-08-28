@@ -39,6 +39,10 @@ class LegacyImportWorkflowTests(unittest.TestCase):
             patch.object(legacy_import.settings, "DAILY_RESEARCH_DB_PATH", root / "daily.db"),
             patch.object(legacy_import.settings, "HISTORY_DIR", root / "history"),
             patch.object(legacy_import.settings, "REPORTS_DIR", root / "reports"),
+            # Tests must not inherit a developer's enabled webhook setting.
+            # The dedicated notification case below enables it with a fake
+            # notifier, while every ordinary workflow case stays hermetic.
+            patch.object(legacy_import.settings, "ENABLE_NOTIFICATIONS", False),
             patch.object(legacy_import, "run_lock", side_effect=_no_lock),
             patch.object(legacy_import, "daily_workflow_gate", side_effect=_no_lock),
             patch.object(legacy_import, "legacy_import_activity_gate", side_effect=_no_lock),
