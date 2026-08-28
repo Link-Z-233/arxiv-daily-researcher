@@ -1356,7 +1356,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "dm_webdav_scope_title": {"zh": "同步范围", "en": "Sync Scope"},
     "dm_webdav_sync_configs_label": {"zh": "配置文件 (config.json)", "en": "Config (config.json)"},
-    "dm_webdav_sync_history_label": {"zh": "新历史数据（SQLite）", "en": "New History Data (SQLite)"},
+    "dm_webdav_sync_history_label": {
+        "zh": "历史数据（{database}）",
+        "en": "Historical data ({database})",
+    },
     "dm_webdav_sync_keywords_label": {"zh": "关键词数据 (keywords/)", "en": "Keywords (keywords/)"},
     "dm_webdav_sync_reports_label": {"zh": "报告文件 (reports/)", "en": "Reports (reports/)"},
     "dm_webdav_test_btn": {"zh": "🔌 测试连接", "en": "🔌 Test Connection"},
@@ -1376,7 +1379,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_webdav_sync_done": {"zh": "✅ 同步完成", "en": "✅ Sync completed"},
     "dm_webdav_sync_partial": {"zh": "⚠️ 部分同步成功", "en": "⚠️ Partial sync success"},
     "dm_webdav_sync_error": {"zh": "❌ 同步失败", "en": "❌ Sync failed"},
-    "dm_backup_title": {"zh": "数据库备份", "en": "Database Backup"},
+    "dm_backup_title": {"zh": "本地备份", "en": "Local Backup"},
     "dm_backup_hint": {
         "zh": "每日运行结束后自动对 SQLite 数据库做 gzip 压缩备份：当天按数量上限保留副本（默认不限），昨天及更早每天只保留最新一份，再按下方保留期清理（默认最近 7 天；填 0 不按天数过期）；WebDAV 为增量备份，仅当数据库内容变化时上传，远端永不删除；也可手动立即备份。",
         "en": "After each daily run a gzip-compressed SQLite backup is created automatically: current-day copies follow the optional count limit (unlimited by default), while each earlier day keeps only its newest copy before the retention window is applied (7 days by default; 0 disables age expiry); WebDAV mirrors incrementally — uploads happen only when the database content changed and remote copies are never deleted. Manual backup is also available.",

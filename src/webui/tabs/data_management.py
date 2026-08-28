@@ -152,13 +152,9 @@ def render_backup_sync(env_values: dict, config_values: dict) -> None:
             if st.button(t("dm_webdav_download_btn"), width="stretch"):
                 _do_sync("download", env_values)
 
-        st.divider()
-
-        # 远程路径 & 同步设置
-        st.markdown(
-            f'<p class="section-title">⚙️ {t("dm_webdav_sync_settings")}</p>',
-            unsafe_allow_html=True,
-        )
+        # Keep these as subheadings of the WebDAV card rather than another
+        # peer-level section in the page hierarchy.
+        st.markdown(f"**⚙️ {t('dm_webdav_sync_settings')}**")
 
         st.text_input(
             t("dm_webdav_remote_path"),
@@ -208,13 +204,8 @@ def render_backup_sync(env_values: dict, config_values: dict) -> None:
                 f"{sync_time.minute} {sync_time.hour} * * *"
             )
 
-        st.divider()
-
-        # 同步范围
-        st.markdown(
-            f'<p class="section-title">📂 {t("dm_webdav_scope_title")}</p>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"**📂 {t('dm_webdav_scope_title')}**")
+        history_database_name = _configured_backup_paths(flat)[1].name
 
         col1, col2 = st.columns(2)
         with col1:
@@ -224,7 +215,9 @@ def render_backup_sync(env_values: dict, config_values: dict) -> None:
                 key="webdav_sync_configs",
             )
             st.toggle(
-                t("dm_webdav_sync_history_label"),
+                t("dm_webdav_sync_history_label").format(
+                    database=history_database_name
+                ),
                 value=flat.get("webdav_sync_history", True),
                 key="webdav_sync_history",
             )
@@ -242,7 +235,7 @@ def render_backup_sync(env_values: dict, config_values: dict) -> None:
 
     st.divider()
 
-    # ==================== 数据库备份 ====================
+    # ==================== 本地备份 ====================
     backup_data_dir, backup_database = _configured_backup_paths(flat)
     st.markdown(
         f'<p class="section-title">🗄️ {t("dm_backup_title")}</p>',
@@ -253,99 +246,99 @@ def render_backup_sync(env_values: dict, config_values: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    st.toggle(
+    backup_enabled = st.toggle(
         t("dm_backup_enable"),
         value=flat.get("backup_enabled", True),
         key="backup_enabled",
     )
 
-    configured_retention = flat.get(
-        "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
-    )
-    if (
-        isinstance(configured_retention, bool)
-        or not isinstance(configured_retention, int)
-        or configured_retention < MIN_LOCAL_BACKUP_RETENTION_DAYS
-    ):
-        configured_retention = LOCAL_BACKUP_RETENTION_DAYS
-    st.number_input(
-        t("dm_backup_retention_days_label"),
-        min_value=MIN_LOCAL_BACKUP_RETENTION_DAYS,
-        value=configured_retention,
-        step=1,
-        key="backup_local_retention_days",
-        help=t("dm_backup_retention_days_help"),
-    )
+    if backup_enabled:
+        configured_retention = flat.get(
+            "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
+        )
+        if (
+            isinstance(configured_retention, bool)
+            or not isinstance(configured_retention, int)
+            or configured_retention < MIN_LOCAL_BACKUP_RETENTION_DAYS
+        ):
+            configured_retention = LOCAL_BACKUP_RETENTION_DAYS
+        configured_same_day_max = flat.get(
+            "backup_local_same_day_max_count", LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+        )
+        if (
+            isinstance(configured_same_day_max, bool)
+            or not isinstance(configured_same_day_max, int)
+            or configured_same_day_max < MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+        ):
+            configured_same_day_max = LOCAL_BACKUP_SAME_DAY_MAX_COUNT
+        retention_col, same_day_col = st.columns(2)
+        with retention_col:
+            st.number_input(
+                t("dm_backup_retention_days_label"),
+                min_value=MIN_LOCAL_BACKUP_RETENTION_DAYS,
+                value=configured_retention,
+                step=1,
+                key="backup_local_retention_days",
+                help=t("dm_backup_retention_days_help"),
+            )
+        with same_day_col:
+            st.number_input(
+                t("dm_backup_same_day_max_label"),
+                min_value=MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
+                value=configured_same_day_max,
+                step=1,
+                key="backup_local_same_day_max_count",
+                help=t("dm_backup_same_day_max_help"),
+            )
 
-    configured_same_day_max = flat.get(
-        "backup_local_same_day_max_count", LOCAL_BACKUP_SAME_DAY_MAX_COUNT
-    )
-    if (
-        isinstance(configured_same_day_max, bool)
-        or not isinstance(configured_same_day_max, int)
-        or configured_same_day_max < MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT
-    ):
-        configured_same_day_max = LOCAL_BACKUP_SAME_DAY_MAX_COUNT
-    st.number_input(
-        t("dm_backup_same_day_max_label"),
-        min_value=MIN_LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
-        value=configured_same_day_max,
-        step=1,
-        key="backup_local_same_day_max_count",
-        help=t("dm_backup_same_day_max_help"),
-    )
-
-    if st.session_state.get("backup_enabled", flat.get("backup_enabled", True)):
-        if st.button(t("dm_backup_now_btn"), width="stretch"):
-            _do_backup(env_values, flat)
+    if st.button(t("dm_backup_now_btn"), width="stretch"):
+        _do_backup(env_values, flat)
 
     # 导入 / 导出：都是压缩包，导入端自动识别 zip / gzip / 原始 SQLite
     st.divider()
-    col_export, col_import = st.columns(2)
-    with col_export:
-        if st.button(t("dm_backup_export_btn"), key="dm_backup_export", width="stretch"):
-            try:
-                with st.spinner(t("dm_backup_running")):
-                    st.session_state["dm_export_bundle"] = export_backup_zip(
-                        backup_data_dir, database=backup_database
-                    )
-            except Exception as e:
-                st.error(f"{t('dm_backup_failed')}: {e}")
-        bundle = st.session_state.get("dm_export_bundle")
-        if bundle:
-            st.download_button(
-                label=t("dm_backup_download_btn"),
-                data=bundle[0],
-                file_name=bundle[1],
-                mime="application/zip",
-                width="stretch",
-            )
-
-    with col_import:
-        uploaded = st.file_uploader(
-            t("dm_backup_import_label"),
-            type=["zip", "gz", "db"],
-            key="dm_backup_import_file",
-        )
-        if uploaded is not None and st.button(
-            t("dm_backup_import_btn"), key="dm_backup_import", width="stretch"
-        ):
-            try:
-                with st.spinner(t("dm_backup_running")):
-                    result = restore_backup_archive(
-                        backup_data_dir,
-                        uploaded.getvalue(),
-                        uploaded.name,
-                        database=backup_database,
-                    )
-                st.success(
-                    t("dm_backup_import_ok").format(
-                        source=result["source_member"],
-                        archived=result["archived_previous"] or "—",
-                    )
+    if st.button(t("dm_backup_export_btn"), key="dm_backup_export", width="stretch"):
+        try:
+            with st.spinner(t("dm_backup_running")):
+                st.session_state["dm_export_bundle"] = export_backup_zip(
+                    backup_data_dir, database=backup_database
                 )
-            except Exception as e:
-                st.error(f"{t('dm_backup_failed')}: {e}")
+        except Exception as e:
+            st.error(f"{t('dm_backup_failed')}: {e}")
+    bundle = st.session_state.get("dm_export_bundle")
+    if bundle:
+        st.download_button(
+            label=t("dm_backup_download_btn"),
+            data=bundle[0],
+            file_name=bundle[1],
+            mime="application/zip",
+            width="stretch",
+        )
+
+    st.divider()
+    uploaded = st.file_uploader(
+        t("dm_backup_import_label"),
+        type=["zip", "gz", "db"],
+        key="dm_backup_import_file",
+    )
+    if uploaded is not None and st.button(
+        t("dm_backup_import_btn"), key="dm_backup_import", width="stretch"
+    ):
+        try:
+            with st.spinner(t("dm_backup_running")):
+                result = restore_backup_archive(
+                    backup_data_dir,
+                    uploaded.getvalue(),
+                    uploaded.name,
+                    database=backup_database,
+                )
+            st.success(
+                t("dm_backup_import_ok").format(
+                    source=result["source_member"],
+                    archived=result["archived_previous"] or "—",
+                )
+            )
+        except Exception as e:
+            st.error(f"{t('dm_backup_failed')}: {e}")
 
     _render_backup_list(_list_backups(flat))
 
@@ -1135,13 +1128,17 @@ def _do_backup(env_values: dict, config_values: dict | None = None):
 
         retention_days = validate_local_backup_retention_days(
             st.session_state.get(
-                "backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS
+                "backup_local_retention_days",
+                flat.get("backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS),
             )
         )
         same_day_max_count = validate_local_backup_same_day_max_count(
             st.session_state.get(
                 "backup_local_same_day_max_count",
-                LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
+                flat.get(
+                    "backup_local_same_day_max_count",
+                    LOCAL_BACKUP_SAME_DAY_MAX_COUNT,
+                ),
             )
         )
         data_dir, database = _configured_backup_paths(config_values)
