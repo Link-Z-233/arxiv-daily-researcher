@@ -852,8 +852,9 @@ async function renderDataSources(_token) {
 async function renderScoring(token) {
   const strategy = configValue("score_strategy", "core_relevance_v2");
   const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}${section("评分策略", `${field({ label: "策略", key: "score_strategy", type: "select", choices: [{ value: "core_relevance_v2", label: "核心相关度 V2" }, { value: "legacy_weighted_keyword_v1", label: "加权关键词 V1（兼容）" }, { value: "learned_preference_v1", label: "学习偏好 V1" }], fallback: "core_relevance_v2", redraw: true })}${strategyDescription(strategy)}${renderStrategyFields(strategy)}`, { icon: "🧮" })}${divider()}${renderAuthorBonus()}`;
+  root.innerHTML = `${pageHeader()}${section("评分策略", `${field({ label: "策略", key: "score_strategy", type: "select", choices: [{ value: "core_relevance_v2", label: "核心相关度 V2" }, { value: "legacy_weighted_keyword_v1", label: "加权关键词 V1（兼容）" }, { value: "learned_preference_v1", label: "学习偏好 V1" }], fallback: "core_relevance_v2", redraw: true })}${strategyDescription(strategy)}${strategyQualificationNotice(strategy)}${renderStrategyFields(strategy)}${legacyFormulaPreview(strategy)}`, { icon: "🧮" })}${divider()}${renderAuthorBonus()}`;
   bindCommon(root);
+  bindLegacyFormulaPreview(root, strategy);
   if (strategy === "learned_preference_v1") {
     try {
       const learned = await api("/api/learned-preferences");
@@ -874,6 +875,16 @@ function strategyDescription(strategy) {
   return `<p class="info-box">${escapeHtml(descriptions[strategy] || descriptions.core_relevance_v2)}</p>`;
 }
 
+function strategyQualificationNotice(strategy) {
+  if (strategy !== "core_relevance_v2") return "";
+  const primary = configValue("primary_keywords", []);
+  const hasPrimary = Array.isArray(primary) ? primary.some((item) => String(item || "").trim()) : Boolean(String(primary || "").trim());
+  if (hasPrimary) return "";
+  return configValue("enable_reference_extraction", false)
+    ? '<p class="info-box">当前未设置主关键词。参考文献关键词可以参与排序，但 V2 不会仅凭参考词让论文通过资格筛选；添加主关键词后才能产生合格论文。</p>'
+    : '<p class="issue-box">V2 需要至少一个主关键词。请先在“关键词”页配置主关键词，否则没有论文能够通过资格筛选。</p>';
+}
+
 function renderStrategyFields(strategy) {
   if (strategy === "core_relevance_v2") return `<div class="form-grid three">${field({ label: "加权平均相关度阈值", key: "core_relevance_threshold", type: "number", min: 0, max: 100, step: 0.5, fallback: 6 })}${field({ label: "主关键词强匹配最低分", key: "core_keyword_min_score", type: "number", min: 0, max: 100, step: 0.5, fallback: 7 })}${field({ label: "参考词排序权重", key: "reference_ranking_weight", type: "number", min: 0, max: 5, step: 0.05, fallback: 0.25 })}</div>${field({ label: "单关键词最高分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}`;
   if (strategy === "learned_preference_v1") return `<div class="form-grid two">${field({ label: "学习权重衰减", key: "learned_weight_dampening", type: "number", min: 0, max: 1, step: 0.05, fallback: 0.5 })}${field({ label: "学习词权重上限", key: "learned_term_weight_cap", type: "number", min: 0.1, max: 10, step: 0.1, fallback: 2 })}</div>${legacyStrategyFields()}<div id="learned-library"><div class="loading">正在读取偏好词库…</div></div>`;
@@ -881,6 +892,39 @@ function renderStrategyFields(strategy) {
 }
 
 function legacyStrategyFields() { return `<div class="form-grid three">${field({ label: "基础通过分", key: "passing_score_base", type: "number", min: 0, max: 100, step: 0.5, fallback: 5 })}${field({ label: "权重系数", key: "passing_score_weight_coefficient", type: "number", min: 0, max: 20, step: 0.5, fallback: 3 })}${field({ label: "单关键词最高分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}</div>`; }
+
+function legacyFormulaPreview(strategy) {
+  if (strategy === "core_relevance_v2") return "";
+  const primary = configValue("primary_keywords", []);
+  const count = Array.isArray(primary) ? primary.filter((item) => String(item || "").trim()).length : 0;
+  const weight = Number(configValue("primary_keyword_weight", 1));
+  const base = Number(configValue("passing_score_base", 5));
+  const coefficient = Number(configValue("passing_score_weight_coefficient", 3));
+  const totalWeight = count * (Number.isFinite(weight) ? weight : 1);
+  const passing = (Number.isFinite(base) ? base : 5) + (Number.isFinite(coefficient) ? coefficient : 3) * totalWeight;
+  return `<p id="legacy-formula-preview" class="info-box">共 ${count} 个主关键词，权重 ${Number.isFinite(weight) ? weight : 1}：通过分数 = ${Number.isFinite(base) ? base : 5} + ${Number.isFinite(coefficient) ? coefficient : 3} × ${totalWeight.toFixed(1)} = <strong>${passing.toFixed(1)}</strong></p>`;
+}
+
+function bindLegacyFormulaPreview(root, strategy) {
+  if (strategy === "core_relevance_v2") return;
+  const preview = $("#legacy-formula-preview", root);
+  if (!preview) return;
+  const update = () => {
+    const primary = configValue("primary_keywords", []);
+    const count = Array.isArray(primary) ? primary.filter((item) => String(item || "").trim()).length : 0;
+    const weight = Number(configValue("primary_keyword_weight", 1));
+    const baseField = $('[data-field="passing_score_base"]', root);
+    const coefficientField = $('[data-field="passing_score_weight_coefficient"]', root);
+    const base = Number(baseField?.value ?? configValue("passing_score_base", 5));
+    const coefficient = Number(coefficientField?.value ?? configValue("passing_score_weight_coefficient", 3));
+    const normalizedWeight = Number.isFinite(weight) ? weight : 1;
+    const normalizedBase = Number.isFinite(base) ? base : 5;
+    const normalizedCoefficient = Number.isFinite(coefficient) ? coefficient : 3;
+    const totalWeight = count * normalizedWeight;
+    preview.innerHTML = `共 ${count} 个主关键词，权重 ${normalizedWeight}：通过分数 = ${normalizedBase} + ${normalizedCoefficient} × ${totalWeight.toFixed(1)} = <strong>${(normalizedBase + normalizedCoefficient * totalWeight).toFixed(1)}</strong>`;
+  };
+  $$('[data-field="passing_score_base"], [data-field="passing_score_weight_coefficient"]', root).forEach((element) => element.addEventListener("input", update));
+}
 
 function renderAuthorBonus() {
   const enabled = Boolean(configValue("enable_author_bonus", false));
