@@ -79,6 +79,15 @@ function escapeHtml(value) {
 
 function escapeAttribute(value) { return escapeHtml(value); }
 
+function safeExternalUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function formatTime(value) {
   if (!value) return "—";
   const date = new Date(value);
@@ -637,7 +646,7 @@ function pagedItems(key, items, empty = "暂无数据") {
 }
 
 function searchParamsFromState() {
-  const values = state.pageData.search || { query: "", source: "", completed_from: "", completed_to: "", min_score: "", liked_only: false, page: 0, size: 5 };
+  const values = state.pageData.search || { query: "", source: "", completed_from: "", completed_to: "", min_score: "", liked_only: false, page: 0, size: 20 };
   state.pageData.search = values;
   const params = new URLSearchParams({ query: values.query, limit: String(values.size), offset: String(values.page * values.size) });
   if (values.source) params.set("source", values.source);
@@ -648,22 +657,50 @@ function searchParamsFromState() {
   return params;
 }
 
+function sourceVariantCard(variant) {
+  const statuses = [
+    variant.strategy_id ? `策略：${variant.strategy_id}` : "",
+    variant.score_status ? `评分：${variant.score_status}` : "",
+    variant.translation_status ? `翻译：${variant.translation_status}` : "",
+    variant.analysis_status ? `分析：${variant.analysis_status}` : "",
+  ].filter(Boolean).join(" · ");
+  const url = safeExternalUrl(variant.url);
+  const pdfUrl = safeExternalUrl(variant.pdf_url);
+  const analysis = variant.analysis && typeof variant.analysis === "object" && Object.keys(variant.analysis).length
+    ? `<details class="paper-analysis"><summary>深度分析</summary><pre>${escapeHtml(JSON.stringify(variant.analysis, null, 2))}</pre></details>`
+    : "";
+  return `<article class="paper-variant"><h4>${escapeHtml(variant.source || "—")} · ${escapeHtml(formatTime(variant.completed_at) || "未完成")}</h4>${statuses ? `<p class="muted">${escapeHtml(statuses)}</p>` : ""}${variant.tldr ? `<p><strong>TL;DR：</strong>${escapeHtml(variant.tldr)}</p>` : ""}${variant.abstract_cn ? `<p><strong>中文摘要：</strong>${escapeHtml(variant.abstract_cn)}</p>` : ""}${variant.extracted_keywords?.length ? `<p><strong>关键词：</strong>${escapeHtml(variant.extracted_keywords.join(" · "))}</p>` : ""}${analysis}${variant.last_error ? `<p class="error-message">问题：${escapeHtml(variant.last_error)}</p>` : ""}${url || pdfUrl ? `<p>${url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">论文页面</a>` : ""}${url && pdfUrl ? " · " : ""}${pdfUrl ? `<a href="${escapeAttribute(pdfUrl)}" target="_blank" rel="noopener noreferrer">PDF</a>` : ""}</p>` : ""}${variant.report_path ? `<p class="muted">报告路径：${escapeHtml(variant.report_path)}</p>` : ""}</article>`;
+}
+
 function paperCard(item) {
   const score = Number.isFinite(Number(item.total_score)) ? Number(item.total_score).toFixed(1) : "—";
-  const sources = (item.sources || [item.source]).filter(Boolean).join(" · ");
+  const badge = item.is_qualified === true ? "🟢" : item.is_qualified === false ? "⚪" : "·";
+  const sources = (item.sources || [item.source]).filter(Boolean).join(", ");
   const preference = item.preference === "like" ? " 👍" : item.preference === "dislike" ? " 👎" : "";
-  const variants = (item.variants || []).map((variant) => `<details><summary>${escapeHtml(variant.source)} · ${escapeHtml(variant.completed_at || "未完成")}</summary>${variant.tldr ? `<p><strong>TL;DR：</strong>${escapeHtml(variant.tldr)}</p>` : ""}${variant.abstract_cn ? `<p><strong>中文摘要：</strong>${escapeHtml(variant.abstract_cn)}</p>` : ""}${variant.extracted_keywords?.length ? `<p><strong>关键词：</strong>${escapeHtml(variant.extracted_keywords.join(" · "))}</p>` : ""}${variant.last_error ? `<p class="error-message">${escapeHtml(variant.last_error)}</p>` : ""}</details>`).join("");
-  return `<details class="paper-card"><summary><span class="score-pill">${score}</span><strong>${escapeHtml(item.title)}${preference}</strong><small>${escapeHtml(sources)}</small></summary><div class="paper-content"><p class="muted">完成时间：${escapeHtml(formatTime(item.completed_at))}${item.published_date ? ` · 发布：${escapeHtml(item.published_date)}` : ""}</p>${item.authors?.length ? `<p><strong>作者：</strong>${escapeHtml(item.authors.join(", "))}</p>` : ""}${item.tldr ? `<p><strong>TL;DR：</strong>${escapeHtml(item.tldr)}</p>` : ""}${item.merged_keywords?.length ? `<p><strong>关键词：</strong>${escapeHtml(item.merged_keywords.join(" · "))}</p>` : ""}${item.url ? `<p><a href="${escapeAttribute(item.url)}" target="_blank" rel="noreferrer">论文页面</a>${item.pdf_url ? ` · <a href="${escapeAttribute(item.pdf_url)}" target="_blank" rel="noreferrer">PDF</a>` : ""}</p>` : ""}${variants}</div></details>`;
+  const url = safeExternalUrl(item.url);
+  const pdfUrl = safeExternalUrl(item.pdf_url);
+  const metadata = [
+    `来源：${sources || "—"}`,
+    `完成：${formatTime(item.completed_at) || "—"}`,
+    item.published_date ? `发布：${item.published_date}` : "",
+    item.strategy_id ? `策略：${item.strategy_id}` : "",
+  ].filter(Boolean).join(" ｜ ");
+  const variants = (item.variants || []).map(sourceVariantCard).join("");
+  return `<details class="paper-card"><summary><span class="score-pill">${score}</span><strong>${badge} ${escapeHtml(item.title)}${preference}</strong><small>${escapeHtml(metadata)}</small></summary><div class="paper-content">${item.authors?.length ? `<p><strong>作者：</strong>${escapeHtml(item.authors.slice(0, 12).join(", "))}</p>` : ""}${item.tldr ? `<p><strong>TL;DR：</strong>${escapeHtml(item.tldr)}</p>` : ""}${(item.merged_keywords || item.extracted_keywords)?.length ? `<p><strong>合并关键词：</strong>${escapeHtml((item.merged_keywords || item.extracted_keywords).join(" · "))}</p>` : ""}${item.categories?.length ? `<p class="muted">分类：${escapeHtml(item.categories.join(" "))}</p>` : ""}${url || pdfUrl ? `<p>${url ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">arXiv / 论文页面</a>` : ""}${url && pdfUrl ? " ｜ " : ""}${pdfUrl ? `<a href="${escapeAttribute(pdfUrl)}" target="_blank" rel="noopener noreferrer">PDF</a>` : ""}</p>` : ""}${variants ? `<div class="paper-variants"><h3>来源变体</h3>${variants}</div>` : ""}</div></details>`;
 }
 
 async function renderPaperSearch(token) {
   const root = $("#page-root");
-  const values = state.pageData.search || { query: "", source: "", completed_from: "", completed_to: "", min_score: "", liked_only: false, page: 0, size: 5 };
+  const values = state.pageData.search || { query: "", source: "", completed_from: "", completed_to: "", min_score: "", liked_only: false, page: 0, size: 20 };
   root.innerHTML = `${pageHeader()}${section("检索条件", `<div class="form-grid two"><label class="form-field"><span>关键词</span><input id="search-query" value="${escapeAttribute(values.query)}" placeholder="标题、摘要、TL;DR 或关键词" /></label><label class="form-field"><span>来源</span><select id="search-source"><option value="">全部来源</option></select></label><label class="form-field"><span>完成日期开始</span><input id="search-from" type="date" value="${escapeAttribute(values.completed_from)}" /></label><label class="form-field"><span>完成日期结束</span><input id="search-to" type="date" value="${escapeAttribute(values.completed_to)}" /></label><label class="form-field"><span>最低分数</span><input id="search-score" type="number" step="0.5" min="0" value="${escapeAttribute(values.min_score)}" /></label><label class="toggle-field"><span>仅收藏论文</span><input id="search-liked" type="checkbox" ${values.liked_only ? "checked" : ""}/><i></i></label></div><div class="action-row"><button id="search-run" class="primary-button">搜索 <span>→</span></button></div>`, { icon: "🔍" })}<div id="search-results"><p class="empty-state">填写条件后开始搜索。</p></div>`;
   const sourceSelect = $("#search-source");
   try {
     const sourceProbe = await api("/api/papers?limit=5&offset=0");
     if (token !== state.renderToken) return;
+    if (!sourceProbe.available) {
+      root.innerHTML = `${pageHeader()}${section("论文检索", '<p class="info-box">SQLite 数据库尚未创建；运行一次每日研究或导入历史后即可检索。</p>', { icon: "🔍" })}`;
+      return;
+    }
     sourceSelect.insertAdjacentHTML("beforeend", (sourceProbe.sources || []).map((source) => `<option value="${escapeAttribute(source)}" ${values.source === source ? "selected" : ""}>${escapeHtml(source)}</option>`).join(""));
     if (values.executed) await loadSearchResults(token);
   } catch (error) { $("#search-results").innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
@@ -680,11 +717,15 @@ async function loadSearchResults(token) {
     const values = state.pageData.search;
     const result = await api(`/api/papers?${searchParamsFromState()}`);
     if (token !== state.renderToken) return;
+    if (!result.available) {
+      target.innerHTML = '<p class="info-box">SQLite 数据库尚未创建；运行一次每日研究或导入历史后即可检索。</p>';
+      return;
+    }
     const pages = Math.max(1, Math.ceil(result.total / values.size));
-    target.innerHTML = section(`检索结果（${result.total}）`, `${result.items?.length ? result.items.map(paperCard).join("") : '<p class="empty-state">没有匹配的论文。</p>'}<div class="pager"><label>每页<select id="search-size"><option value="5" ${values.size === 5 ? "selected" : ""}>5 条</option><option value="10" ${values.size === 10 ? "selected" : ""}>10 条</option></select></label><span>第 ${values.page + 1} / ${pages} 页</span><button id="search-prev" class="secondary-button compact-button" ${values.page === 0 ? "disabled" : ""}>上一页</button><button id="search-next" class="secondary-button compact-button" ${values.page >= pages - 1 ? "disabled" : ""}>下一页</button></div>`);
-    $("#search-size").addEventListener("change", (event) => { values.size = Number(event.target.value); values.page = 0; loadSearchResults(token); });
-    $("#search-prev").addEventListener("click", () => { values.page -= 1; loadSearchResults(token); });
-    $("#search-next").addEventListener("click", () => { values.page += 1; loadSearchResults(token); });
+    const pager = pages > 1 ? `<div class="pager"><span>第 ${values.page + 1} / ${pages} 页 · 每页 20 篇</span><button id="search-prev" class="secondary-button compact-button" ${values.page === 0 ? "disabled" : ""}>上一页</button><button id="search-next" class="secondary-button compact-button" ${values.page >= pages - 1 ? "disabled" : ""}>下一页</button></div>` : "";
+    target.innerHTML = section(`检索结果（共 ${result.total} 篇匹配）`, `${result.items?.length ? result.items.map(paperCard).join("") : '<p class="empty-state">没有匹配的论文。</p>'}${pager}`);
+    $("#search-prev")?.addEventListener("click", () => { values.page -= 1; loadSearchResults(token); });
+    $("#search-next")?.addEventListener("click", () => { values.page += 1; loadSearchResults(token); });
   } catch (error) { target.innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
 }
 
