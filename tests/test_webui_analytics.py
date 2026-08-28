@@ -35,6 +35,36 @@ class NiceCeilingTests(unittest.TestCase):
         self.assertEqual(analytics._nice_ceiling(1_200_000), 2_000_000.0)
 
 
+class AnalyticsPlacementTests(unittest.TestCase):
+    def test_data_analysis_keeps_only_usage_metrics(self):
+        with (
+            patch.object(analytics, "_render_usage_section") as usage,
+            patch.object(analytics, "_render_llm_health_section") as llm_health,
+            patch.object(analytics, "_render_source_health_section") as source_health,
+            patch.object(analytics.st, "divider") as divider,
+        ):
+            analytics.render_content({"sample": "env"}, {"sample": "config"})
+
+        usage.assert_called_once_with({"sample": "env"}, {"sample": "config"})
+        llm_health.assert_not_called()
+        source_health.assert_not_called()
+        divider.assert_not_called()
+
+    def test_system_diagnostics_contains_health_sections(self):
+        with (
+            patch.object(analytics, "_render_diagnostics_section") as diagnostics,
+            patch.object(analytics, "_render_llm_health_section") as llm_health,
+            patch.object(analytics, "_render_source_health_section") as source_health,
+            patch.object(analytics.st, "divider") as divider,
+        ):
+            analytics.render_diagnostics({"sample": "env"}, {"sample": "config"})
+
+        diagnostics.assert_called_once_with({"sample": "config"})
+        llm_health.assert_called_once_with({"sample": "config"})
+        source_health.assert_called_once_with({"sample": "env"}, {"sample": "config"})
+        self.assertEqual(divider.call_count, 2)
+
+
 class HeatmapTests(unittest.TestCase):
     def test_heatmap_includes_today_when_today_is_monday(self):
         class Monday(date):
