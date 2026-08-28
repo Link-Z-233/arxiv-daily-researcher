@@ -314,6 +314,31 @@ class DailyResearchStore:
                 "CREATE INDEX IF NOT EXISTS idx_daily_scan_receipts_run "
                 "ON daily_scan_receipts(run_id, receipt_id)"
             )
+            # Append-only, cross-workflow source observations.  Daily scan
+            # receipts remain the authoritative checkpoint evidence and keep
+            # their one-row-per-run/source shape; this table additionally
+            # records historical range scans, supplement metadata lookups and
+            # optional enrichment requests for the health panel.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS source_health_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT,
+                    task_kind TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('succeeded', 'failed')),
+                    candidate_count INTEGER,
+                    error_summary TEXT,
+                    occurred_at TEXT NOT NULL,
+                    origin_key TEXT UNIQUE
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_source_health_events_source_time "
+                "ON source_health_events(source, occurred_at DESC, event_id DESC)"
+            )
+            self._backfill_source_health_events(conn)
             self._migrate_backfill_target_dates(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_daily_papers_backfill_pending "
@@ -1570,6 +1595,183 @@ class DailyResearchStore:
             ).fetchone()
 
     @staticmethod
+    def _receipt_candidate_count(receipt: Dict[str, Any]) -> Optional[int]:
+        """Read a non-negative candidate count from a terminal source receipt."""
+        value = receipt.get("total_new_candidates")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        domain_receipts = receipt.get("domain_receipts")
+        if not isinstance(domain_receipts, list):
+            return None
+        total = 0
+        found = False
+        for item in domain_receipts:
+            if not isinstance(item, dict):
+                continue
+            count = item.get("new_candidates")
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                total += count
+                found = True
+        return total if found else None
+
+    @staticmethod
+    def _sanitize_source_health_error(value: object) -> Optional[str]:
+        """Keep persisted source failures useful without turning them into logs."""
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            from utils.webui_trigger import sanitize_task_error_summary
+
+            cleaned = sanitize_task_error_summary(text, max_chars=360)
+        except Exception:
+            cleaned = re.sub(r"\s+", " ", text)[:360]
+        return cleaned or None
+
+    @staticmethod
+    def _normalized_source_health_value(source: object) -> str:
+        """Return a bounded source key without rejecting future source plugins."""
+        value = str(source or "").strip().lower()
+        return value[:80] if value else "unknown"
+
+    @staticmethod
+    def _normalized_task_kind_value(task_kind: object) -> str:
+        value = str(task_kind or "").strip().lower()
+        return value[:80] if value else "unknown"
+
+    @staticmethod
+    def _normalized_source_health_count(value: object) -> Optional[int]:
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return None
+
+    def _upsert_source_health_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        source: object,
+        success: bool,
+        run_id: Optional[str] = None,
+        task_kind: object = None,
+        candidate_count: object = None,
+        error_summary: object = None,
+        occurred_at: Optional[str] = None,
+        origin_key: Optional[str] = None,
+    ) -> None:
+        """Write one logical source request using an optional stable origin key."""
+        source_key = self._normalized_source_health_value(source)
+        task_key = self._normalized_task_kind_value(task_kind)
+        status = "succeeded" if success else "failed"
+        count = self._normalized_source_health_count(candidate_count)
+        error = self._sanitize_source_health_error(error_summary)
+        timestamp = str(occurred_at or "").strip() or datetime.now().isoformat()
+        normalized_run_id = str(run_id).strip() if run_id else None
+        normalized_origin = str(origin_key).strip()[:240] if origin_key else None
+        conn.execute(
+            """
+            INSERT INTO source_health_events(
+                run_id, task_kind, source, status, candidate_count,
+                error_summary, occurred_at, origin_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(origin_key) DO UPDATE SET
+                run_id = excluded.run_id,
+                task_kind = excluded.task_kind,
+                source = excluded.source,
+                status = excluded.status,
+                candidate_count = excluded.candidate_count,
+                error_summary = excluded.error_summary,
+                occurred_at = excluded.occurred_at
+            """,
+            (
+                normalized_run_id,
+                task_key,
+                source_key,
+                status,
+                count,
+                error,
+                timestamp,
+                normalized_origin,
+            ),
+        )
+
+    def _backfill_source_health_events(self, conn: sqlite3.Connection) -> None:
+        """Seed cross-workflow health history from pre-existing scan receipts."""
+        try:
+            rows = conn.execute(
+                """
+                SELECT receipts.run_id, receipts.source, receipts.status,
+                       receipts.receipt_json, receipts.recorded_at,
+                       COALESCE(runs.run_kind, 'daily') AS task_kind
+                FROM daily_scan_receipts AS receipts
+                LEFT JOIN daily_runs AS runs ON runs.run_id = receipts.run_id
+                LEFT JOIN source_health_events AS health
+                  ON health.origin_key =
+                     ('scan-receipt:' || receipts.run_id || ':' || receipts.source)
+                WHERE health.event_id IS NULL
+                ORDER BY receipts.receipt_id ASC
+                """
+            ).fetchall()
+        except sqlite3.Error:
+            # A database midway through an old upgrade can still use all
+            # existing workflows; a later open will backfill the receipts.
+            return
+
+        for row in rows:
+            status = row["status"]
+            if status not in {"succeeded", "failed"}:
+                continue
+            try:
+                receipt = json.loads(row["receipt_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                receipt = {}
+            if not isinstance(receipt, dict):
+                receipt = {}
+            self._upsert_source_health_event(
+                conn,
+                source=row["source"],
+                success=status == "succeeded",
+                run_id=row["run_id"],
+                task_kind=row["task_kind"],
+                candidate_count=self._receipt_candidate_count(receipt),
+                error_summary=(
+                    self._extract_receipt_error(receipt)
+                    if status == "failed"
+                    else None
+                ),
+                occurred_at=row["recorded_at"],
+                origin_key=f"scan-receipt:{row['run_id']}:{row['source']}",
+            )
+
+    def record_source_health_event(
+        self,
+        source: str,
+        success: bool,
+        *,
+        run_id: Optional[str] = None,
+        task_kind: str = "unknown",
+        candidate_count: Optional[int] = None,
+        error_summary: object = None,
+        origin_key: Optional[str] = None,
+    ) -> None:
+        """Persist one terminal logical data-source request from any workflow.
+
+        This observability write is deliberately independent of delivery and
+        checkpoint transactions: a health-panel failure must never cause a
+        report or retry queue to fail.
+        """
+        with self._lock, self._connect() as conn:
+            self._upsert_source_health_event(
+                conn,
+                source=source,
+                success=bool(success),
+                run_id=run_id,
+                task_kind=task_kind,
+                candidate_count=candidate_count,
+                error_summary=error_summary,
+                origin_key=origin_key,
+            )
+
+    @staticmethod
     def _validate_scan_receipt(run_id: str, source: str, receipt: Dict[str, Any]) -> Dict[str, Any]:
         """Validate the small public receipt schema before persisting it.
 
@@ -1618,7 +1820,7 @@ class DailyResearchStore:
         now = datetime.now().isoformat()
         with self._lock, self._connect() as conn:
             run = conn.execute(
-                "SELECT run_id FROM daily_runs WHERE run_id = ?", (run_id,)
+                "SELECT run_id, run_kind FROM daily_runs WHERE run_id = ?", (run_id,)
             ).fetchone()
             if run is None:
                 raise KeyError(f"daily run does not exist: {run_id}")
@@ -1640,6 +1842,25 @@ class DailyResearchStore:
                     json.dumps(payload, ensure_ascii=False, sort_keys=True),
                     now,
                 ),
+            )
+            # Preserve one health observation for every final daily/backfill
+            # source request without changing the strict receipt/checkpoint
+            # semantics above. Repeated callbacks for the same logical scan
+            # update their stable event instead of inflating success rates.
+            self._upsert_source_health_event(
+                conn,
+                source=normalized_source,
+                success=payload["status"] == "succeeded",
+                run_id=run_id,
+                task_kind=run["run_kind"],
+                candidate_count=self._receipt_candidate_count(payload),
+                error_summary=(
+                    self._extract_receipt_error(payload)
+                    if payload["status"] == "failed"
+                    else None
+                ),
+                occurred_at=now,
+                origin_key=f"scan-receipt:{run_id}:{normalized_source}",
             )
 
     def get_scan_receipts(self, run_id: str) -> list[Dict[str, Any]]:
@@ -2973,6 +3194,75 @@ class DailyResearchStore:
                 }
         return summaries
 
+    def get_llm_health_by_model(self, days: Optional[int]) -> list[Dict[str, Any]]:
+        """Summarize all recorded LLM calls by concrete model and time range.
+
+        ``None`` selects the complete local history.  The rows remain
+        read-only observations from completed real calls; no provider probe is
+        sent when an operator opens the diagnostics page.
+        """
+        if days is not None and (
+            isinstance(days, bool) or not isinstance(days, int) or days < 1
+        ):
+            raise ValueError("LLM 健康查看天数必须是正整数或 None")
+        query = (
+            "SELECT role, model, status, error_summary, occurred_at "
+            "FROM llm_health_events"
+        )
+        params: list[Any] = []
+        if days is not None:
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            query += " WHERE occurred_at >= ?"
+            params.append(cutoff)
+        query += " ORDER BY occurred_at DESC, event_id DESC"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        per_model: Dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            model = str(row["model"] or "").strip()[:200] or "unknown"
+            per_model.setdefault(model, []).append(row)
+
+        summaries: list[Dict[str, Any]] = []
+        for model in sorted(per_model, key=lambda key: per_model[key][0]["occurred_at"], reverse=True):
+            entries = per_model[model]
+            succeeded = sum(1 for row in entries if row["status"] == "succeeded")
+            newest = entries[0]
+            newest_success = next(
+                (row for row in entries if row["status"] == "succeeded"), None
+            )
+            newest_failure = next(
+                (row for row in entries if row["status"] == "failed"), None
+            )
+            roles = []
+            for row in entries:
+                role = str(row["role"] or "").strip().lower()
+                if role and role not in roles:
+                    roles.append(role)
+            summaries.append(
+                {
+                    "model": model,
+                    "roles": roles,
+                    "last_status": newest["status"],
+                    "last_event_at": newest["occurred_at"],
+                    "last_success_at": (
+                        newest_success["occurred_at"] if newest_success else None
+                    ),
+                    "events_in_window": len(entries),
+                    "succeeded_in_window": succeeded,
+                    "success_rate": succeeded / len(entries),
+                    "last_error": (
+                        self._sanitize_source_health_error(newest_failure["error_summary"])
+                        if newest_failure
+                        else None
+                    ),
+                    "last_error_at": (
+                        newest_failure["occurred_at"] if newest_failure else None
+                    ),
+                }
+            )
+        return summaries
+
     # ==================== Paper preferences ====================
 
     def set_paper_preference(
@@ -3615,78 +3905,114 @@ class DailyResearchStore:
             ]
         return {"total": int(total_row[0]), "items": items}
 
-    def get_source_health(self, window: int = 20) -> Dict[str, Dict[str, Any]]:
-        """Per-source scan health aggregated from the durable receipt log.
-
-        For each source the summary covers its most recent ``window`` receipts:
-        the newest status/timestamp, the success rate inside the window, the
-        candidate count of the newest succeeded scan and the newest recorded
-        error text. Sources without any receipt yet are omitted.
-        """
-        bounded_window = max(1, min(int(window), 100))
+    def _source_health_entries(
+        self, *, days: Optional[int] = None
+    ) -> list[Dict[str, Any]]:
+        """Read durable logical source requests for an optional calendar window."""
+        if days is not None and (
+            isinstance(days, bool) or not isinstance(days, int) or days < 1
+        ):
+            raise ValueError("数据源健康查看天数必须是正整数或 None")
+        query = (
+            "SELECT source, status, candidate_count, error_summary, occurred_at, task_kind "
+            "FROM source_health_events"
+        )
+        params: list[Any] = []
+        if days is not None:
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            query += " WHERE occurred_at >= ?"
+            params.append(cutoff)
+        query += " ORDER BY occurred_at DESC, event_id DESC"
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT source, status, recorded_at, receipt_json
-                FROM daily_scan_receipts
-                ORDER BY recorded_at DESC
-                LIMIT ?
-                """,
-                (bounded_window * 32,),
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "source": self._normalized_source_health_value(row["source"]),
+                "status": row["status"],
+                "candidate_count": self._normalized_source_health_count(
+                    row["candidate_count"]
+                ),
+                "error_summary": self._sanitize_source_health_error(
+                    row["error_summary"]
+                ),
+                "occurred_at": row["occurred_at"],
+                "task_kind": self._normalized_task_kind_value(row["task_kind"]),
+            }
+            for row in rows
+            if row["status"] in {"succeeded", "failed"}
+        ]
 
+    @staticmethod
+    def _summarize_source_health_entries(
+        entries: list[Dict[str, Any]], *, per_source_limit: Optional[int] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """Aggregate chronological event rows into one health row per source."""
         per_source: Dict[str, list[Dict[str, Any]]] = {}
-        for row in rows:
-            try:
-                receipt = json.loads(row["receipt_json"])
-            except (TypeError, ValueError, json.JSONDecodeError):
-                receipt = {}
-            if not isinstance(receipt, dict):
-                receipt = {}
-            per_source.setdefault(row["source"], []).append(
-                {
-                    "status": row["status"],
-                    "recorded_at": row["recorded_at"],
-                    "receipt": receipt,
-                }
-            )
+        for entry in entries:
+            per_source.setdefault(str(entry["source"]), []).append(entry)
 
         summaries: Dict[str, Dict[str, Any]] = {}
-        for source, entries in per_source.items():
-            window_entries = entries[:bounded_window]
+        for source, source_entries in per_source.items():
+            window_entries = (
+                source_entries[:per_source_limit]
+                if per_source_limit is not None
+                else source_entries
+            )
+            if not window_entries:
+                continue
+            newest = window_entries[0]
             succeeded = sum(
                 1 for entry in window_entries if entry["status"] == "succeeded"
             )
-            newest = window_entries[0]
-            new_candidates = None
-            for entry in window_entries:
-                if entry["status"] != "succeeded":
-                    continue
-                domain_receipts = entry["receipt"].get("domain_receipts")
-                if isinstance(domain_receipts, list):
-                    new_candidates = sum(
-                        int(item.get("new_candidates") or 0)
-                        for item in domain_receipts
-                        if isinstance(item, dict)
-                    )
-                break
-            last_error = None
-            for entry in window_entries:
-                if entry["status"] == "failed":
-                    last_error = self._extract_receipt_error(entry["receipt"])
-                    break
+            newest_success = next(
+                (entry for entry in window_entries if entry["status"] == "succeeded"),
+                None,
+            )
+            newest_failure = next(
+                (entry for entry in window_entries if entry["status"] == "failed"),
+                None,
+            )
             summaries[source] = {
                 "last_status": newest["status"],
-                "last_scan_at": newest["recorded_at"],
+                "last_scan_at": newest["occurred_at"],
+                "last_task_kind": newest["task_kind"],
                 "scans_in_window": len(window_entries),
                 "succeeded_in_window": succeeded,
-                "success_rate": (
-                    succeeded / len(window_entries) if window_entries else 0.0
+                "success_rate": succeeded / len(window_entries),
+                "last_new_candidates": (
+                    newest_success["candidate_count"] if newest_success else None
                 ),
-                "last_new_candidates": new_candidates,
-                "last_error": last_error,
+                "last_error": (
+                    newest_failure["error_summary"] if newest_failure else None
+                ),
+                "last_error_at": (
+                    newest_failure["occurred_at"] if newest_failure else None
+                ),
+                "last_error_task_kind": (
+                    newest_failure["task_kind"] if newest_failure else None
+                ),
             }
         return summaries
+
+    def get_source_health(self, window: int = 20) -> Dict[str, Dict[str, Any]]:
+        """Compatibility view using the newest ``window`` events per source."""
+        bounded_window = max(1, min(int(window), 100))
+        return self._summarize_source_health_entries(
+            self._source_health_entries(), per_source_limit=bounded_window
+        )
+
+    def get_source_health_for_days(
+        self, days: Optional[int]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Aggregate every logical source request in the selected day window.
+
+        ``None`` intentionally means the complete local event history.  This
+        is separate from ``get_source_health(window=...)`` so old integrations
+        retain their request-count semantics.
+        """
+        return self._summarize_source_health_entries(
+            self._source_health_entries(days=days)
+        )
 
     @staticmethod
     def _extract_receipt_error(receipt: Dict[str, Any]) -> Optional[str]:
@@ -3701,6 +4027,45 @@ class DailyResearchStore:
                 label = item.get("domain") or item.get("label") or ""
                 return f"{label}: {domain_error.strip()}".lstrip(": ")
         return None
+
+    def get_recent_operational_runs(self, limit: int = 5) -> list[Dict[str, Any]]:
+        """Return the latest daily or past-date reports for operator diagnosis.
+
+        Historical import, repair, omission and supplement workflows own their
+        progress in History Maintenance.  Keeping them out here makes the
+        System diagnostics view answer one concise question: whether the
+        normal daily schedule and explicitly queued past-date reports worked.
+        """
+        bounded_limit = max(1, min(int(limit), 20))
+        visible_kinds = ("daily", "daily_research", "backfill", "backfill_run")
+        placeholders = ", ".join("?" for _ in visible_kinds)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT run_id, run_kind, started_at, completed_at, status,
+                       total_papers, error
+                FROM daily_runs
+                WHERE run_kind IN ({placeholders})
+                ORDER BY started_at DESC, run_id DESC
+                LIMIT ?
+                """,
+                (*visible_kinds, bounded_limit),
+            ).fetchall()
+        return [
+            {
+                "run_id": str(row["run_id"]),
+                "run_kind": str(row["run_kind"] or "daily"),
+                "started_at": row["started_at"],
+                "completed_at": row["completed_at"],
+                "status": str(row["status"] or "unknown"),
+                "total_papers": self._normalized_source_health_count(
+                    row["total_papers"]
+                )
+                or 0,
+                "error_summary": self._sanitize_source_health_error(row["error"]),
+            }
+            for row in rows
+        ]
 
     def get_recent_runs(self, limit: int = 20) -> list[Dict[str, Any]]:
         """Return recent run summaries plus receipts for local observability."""

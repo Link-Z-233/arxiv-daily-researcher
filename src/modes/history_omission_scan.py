@@ -105,10 +105,29 @@ def _progress_callback(store: DailyResearchStore, run_id: str):
 def _scan_sqlite_history(
     store: DailyResearchStore,
     *,
+    run_id: str,
     progress_callback: Callable[..., None],
 ) -> Dict[str, Any]:
     """Scan every currently available report source without cross-source failure."""
     from sources.search_agent import SearchAgent
+
+    def record_optional_source(
+        source: str,
+        success: bool,
+        candidate_count: Optional[int] = None,
+        error: Optional[BaseException | str] = None,
+    ) -> None:
+        try:
+            store.record_source_health_event(
+                source,
+                success,
+                run_id=run_id,
+                task_kind="history_omission_scan",
+                candidate_count=candidate_count,
+                error_summary=error,
+            )
+        except Exception:
+            logger.debug("历史扫描来源健康事件写入失败: %s", source, exc_info=True)
 
     agent = SearchAgent(
         history_dir=settings.HISTORY_DIR,
@@ -121,6 +140,7 @@ def _scan_sqlite_history(
         semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
         extra_source_definitions=getattr(settings, "EXTRA_SOURCE_DEFINITIONS", []),
         use_legacy_history_filter=False,
+        source_health_recorder=record_optional_source,
     )
     aggregate: Dict[str, Any] = {
         "range_start": None,
@@ -146,13 +166,48 @@ def _scan_sqlite_history(
                     total=total,
                 )
 
+            def fetch_between(start, end, _source=source):
+                def record_receipt(receipt: Dict[str, Any]) -> None:
+                    status = receipt.get("status") if isinstance(receipt, dict) else None
+                    try:
+                        store.record_source_health_event(
+                            _source,
+                            status == "succeeded",
+                            run_id=run_id,
+                            task_kind="history_omission_scan",
+                            candidate_count=(
+                                receipt.get("total_new_candidates")
+                                if isinstance(receipt, dict)
+                                else None
+                            ),
+                            error_summary=(
+                                DailyResearchStore._extract_receipt_error(receipt)
+                                if isinstance(receipt, dict) and status == "failed"
+                                else None
+                            ),
+                            origin_key=(
+                                f"history-range:{run_id}:{_source}:"
+                                f"{start.isoformat()}:{end.isoformat()}"
+                            ),
+                        )
+                    except Exception:
+                        logger.debug(
+                            "历史范围扫描收据健康事件写入失败: %s", _source,
+                            exc_info=True,
+                        )
+
+                return agent.fetch_source_papers_between(
+                    _source,
+                    start,
+                    end,
+                    scan_receipt_callback=record_receipt,
+                )
+
             try:
                 source_summary = scan_source_range(
                     store,
                     source=source,
-                    fetch_between=lambda start, end, _source=source: (
-                        agent.fetch_source_papers_between(_source, start, end)
-                    ),
+                    fetch_between=fetch_between,
                     logger_override=logger,
                     progress_callback=source_progress,
                 )
@@ -234,7 +289,9 @@ def run_history_omission_scan(
         progress(phase="history_omission_scan", detail="根据 SQLite 交付账本确定历史扫描范围")
         logger.info("[HistoryOmission] 开始按 SQLite 历史范围扫描各启用来源漏项")
         try:
-            scan = _scan_sqlite_history(store, progress_callback=progress)
+            scan = _scan_sqlite_history(
+                store, run_id=run_id, progress_callback=progress
+            )
         except Exception as exc:
             # The existing backlog is still useful.  Keep the failure visible
             # and continue draining any previously found natural-week groups.

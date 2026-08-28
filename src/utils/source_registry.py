@@ -230,7 +230,11 @@ def source_codes_from_definitions(definitions: Any) -> List[str]:
 
 def source_display_names(definitions: Any = None) -> Dict[str, str]:
     """Build stable human-facing names for reports and the local viewer."""
-    names = {"arxiv": "arXiv"}
+    names = {
+        "arxiv": "arXiv",
+        "semantic_scholar": "Semantic Scholar",
+        HUGGINGFACE_PAPERS_SOURCE_NAME: "Hugging Face Papers",
+    }
     names.update(
         {code: info["full_name"] for code, info in OPENALEX_JOURNAL_CATALOG.items()}
     )

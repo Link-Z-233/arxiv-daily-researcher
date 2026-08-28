@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 import requests
-from typing import Optional, Dict
+from typing import Callable, Dict, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from .base_source import normalize_arxiv_identifier
@@ -44,6 +44,9 @@ class SemanticScholarEnricher:
         self.session = requests.Session()
         self._request_slot_lock = threading.Lock()
         self._next_request_at = 0.0
+        self._health_recorder: Optional[
+            Callable[[bool, Optional[BaseException | str]], None]
+        ] = None
         self.request_interval_seconds = (
             self.AUTHENTICATED_MIN_REQUEST_INTERVAL_SECONDS
             if api_key
@@ -57,6 +60,25 @@ class SemanticScholarEnricher:
             self.session.headers.update({
                 "x-api-key": api_key
             })
+
+    def set_health_recorder(
+        self,
+        recorder: Optional[Callable[[bool, Optional[BaseException | str]], None]],
+    ) -> None:
+        """Attach an optional terminal-request observer owned by SearchAgent."""
+        self._health_recorder = recorder
+
+    def _record_health(
+        self, success: bool, error: Optional[BaseException | str] = None
+    ) -> None:
+        recorder = self._health_recorder
+        if recorder is None:
+            return
+        try:
+            recorder(success, error)
+        except Exception:
+            # This optional observation must never alter a provider request.
+            logger.debug("Semantic Scholar 健康事件写入失败", exc_info=True)
 
     def __enter__(self):
         """支持上下文管理器"""
@@ -107,7 +129,18 @@ class SemanticScholarEnricher:
             resp.raise_for_status()
             return resp
 
-        return _do_get()
+        try:
+            response = _do_get()
+        except Exception as exc:
+            self._record_health(False, exc)
+            raise
+        if response.status_code == 429:
+            self._record_health(False, "HTTP 429 rate limited")
+        else:
+            # 404 is a valid, reachable API response: it says the DOI is not
+            # indexed, not that the data source is unavailable.
+            self._record_health(True)
+        return response
 
     @staticmethod
     def _clean_doi(doi: object) -> Optional[str]:

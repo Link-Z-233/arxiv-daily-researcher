@@ -92,6 +92,26 @@ class TrendResearchPipeline:
                 if health_db_path is not None
                 else None
             )
+            source_health_store = None
+            if health_db_path is not None:
+                try:
+                    source_health_store = DailyResearchStore(health_db_path)
+                except Exception:
+                    logger.debug("趋势研究来源健康账本不可用", exc_info=True)
+
+            def record_source_health(success: bool, error=None, count=None) -> None:
+                if source_health_store is None:
+                    return
+                try:
+                    source_health_store.record_source_health_event(
+                        "arxiv",
+                        success,
+                        task_kind="trend_research",
+                        candidate_count=count,
+                        error_summary=error,
+                    )
+                except Exception:
+                    logger.debug("趋势研究来源健康事件写入失败", exc_info=True)
 
             # ==================== 阶段1: 搜索论文 ====================
             logger.info(">>> 阶段1: 从 ArXiv 搜索论文...")
@@ -104,14 +124,19 @@ class TrendResearchPipeline:
                 load_legacy_history=False,
             )
 
-            papers = arxiv_source.search_by_keywords(
-                keywords=self.keywords,
-                date_from=self.date_from,
-                date_to=self.date_to,
-                sort_order=self.sort_order,
-                max_results=self.max_results,
-                categories=self.categories,
-            )
+            try:
+                papers = arxiv_source.search_by_keywords(
+                    keywords=self.keywords,
+                    date_from=self.date_from,
+                    date_to=self.date_to,
+                    sort_order=self.sort_order,
+                    max_results=self.max_results,
+                    categories=self.categories,
+                )
+            except Exception as exc:
+                record_source_health(False, error=exc)
+                raise
+            record_source_health(True, count=len(papers))
 
             if not papers:
                 logger.info("未搜索到任何论文。")

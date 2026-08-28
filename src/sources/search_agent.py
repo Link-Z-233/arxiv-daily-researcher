@@ -20,6 +20,7 @@ from utils.source_registry import (
     merge_source_catalog,
     validate_source_definitions,
 )
+from utils.webui_trigger import sanitize_task_error_summary
 from .semantic_scholar_enricher import SemanticScholarEnricher
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,9 @@ class SearchAgent:
         semantic_scholar_api_key: str = None,
         use_legacy_history_filter: bool = True,
         extra_source_definitions: Optional[List[Dict[str, Any]]] = None,
+        source_health_recorder: Optional[
+            Callable[[str, bool, Optional[int], Optional[BaseException | str]], None]
+        ] = None,
     ):
         """
         初始化搜索调度器。
@@ -84,6 +88,9 @@ class SearchAgent:
             use_legacy_history_filter: 是否让旧 JSON history 在抓取阶段
                 跳过论文。SQLite 持久化日报应传 False，由精确交付账本
                 统一去重，避免旧版过早写入的 history 造成永久漏报。
+            source_health_recorder: 可选的跨工作流来源健康回调。日报的
+                主来源仍由扫描收据写入；该回调记录 Semantic Scholar 等
+                可选增强请求，且写入失败不会影响抓取主流程。
         """
         self.history_dir = history_dir
         self.history_dir.mkdir(parents=True, exist_ok=True)
@@ -104,6 +111,7 @@ class SearchAgent:
         self.use_legacy_history_filter = bool(use_legacy_history_filter)
         self.extra_source_definitions = validate_source_definitions(extra_source_definitions or [])
         self.journal_catalog = merge_source_catalog(JOURNAL_ISSN_MAP, self.extra_source_definitions)
+        self._source_health_recorder = source_health_recorder
 
         # 初始化 Semantic Scholar 增强器
         self.enable_semantic_scholar = enable_semantic_scholar
@@ -112,6 +120,15 @@ class SearchAgent:
             # 空字符串视为 None，使用公共 API（无需 API Key）
             api_key = semantic_scholar_api_key if semantic_scholar_api_key else None
             self.semantic_scholar_enricher = SemanticScholarEnricher(api_key=api_key)
+            attach_health_recorder = getattr(
+                self.semantic_scholar_enricher, "set_health_recorder", None
+            )
+            if callable(attach_health_recorder):
+                attach_health_recorder(
+                    lambda success, error=None: self._record_source_health(
+                        "semantic_scholar", success, error=error
+                    )
+                )
             if api_key:
                 logger.info("[SearchAgent] 已启用 Semantic Scholar TLDR 增强（使用 API Key）")
             else:
@@ -298,9 +315,29 @@ class SearchAgent:
                 self.semantic_scholar_enricher.session.proxies.update(s2_proxy)
                 logger.info("[SearchAgent] Semantic Scholar 已配置网络代理")
 
+    def _record_source_health(
+        self,
+        source: str,
+        success: bool,
+        *,
+        candidate_count: Optional[int] = None,
+        error: Optional[BaseException | str] = None,
+    ) -> None:
+        """Record optional enrichment health without coupling it to delivery."""
+        callback = self._source_health_recorder
+        if callback is None:
+            return
+        try:
+            callback(source, success, candidate_count, error)
+        except Exception:
+            logger.debug("来源健康事件写入失败: %s", source, exc_info=True)
+
     @staticmethod
     def _source_scan_receipt(
-        source: str, status: str, candidate_count: Optional[int] = None
+        source: str,
+        status: str,
+        candidate_count: Optional[int] = None,
+        error: Optional[BaseException | str] = None,
     ) -> Dict[str, Any]:
         """Build a minimal terminal receipt for sources without arXiv's detail.
 
@@ -319,6 +356,10 @@ class SearchAgent:
         }
         if candidate_count is not None:
             payload["total_new_candidates"] = max(0, int(candidate_count))
+        if error is not None:
+            summary = sanitize_task_error_summary(error, max_chars=360)
+            if summary:
+                payload["error"] = summary
         return payload
 
     @classmethod
@@ -328,12 +369,13 @@ class SearchAgent:
         source: str,
         status: str,
         candidate_count: Optional[int] = None,
+        error: Optional[BaseException | str] = None,
     ) -> None:
         """Persist a terminal source receipt or fail closed before reporting."""
         if callback is None:
             return
         try:
-            callback(cls._source_scan_receipt(source, status, candidate_count))
+            callback(cls._source_scan_receipt(source, status, candidate_count, error))
         except Exception as exc:
             raise SourceScanReceiptError(
                 f"无法持久化 {source} 扫描收据"
@@ -410,7 +452,7 @@ class SearchAgent:
                         len(papers),
                     )
 
-            except Exception:
+            except Exception as exc:
                 # 抓取错误不能被转换为空列表，否则上层会生成看似成功但实际
                 # 漏论文的日报。除 arXiv 外的来源由这里写失败终态收据；
                 # arXiv 已在其两个查询/领域循环内写入更细的失败收据。
@@ -420,6 +462,7 @@ class SearchAgent:
                             receipt_callbacks.get(report_source),
                             report_source,
                             "failed",
+                            error=exc,
                         )
                 logger.exception(f"[{source_name}] 抓取失败")
                 raise
@@ -462,17 +505,21 @@ class SearchAgent:
                 papers = backend.fetch_papers_between(date_from, date_to)
             else:  # pragma: no cover - registry and backend map are exhaustive
                 raise ValueError(f"数据源不支持历史范围抓取: {source_name}")
-        except Exception:
+        except Exception as exc:
             self._emit_source_scan_receipt(
-                scan_receipt_callback, normalized, "failed"
+                scan_receipt_callback, normalized, "failed", error=exc
             )
             raise
 
         mismatched = [paper.source for paper in papers if paper.source != normalized]
         if mismatched:
-            raise RuntimeError(
+            error = RuntimeError(
                 f"历史抓取返回了错误来源数据: 请求 {normalized}，得到 {mismatched[0]}"
             )
+            self._emit_source_scan_receipt(
+                scan_receipt_callback, normalized, "failed", error=error
+            )
+            raise error
         self._emit_source_scan_receipt(
             scan_receipt_callback, normalized, "succeeded", len(papers)
         )

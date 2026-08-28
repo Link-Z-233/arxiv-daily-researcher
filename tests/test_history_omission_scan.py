@@ -98,7 +98,7 @@ class HistoryOmissionScanTests(unittest.TestCase):
             def get_enabled_sources(self):
                 return ["arxiv", "prl"]
 
-            def fetch_source_papers_between(self, source, _start, _end):
+            def fetch_source_papers_between(self, source, _start, _end, **_kwargs):
                 paper_id = "2603.39999v1" if source == "arxiv" else "10.1103/new"
                 return [
                     PaperMetadata(
@@ -119,6 +119,7 @@ class HistoryOmissionScanTests(unittest.TestCase):
         with patch("sources.search_agent.SearchAgent", return_value=agent):
             summary = _scan_sqlite_history(
                 self.store,
+                run_id="test-history-scan",
                 progress_callback=lambda **_kwargs: None,
             )
 
@@ -139,7 +140,7 @@ class HistoryOmissionScanTests(unittest.TestCase):
             def get_enabled_sources(self):
                 return ["arxiv", "prl"]
 
-            def fetch_source_papers_between(self, source, _start, _end):
+            def fetch_source_papers_between(self, source, _start, _end, **_kwargs):
                 if source == "prl":
                     raise RuntimeError("OpenAlex unavailable")
                 return [
@@ -160,6 +161,7 @@ class HistoryOmissionScanTests(unittest.TestCase):
         with patch("sources.search_agent.SearchAgent", _SearchAgent):
             summary = _scan_sqlite_history(
                 self.store,
+                run_id="test-history-scan",
                 progress_callback=lambda **_kwargs: None,
             )
 

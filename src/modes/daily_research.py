@@ -666,12 +666,34 @@ def _load_supplement_candidates(
                         load_legacy_history=False,
                     )
                 fetched = arxiv_source.fetch_papers_by_ids(need_fetch_ids)
+                try:
+                    store.record_source_health_event(
+                        "arxiv",
+                        True,
+                        run_id=run_id,
+                        task_kind="supplement",
+                        candidate_count=len(fetched),
+                        origin_key=f"supplement-id-fetch:{run_id}:{offset}",
+                    )
+                except Exception:
+                    logger.debug("补充元数据补抓健康事件写入失败", exc_info=True)
                 logger.info(
                     "补充积压按 ID 补抓元数据: 请求 %s，成功 %s",
                     len(need_fetch_ids),
                     len(fetched),
                 )
             except Exception as exc:
+                try:
+                    store.record_source_health_event(
+                        "arxiv",
+                        False,
+                        run_id=run_id,
+                        task_kind="supplement",
+                        error_summary=exc,
+                        origin_key=f"supplement-id-fetch:{run_id}:{offset}",
+                    )
+                except Exception:
+                    logger.debug("补充元数据补抓健康事件写入失败", exc_info=True)
                 logger.warning("补充积压元数据补抓失败（本次跳过这些论文）: %s", exc)
 
         for row in batch:
@@ -712,6 +734,32 @@ def _load_supplement_candidates(
     return papers_by_source, selected, len(failed)
 
 
+def _make_source_health_recorder(
+    store: DailyResearchStore, run_id: str, task_kind: str
+):
+    """Return a best-effort observer for optional source enrichment calls."""
+
+    def record(
+        source: str,
+        success: bool,
+        candidate_count: Optional[int] = None,
+        error: Optional[BaseException | str] = None,
+    ) -> None:
+        try:
+            store.record_source_health_event(
+                source,
+                success,
+                run_id=run_id,
+                task_kind=task_kind,
+                candidate_count=candidate_count,
+                error_summary=error,
+            )
+        except Exception:
+            logger.debug("来源健康事件写入失败: %s", source, exc_info=True)
+
+    return record
+
+
 def _fetch_backfill_papers(
     store: DailyResearchStore,
     run_id: str,
@@ -733,6 +781,9 @@ def _fetch_backfill_papers(
         semantic_scholar_api_key=settings.SEMANTIC_SCHOLAR_API_KEY,
         extra_source_definitions=getattr(settings, "EXTRA_SOURCE_DEFINITIONS", []),
         use_legacy_history_filter=False,
+        source_health_recorder=_make_source_health_recorder(
+            store, run_id, "backfill"
+        ),
     )
     try:
         callbacks = {
@@ -1266,6 +1317,9 @@ class DailyResearchPipeline:
                     # SQLite is the sole daily-history authority. Legacy JSON files
                     # are neither read as a filter nor updated after delivery.
                     use_legacy_history_filter=False,
+                    source_health_recorder=_make_source_health_recorder(
+                        store, run_id, run_kind
+                    ),
                 )
 
                 # Semantic Scholar is optional enrichment, but a synchronous
