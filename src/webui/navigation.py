@@ -28,7 +28,6 @@ NAVIGATION_GROUPS: Final[tuple[NavigationGroup, ...]] = (
             ("reports", "nav_reports"),
             ("favorites", "nav_favorites"),
             ("paper_search", "nav_paper_search"),
-            ("analytics", "nav_analytics"),
         ),
     ),
     (
@@ -51,6 +50,7 @@ NAVIGATION_GROUPS: Final[tuple[NavigationGroup, ...]] = (
             ("backup_sync", "nav_backup_sync"),
             ("history_tasks", "nav_history_tasks"),
             ("diagnostics", "nav_diagnostics"),
+            ("analytics", "nav_analytics"),
             ("logs", "nav_logs"),
         ),
     ),

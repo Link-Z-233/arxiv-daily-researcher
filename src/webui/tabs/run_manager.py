@@ -1232,10 +1232,6 @@ def render_queue(_env_values: dict, config_values: dict) -> None:
 
 def render_logs(_env_values: dict, _config_values: dict) -> None:
     """Render the shared 800px native-scroll run-log viewer."""
-    st.markdown(
-        f'<p class="section-title">📋 {t("run_log_title")}</p>',
-        unsafe_allow_html=True,
-    )
     _render_log_section()
 
 
@@ -1248,12 +1244,6 @@ def render(_env_values: dict, config_values: dict) -> None:
     render_queue(_env_values, config_values)
     st.divider()
     render_logs(_env_values, config_values)
-
-    st.markdown(
-        f'<p class="section-title">📋 {t("run_log_title")}</p>',
-        unsafe_allow_html=True,
-    )
-    _render_log_section()
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:

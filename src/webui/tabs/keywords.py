@@ -74,9 +74,6 @@ def render(_env_values: dict, config_values: dict):
     flat = config_values
 
     # ---- Research Context（最顶部：评分与提取都依赖它）----
-    st.markdown(
-        f'<p class="section-title">🧭 {t("research_context_title")}</p>', unsafe_allow_html=True
-    )
     st.markdown(f'<p class="hint-text">{t("research_context_hint")}</p>', unsafe_allow_html=True)
 
     st.text_area(
@@ -85,6 +82,7 @@ def render(_env_values: dict, config_values: dict):
         height=120,
         key="research_context",
         placeholder=t("research_context_placeholder"),
+        label_visibility="collapsed",
     )
 
     st.divider()

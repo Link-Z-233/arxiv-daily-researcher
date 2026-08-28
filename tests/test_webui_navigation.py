@@ -35,7 +35,6 @@ class WebUINavigationTests(unittest.TestCase):
                 "reports",
                 "favorites",
                 "paper_search",
-                "analytics",
                 "keywords",
                 "data_sources",
                 "scoring",
@@ -46,6 +45,7 @@ class WebUINavigationTests(unittest.TestCase):
                 "backup_sync",
                 "history_tasks",
                 "diagnostics",
+                "analytics",
                 "logs",
             ],
         )

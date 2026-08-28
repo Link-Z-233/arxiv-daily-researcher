@@ -831,10 +831,6 @@ def _render_account_error(error: ValueError) -> None:
 def render_account_management(env_values: Mapping[str, object]) -> None:
     """Render full-access account administration in the Configuration group."""
     config = read_auth_config(env_values)
-    st.markdown(
-        f'<p class="section-title">👤 {t("auth_accounts_title")}</p>',
-        unsafe_allow_html=True,
-    )
     st.caption(t("auth_accounts_hint"))
     if not config.enabled:
         st.info(t("auth_accounts_disabled"))

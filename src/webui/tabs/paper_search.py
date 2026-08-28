@@ -37,10 +37,6 @@ def _distinct_sources(store: DailyResearchStore) -> list[str]:
 def render(env_values: dict, config_values: dict):
     """渲染论文检索 Tab。"""
     st.markdown(
-        f'<p class="section-title">🔍 {t("ps_title")}</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
         f'<p class="hint-text">{t("ps_hint")}</p>',
         unsafe_allow_html=True,
     )
