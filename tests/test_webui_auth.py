@@ -6,10 +6,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from webui.auth import (  # noqa: E402
     _disabled_auth_values,
+    WebUIAuthConfig,
+    create_persistent_session_token,
     hash_password,
     read_auth_config,
     validate_password,
     validate_username,
+    verify_persistent_session_token,
     verify_password_hash,
 )
 
@@ -57,7 +60,31 @@ class WebUIAuthTests(unittest.TestCase):
         self.assertIsNotNone(validate_username("ab"))
         self.assertIsNotNone(validate_username("admin name"))
         self.assertIsNotNone(validate_password("short"))
-        self.assertIsNone(validate_password("long enough password"))
+        self.assertIsNone(validate_password("secret"))
+
+    def test_persistent_session_token_survives_refresh_and_expires(self):
+        config = WebUIAuthConfig(
+            enabled=True,
+            username="admin",
+            password_hash=hash_password("secret"),
+            session_timeout_minutes=15,
+        )
+        token = create_persistent_session_token(config, now=1_000)
+
+        self.assertTrue(verify_persistent_session_token(config, token, now=1_899))
+        self.assertFalse(verify_persistent_session_token(config, token, now=1_900))
+        self.assertFalse(
+            verify_persistent_session_token(
+                WebUIAuthConfig(
+                    enabled=True,
+                    username="admin",
+                    password_hash=hash_password("secret"),
+                    session_timeout_minutes=15,
+                ),
+                token,
+                now=1_100,
+            )
+        )
 
 
 if __name__ == "__main__":

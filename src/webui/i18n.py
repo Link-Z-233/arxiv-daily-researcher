@@ -67,8 +67,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "auth_password": {"zh": "密码", "en": "Password"},
     "auth_password_confirm": {"zh": "确认密码", "en": "Confirm password"},
     "auth_password_too_short": {
-        "zh": "密码至少需要 12 个字符。",
-        "en": "Use at least 12 characters for the password.",
+        "zh": "密码至少需要 6 个字符。",
+        "en": "Use at least 6 characters for the password.",
     },
     "auth_create_account": {"zh": "创建管理员账户", "en": "Create administrator account"},
     "auth_skip_intranet": {

@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import datetime as dt
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import threading
@@ -21,6 +23,7 @@ from dataclasses import dataclass
 from typing import Mapping, MutableMapping, Optional
 
 import streamlit as st
+from extra_streamlit_components import CookieManager
 
 from utils.config_io import write_env
 from webui.i18n import t
@@ -28,10 +31,15 @@ from webui.i18n import t
 
 _HASH_SCHEME = "pbkdf2_sha256"
 _PBKDF2_ITERATIONS = 600_000
-_MIN_PASSWORD_LENGTH = 12
+_MIN_PASSWORD_LENGTH = 6
 _USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$")
 _SESSION_AUTHENTICATED = "_webui_authenticated"
 _SESSION_LAST_ACTIVITY = "_webui_auth_last_activity"
+_SESSION_PENDING_COOKIE = "_webui_auth_pending_cookie"
+_SESSION_PENDING_COOKIE_CLEAR = "_webui_auth_pending_cookie_clear"
+_SESSION_COOKIE_NAME = "adr_webui_session"
+_SESSION_COOKIE_MANAGER_KEY = "adr_webui_session_cookie_manager"
+_SESSION_TOKEN_VERSION = 1
 _ATTEMPT_WINDOW_SECONDS = 15 * 60
 _attempt_lock = threading.Lock()
 _attempt_state: dict[str, tuple[int, float, float]] = {}
@@ -155,10 +163,184 @@ def _clear_session(session: MutableMapping[str, object]) -> None:
         session.pop(key, None)
 
 
-def _is_authenticated(config: WebUIAuthConfig) -> bool:
-    if not st.session_state.get(_SESSION_AUTHENTICATED, False):
+def _urlsafe_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _urlsafe_b64decode(value: str) -> Optional[bytes]:
+    try:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (TypeError, ValueError, binascii.Error):
+        return None
+
+
+def _session_signing_key(config: WebUIAuthConfig) -> bytes:
+    """Derive a session-only signing key from the current password record.
+
+    The password hash is already a high-entropy secret stored in the local
+    configuration. Deriving the key from it avoids a second credential and
+    makes every persistent browser session invalid as soon as the password is
+    changed.
+    """
+    return hashlib.sha256(
+        f"adr-webui-session-v{_SESSION_TOKEN_VERSION}:{config.password_hash}".encode(
+            "utf-8"
+        )
+    ).digest()
+
+
+def create_persistent_session_token(
+    config: WebUIAuthConfig, *, now: Optional[float] = None
+) -> str:
+    """Create a signed, expiry-bound browser session token for one admin."""
+    if not _configured(config):
+        raise ValueError("Administrator account is not configured")
+    issued_at = int(time.time() if now is None else now)
+    payload = {
+        "v": _SESSION_TOKEN_VERSION,
+        "u": config.username,
+        "iat": issued_at,
+        "exp": issued_at + config.session_timeout_minutes * 60,
+        "n": secrets.token_urlsafe(16),
+    }
+    encoded_payload = _urlsafe_b64encode(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    signature = hmac.new(
+        _session_signing_key(config), encoded_payload.encode("ascii"), hashlib.sha256
+    ).digest()
+    return f"{encoded_payload}.{_urlsafe_b64encode(signature)}"
+
+
+def verify_persistent_session_token(
+    config: WebUIAuthConfig, token: object, *, now: Optional[float] = None
+) -> bool:
+    """Check a signed browser token without exposing its content to the UI."""
+    if not _configured(config) or not isinstance(token, str):
         return False
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+    except ValueError:
+        return False
+    raw_payload = _urlsafe_b64decode(encoded_payload)
+    supplied_signature = _urlsafe_b64decode(encoded_signature)
+    if raw_payload is None or supplied_signature is None:
+        return False
+    expected_signature = hmac.new(
+        _session_signing_key(config), encoded_payload.encode("ascii"), hashlib.sha256
+    ).digest()
+    if not hmac.compare_digest(supplied_signature, expected_signature):
+        return False
+    try:
+        payload = json.loads(raw_payload.decode("utf-8"))
+        issued_at = int(payload["iat"])
+        expires_at = int(payload["exp"])
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    current_time = int(time.time() if now is None else now)
+    maximum_lifetime = config.session_timeout_minutes * 60
+    return bool(
+        payload.get("v") == _SESSION_TOKEN_VERSION
+        and hmac.compare_digest(str(payload.get("u", "")), config.username)
+        and issued_at <= current_time + 60
+        and expires_at > current_time
+        and 0 < expires_at - issued_at <= maximum_lifetime
+    )
+
+
+def _request_uses_https() -> bool:
+    """Keep the cookie usable on LAN HTTP and secure behind HTTPS proxies."""
+    try:
+        headers = st.context.headers
+    except Exception:
+        return False
+    forwarded_proto = str(headers.get("x-forwarded-proto", "")).split(",", 1)[0]
+    if forwarded_proto.strip().lower() == "https":
+        return True
+    origin = str(headers.get("origin", "")).lower()
+    return origin.startswith("https://")
+
+
+def _session_cookie_value() -> str:
+    """Read the cookie attached to this browser's WebSocket handshake."""
+    try:
+        value = st.context.cookies.get(_SESSION_COOKIE_NAME, "")
+    except Exception:
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def _cookie_manager() -> CookieManager:
+    return CookieManager(key=_SESSION_COOKIE_MANAGER_KEY)
+
+
+def _schedule_session_cookie(config: WebUIAuthConfig) -> None:
+    """Queue a cookie write for the next authenticated Streamlit render.
+
+    A form submission followed by ``st.rerun`` removes an immediately rendered
+    component before its browser JavaScript can write the cookie. Keeping this
+    small pending value in Streamlit session state lets the next stable render
+    complete the browser-side write first.
+    """
     now = time.time()
+    st.session_state[_SESSION_PENDING_COOKIE] = {
+        "token": create_persistent_session_token(config, now=now),
+        "expires_at": now + config.session_timeout_minutes * 60,
+    }
+    st.session_state.pop(_SESSION_PENDING_COOKIE_CLEAR, None)
+
+
+def _schedule_session_cookie_clear() -> None:
+    """Queue removal so the cookie component stays mounted long enough to run."""
+    st.session_state.pop(_SESSION_PENDING_COOKIE, None)
+    st.session_state[_SESSION_PENDING_COOKIE_CLEAR] = True
+
+
+def _flush_pending_session_cookie_operations() -> None:
+    """Render one cookie operation after a rerun, then forget its server copy."""
+    if st.session_state.pop(_SESSION_PENDING_COOKIE_CLEAR, False):
+        manager = _cookie_manager()
+        # CookieManager keeps a local cache populated asynchronously. Seed the
+        # key so its delete helper can always issue the browser operation on
+        # the first post-logout render.
+        manager.cookies.setdefault(_SESSION_COOKIE_NAME, "")
+        manager.delete(_SESSION_COOKIE_NAME, key="adr_webui_session_cookie_delete")
+        return
+
+    pending = st.session_state.pop(_SESSION_PENDING_COOKIE, None)
+    if not isinstance(pending, Mapping):
+        return
+    token = pending.get("token")
+    expires_at = pending.get("expires_at")
+    if not isinstance(token, str) or not isinstance(expires_at, (int, float)):
+        return
+    max_age = max(1, int(expires_at - time.time()))
+    _cookie_manager().set(
+        _SESSION_COOKIE_NAME,
+        token,
+        key="adr_webui_session_cookie_set",
+        path="/",
+        expires_at=dt.datetime.fromtimestamp(expires_at, tz=dt.timezone.utc),
+        max_age=max_age,
+        secure=_request_uses_https(),
+        same_site="strict",
+    )
+
+
+def _mark_authenticated(config: WebUIAuthConfig, *, persist: bool) -> None:
+    st.session_state[_SESSION_AUTHENTICATED] = True
+    st.session_state[_SESSION_LAST_ACTIVITY] = time.time()
+    if persist:
+        _schedule_session_cookie(config)
+
+
+def _is_authenticated(config: WebUIAuthConfig) -> bool:
+    now = time.time()
+    if not st.session_state.get(_SESSION_AUTHENTICATED, False):
+        if verify_persistent_session_token(config, _session_cookie_value(), now=now):
+            _mark_authenticated(config, persist=False)
+            return True
+        return False
     last_activity = st.session_state.get(_SESSION_LAST_ACTIVITY)
     if not isinstance(last_activity, (int, float)) or (
         now - last_activity > config.session_timeout_minutes * 60
@@ -243,6 +425,7 @@ def _disabled_auth_values(env_values: Mapping[str, object]) -> dict[str, object]
 def _disable_authentication(env_values: Mapping[str, object]) -> None:
     """Persist the explicit trusted-LAN opt-out from the first-run screen."""
     updated = _disabled_auth_values(env_values)
+    _schedule_session_cookie_clear()
     write_env(updated)
     st.cache_data.clear()
 
@@ -287,6 +470,7 @@ def _render_first_setup(env_values: Mapping[str, object]) -> None:
 
 def require_authentication(env_values: Mapping[str, object]) -> bool:
     """Render the gate and return whether the current Streamlit session may continue."""
+    _flush_pending_session_cookie_operations()
     config = read_auth_config(env_values)
     if not config.enabled:
         return True
@@ -316,8 +500,7 @@ def require_authentication(env_values: Mapping[str, object]) -> bool:
     username_ok = hmac.compare_digest(username.strip(), config.username)
     password_ok = verify_password_hash(config.password_hash, password)
     if username_ok and password_ok is True:
-        st.session_state[_SESSION_AUTHENTICATED] = True
-        st.session_state[_SESSION_LAST_ACTIVITY] = time.time()
+        _mark_authenticated(config, persist=True)
         _clear_attempts(config.username)
         st.session_state.pop("webui_auth_password", None)
         st.rerun()
@@ -334,6 +517,7 @@ def render_account_controls(env_values: Mapping[str, object]) -> None:
     if not config.enabled:
         return
     if st.button(t("auth_logout"), key="webui_auth_logout", width="stretch"):
+        _schedule_session_cookie_clear()
         _clear_session(st.session_state)
         st.rerun()
 
@@ -354,6 +538,7 @@ def render_account_controls(env_values: Mapping[str, object]) -> None:
         elif new_password != new_password_again:
             st.error(t("auth_password_mismatch"))
         else:
+            _schedule_session_cookie_clear()
             _save_admin_account(env_values, config.username, new_password)
             _clear_session(st.session_state)
             st.success(t("auth_password_changed"))
