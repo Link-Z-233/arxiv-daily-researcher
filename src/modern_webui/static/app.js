@@ -1358,9 +1358,14 @@ function normalizeForSave() {
       ...sourceState.builtins.filter((code) => code !== "prl").map(sourceDefinition).filter(Boolean),
       ...sourceState.custom,
     ];
+    // Keep the persisted meaning identical to the Streamlit collector: a
+    // checked extra-source master switch with nothing selected is a no-op.
+    // Persisting it as enabled makes worker validation and the visible state
+    // disagree after a reload.
+    const extraEnabled = Boolean(sourceState.extraEnabled && (sourceState.builtins.length || definitions.length));
     const enabled = [];
     if (sourceState.arxiv) enabled.push("arxiv");
-    if (sourceState.extraEnabled) {
+    if (extraEnabled) {
       if (sourceState.builtins.includes("prl")) enabled.push("prl");
       enabled.push(...definitions.map((item) => item.code));
     }
@@ -1369,7 +1374,7 @@ function normalizeForSave() {
     // Streamlit drops legacy/invalid category values during collection rather
     // than persisting a source filter that arXiv cannot honour.
     config.domains = sourceState.domains.filter((code) => validDomains.has(code));
-    config.extra_sources_enabled = Boolean(sourceState.extraEnabled);
+    config.extra_sources_enabled = extraEnabled;
     config.extra_source_definitions = definitions;
   }
   if (Object.prototype.hasOwnProperty.call(config, "trend_output_html") || Object.prototype.hasOwnProperty.call(config, "trend_output_md")) {
