@@ -345,10 +345,10 @@ def render_backup_sync(env_values: dict, config_values: dict) -> None:
 
 
 def render_history_maintenance(_env_values: dict, config_values: dict) -> None:
-    """Render task audit first, then legacy import and repair launch controls."""
-    _render_history_task_list(config_values)
-    st.divider()
+    """Render the legacy-import launch point before its task/status audit."""
     _render_legacy_import_section(config_values)
+    st.divider()
+    _render_history_task_list(config_values)
 
 
 def render(env_values: dict, config_values: dict) -> None:

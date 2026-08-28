@@ -1443,7 +1443,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_history_omission_queued": {"zh": "已加入队列：空闲后扫描遗漏并按自然周生成补充报告。", "en": "Queued: omissions will be scanned and supplemented by calendar week when idle."},
     "dm_history_repair_short": {"zh": "历史数据补全", "en": "history repair"},
     "dm_history_omission_short": {"zh": "历史遗漏扫描", "en": "omission scan"},
-    "dm_history_task_running_hint": {"zh": "{tasks} 正在排队或运行中，请在“每日推送 → 状态面板/运行日志”查看进度。", "en": "{tasks} is queued or running. See Daily Push → status panel/run logs for progress."},
+    "dm_history_task_running_hint": {"zh": "{tasks} 正在排队或运行中，请在本页任务和状态面板或“系统 → 运行日志”查看进度。", "en": "{tasks} is queued or running. Follow their progress in this page's task/status panel or System → Run Logs."},
     "dm_supplement_btn": {"zh": "🧾 生成补充报告", "en": "🧾 Build Supplement Report"},
     "dm_supplement_help": {
         "zh": "把补充积压中的论文（缺数据/遗漏）按「本次最多处理论文数」重跑评分/翻译/分析并生成一份补充报告；会消耗 LLM 额度，任务在空闲时自动运行。",
@@ -1458,8 +1458,8 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Queued: the worker will import legacy history when idle and follow the selected full-repair setting.",
     },
     "dm_legacy_running_hint": {
-        "zh": "旧历史导入流程正在排队或运行中，请在“每日推送 → 运行状态/运行日志”查看实时进度。",
-        "en": "The legacy-import workflow is queued or running. See Daily Push → status/run logs for live progress.",
+        "zh": "旧历史导入流程正在排队或运行中，请在本页任务和状态面板或“系统 → 运行日志”查看实时进度。",
+        "en": "The legacy-import workflow is queued or running. Follow its progress in this page's task/status panel or System → Run Logs.",
     },
     "dm_legacy_failed": {"zh": "❌ 触发失败", "en": "❌ Failed to queue"},
     "dm_legacy_none": {
