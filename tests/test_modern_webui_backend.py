@@ -67,6 +67,46 @@ class ModernBackendTests(unittest.TestCase):
             self.assertEqual(backend._daily_report_source(legacy, root), "arxiv")
             self.assertEqual(backend._daily_report_source(nested, root), "openalex")
 
+    def test_report_rows_use_streamlit_friendly_labels_and_disambiguate_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "daily_research" / "html" / "arxiv" / "arxiv_Report_2026-08-02_10-11-12_123.html"
+            second = root / "daily_research" / "html" / "arxiv" / "arxiv_Report_2026-08-02_10-11-12_456.html"
+            first.parent.mkdir(parents=True)
+            first.write_text("<html></html>", encoding="utf-8")
+            second.write_text("<html></html>", encoding="utf-8")
+            with patch.object(backend, "_report_source_labels", return_value={"arxiv": "arXiv"}):
+                rows = [
+                    backend._report_row(first, root, "daily", "arxiv"),
+                    backend._report_row(second, root, "daily", "arxiv"),
+                ]
+            backend._disambiguate_report_labels(rows)
+
+        self.assertEqual(rows[0]["source_label"], "arXiv")
+        self.assertEqual(rows[0]["label"], "2026-08-02  10:11:12.123")
+        self.assertEqual(rows[1]["label"], "2026-08-02  10:11:12.456")
+
+    def test_report_preference_can_initialise_the_shared_store(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "daily_research.db"
+            with patch.object(backend, "configured_db_path", return_value=database):
+                result = backend.set_preference(
+                    {
+                        "source": "arxiv",
+                        "paper_id": "2608.00001",
+                        "title": "A saved report paper",
+                        "preference": "like",
+                    }
+                )
+                store = backend.open_store()
+
+            self.assertTrue(database.is_file())
+            self.assertEqual(result, {"ok": True, "preference": "like"})
+            self.assertEqual(
+                store.get_paper_preference("arxiv", "2608.00001")["preference"],
+                "like",
+            )
+
     def test_trend_prompt_templates_round_trip_with_bounded_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "trend_prompt_templates.json"

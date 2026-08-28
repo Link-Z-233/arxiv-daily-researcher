@@ -231,9 +231,20 @@ def configured_reports_dir(flat: Mapping[str, Any] | None = None) -> Path:
     return configured_data_dir(values) / "reports"
 
 
-def open_store(flat: Mapping[str, Any] | None = None) -> DailyResearchStore | None:
+def open_store(
+    flat: Mapping[str, Any] | None = None, *, create: bool = False
+) -> DailyResearchStore | None:
+    """Open the shared history store without changing ordinary empty-state UX.
+
+    Read-only pages deliberately keep showing their existing ``no database``
+    message until the worker has produced data.  A report's in-card preference
+    controls are different: Streamlit initialises the small SQLite ledger on
+    first use so an archived report can be marked before a daily run.  The
+    explicit ``create`` flag keeps those two behaviours aligned without
+    accidentally creating a database merely by opening a dashboard page.
+    """
     path = configured_db_path(flat)
-    if not path.is_file():
+    if not create and not path.is_file():
         return None
     try:
         return DailyResearchStore(path)
@@ -640,7 +651,9 @@ def preferences_summary() -> dict[str, Any]:
 
 
 def set_preference(payload: Mapping[str, Any]) -> dict[str, Any]:
-    store = open_store()
+    # Match the Streamlit report viewer: preferences are usable for a saved
+    # daily report even before a worker run has created the history database.
+    store = open_store(create=True)
     if store is None:
         raise ModernWebUIError("SQLite 数据库尚不可用。")
     source = str(payload.get("source") or "").strip().lower()[:100]
@@ -890,6 +903,7 @@ def list_reports(show_non_arxiv: bool = False) -> dict[str, list[dict[str, Any]]
                 groups["keyword_trend"].append(_report_row(path, root, "keyword_trend", "keyword_trend"))
     for name, values in groups.items():
         values.sort(key=lambda item: item["sort_key"], reverse=True)
+        _disambiguate_report_labels(values)
         for row in values:
             row.pop("sort_key", None)
     return groups
@@ -903,16 +917,96 @@ def _report_row(path: Path, root: Path, report_type: str, source: str) -> dict[s
     except OSError:
         mtime, size = "", 0
     date_match = re.search(r"\d{4}-\d{2}-\d{2}", path.stem)
+    source_key = str(source or "unknown").strip().lower() or "unknown"
+    labels = _report_source_labels()
     return {
         "id": _report_token(path, root),
         "name": path.name,
-        "label": path.stem.replace("_", " "),
-        "source": source,
+        "label": _report_label(path, report_type),
+        "source": source_key,
+        "source_label": labels.get(source_key, source),
         "type": report_type,
         "date": date_match.group(0) if date_match else "",
         "modified_at": mtime,
         "size_bytes": size,
+        "metadata": _trend_report_metadata(path) if report_type == "trend" else None,
         "sort_key": _report_sort_key(path),
+    }
+
+
+def _report_source_labels() -> dict[str, str]:
+    """Use the same configured source names as Streamlit's report browser."""
+    try:
+        definitions = flat_config().get("extra_source_definitions", [])
+        return source_display_names(definitions)
+    except (TypeError, ValueError):
+        return source_display_names()
+
+
+def _report_label(path: Path, report_type: str) -> str:
+    """Format report labels exactly like the Streamlit select boxes."""
+    stem = path.stem
+    if report_type == "daily":
+        match = re.search(
+            r"(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(?:_\d+)?$", stem
+        )
+        if match:
+            return f"{match.group(1)}  {match.group(2).replace('-', ':')}"
+    elif report_type == "trend":
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", stem)
+        if match:
+            return f"{match.group(1)} → {match.group(2)}"
+    elif report_type == "keyword_trend":
+        match = re.search(r"(\d{4}-\d{2}-\d{2})$", stem)
+        if match:
+            return match.group(1)
+    return stem
+
+
+def _disambiguate_report_labels(rows: list[dict[str, Any]]) -> None:
+    """Keep same-source select-box labels unique without exposing noise.
+
+    Daily report filenames keep a microsecond suffix so supplement and normal
+    runs never overwrite each other.  The friendly label hides it until two
+    reports would otherwise become indistinguishable, exactly as the
+    Streamlit browser does.
+    """
+    counts: dict[tuple[str, str, str], int] = {}
+    for row in rows:
+        key = (str(row.get("type") or ""), str(row.get("source") or ""), str(row.get("label") or ""))
+        counts[key] = counts.get(key, 0) + 1
+
+    used: set[tuple[str, str, str]] = set()
+    for row in rows:
+        label = str(row.get("label") or "")
+        key = (str(row.get("type") or ""), str(row.get("source") or ""), label)
+        if counts.get(key, 0) <= 1:
+            used.add(key)
+            continue
+        micro = re.search(r"_(\d+)$", str(row.get("name") or "").rsplit(".", 1)[0])
+        suffix = f".{micro.group(1)}" if micro else " · duplicate"
+        candidate = f"{label}{suffix}"
+        duplicate_number = 2
+        while (key[0], key[1], candidate) in used:
+            candidate = f"{label}{suffix} · {duplicate_number}"
+            duplicate_number += 1
+        row["label"] = candidate
+        used.add((key[0], key[1], candidate))
+
+
+def _trend_report_metadata(path: Path) -> dict[str, Any] | None:
+    """Load the optional trend metadata shown by the Streamlit expander."""
+    metadata_path = path.parent.parent.parent / "markdown" / path.parent.name / f"{path.stem}_metadata.json"
+    try:
+        value = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    return {
+        key: value[key]
+        for key in ("keyword", "date_from", "date_to", "total_papers")
+        if key in value and isinstance(value[key], (str, int, float))
     }
 
 
@@ -942,7 +1036,7 @@ def report_file(token: str) -> tuple[Path, str]:
 
 
 def report_papers(token: str) -> list[dict[str, Any]]:
-    """Expose card identities for preference controls below an HTML preview."""
+    """Expose daily-card identities and their stored preference state."""
     path, _ = report_file(token)
     source = _daily_report_source(path, configured_reports_dir())
     try:
@@ -967,6 +1061,15 @@ def report_papers(token: str) -> list[dict[str, Any]]:
                     "categories": [],
                 }
             )
+    # Creating the tiny local ledger here makes legacy reports immediately
+    # markable, matching Streamlit's in-report controls.  This does not add
+    # any paper-delivery history; it only stores an explicit user preference.
+    store = open_store(create=True)
+    preferences = store.get_preference_map(rows) if store is not None and rows else {}
+    for row in rows:
+        row["preference"] = preferences.get(
+            (str(row["source"]), str(row["paper_id"])), "none"
+        )
     return rows
 
 

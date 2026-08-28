@@ -401,17 +401,129 @@ async function renderTrend(token) {
   if (status.is_active) scheduleRefresh("trend", () => renderPage(), 5000);
 }
 
-function reportList(title, icon, rows, key, selected) {
-  const table = pagedTable(key, [
-    { label: "报告", html: (row) => `<button class="report-link ${row.id === selected ? "is-selected" : ""}" data-open-report="${escapeAttribute(row.id)}">${escapeHtml(row.label)}</button>` },
-    { label: "来源", value: (row) => row.source },
-    { label: "时间", value: (row) => formatTime(row.modified_at) },
-  ], rows, { empty: "暂无报告" });
-  return `<div class="report-list"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3>${table}</div>`;
+function reportTypeLabel(type) {
+  return ({ daily: "每日研究", trend: "趋势研究", keyword_trend: "关键词趋势" })[type] || type;
+}
+
+function reportGroupKey(type, source) {
+  return `${type}:${source}`;
+}
+
+function reportPicker(title, icon, type, rows, selected) {
+  if (!rows.length) {
+    return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">0 份报告</p><p class="muted">暂无报告</p></div>`;
+  }
+  const groups = new Map();
+  rows.forEach((row) => {
+    const source = String(row.source || "unknown");
+    if (!groups.has(source)) groups.set(source, []);
+    groups.get(source).push(row);
+  });
+  const selections = state.pageData.reportSelections || {};
+  const body = [...groups.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([source, groupRows]) => {
+    const groupKey = reportGroupKey(type, source);
+    const saved = selections[groupKey];
+    const selectedHere = groupRows.some((item) => item.id === selected) ? selected : (groupRows.some((item) => item.id === saved) ? saved : groupRows[0].id);
+    const sourceLabel = type === "keyword_trend"
+      ? "关键词趋势"
+      : String(groupRows[0].source_label || source);
+    return `<div class="report-picker-group"><label class="report-select-field"><span>${escapeHtml(sourceLabel)} <small>(${groupRows.length})</small></span><select data-report-select="${escapeAttribute(groupKey)}">${groupRows.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === selectedHere ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label><button class="secondary-button compact-button report-preview-button" data-preview-group="${escapeAttribute(groupKey)}">预览</button></div>`;
+  }).join("");
+  return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">${rows.length} 份报告</p>${body}</div>`;
+}
+
+function formatReportSize(bytes) {
+  const size = Number(bytes);
+  return Number.isFinite(size) ? `${(size / 1024).toFixed(1)} KB` : "—";
+}
+
+function findAdjacentDailyReport(report, rows, direction) {
+  if (!report?.date) return null;
+  const sameSource = rows.filter((item) => item.source === report.source && item.date);
+  const dates = [...new Set(sameSource.map((item) => item.date))].sort();
+  const current = dates.indexOf(report.date);
+  const targetDate = dates[current + direction];
+  if (!targetDate) return null;
+  // ``list_reports`` returns the newest report first, including when a
+  // supplement and a normal run share the same logical calendar date.
+  return sameSource.find((item) => item.date === targetDate) || null;
+}
+
+function reportInfoHtml(report) {
+  const metadata = report.type === "trend" && report.metadata && Object.keys(report.metadata).length
+    ? `<details class="report-metadata"><summary>报告元数据</summary><div class="metric-grid compact-metrics">${report.metadata.keyword !== undefined ? `<div class="metric-card"><p>关键词</p><strong>${escapeHtml(report.metadata.keyword)}</strong></div>` : ""}${report.metadata.date_from && report.metadata.date_to ? `<div class="metric-card"><p>时间范围</p><strong>${escapeHtml(report.metadata.date_from)} → ${escapeHtml(report.metadata.date_to)}</strong></div>` : ""}${report.metadata.total_papers !== undefined ? `<div class="metric-card"><p>论文数量</p><strong>${escapeHtml(report.metadata.total_papers)}</strong></div>` : ""}</div></details>`
+    : "";
+  return `<p class="report-file-info"><strong>${escapeHtml(reportTypeLabel(report.type))}</strong> · <code>${escapeHtml(report.source)}</code> · <code>${escapeHtml(report.name)}</code> · ${escapeHtml(formatReportSize(report.size_bytes))} · 修改时间：${escapeHtml(formatTime(report.modified_at))}</p>${metadata}`;
+}
+
+function normalizeReportText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+
+function buildReportMarkButton(documentNode, preference, current) {
+  const button = documentNode.createElement("button");
+  button.type = "button";
+  button.className = `adr-report-mark-btn${preference === current ? " active" : ""}`;
+  button.dataset.preference = preference;
+  button.title = preference === "like" ? "喜欢" : "不感兴趣";
+  button.textContent = preference === "like" ? "👍" : "👎";
+  return button;
+}
+
+function buildMarkedReportHtml(rawHtml, papers) {
+  const parser = new DOMParser();
+  const documentNode = parser.parseFromString(String(rawHtml || ""), "text/html");
+  documentNode.querySelectorAll(".revision-label").forEach((node) => {
+    const text = normalizeReportText(node.textContent);
+    if (/^v\d+$/.test(text) || text === "↻ 重试") node.remove();
+  });
+  const candidates = Array.isArray(papers) ? papers.filter((paper) => paper?.title && paper?.paper_id && paper?.source) : [];
+  const used = new Set();
+  let injected = 0;
+  documentNode.querySelectorAll(".card.pass, .card.fail").forEach((card) => {
+    const cardText = normalizeReportText(card.textContent);
+    const matchIndex = candidates.findIndex((paper, index) => !used.has(index) && cardText.includes(normalizeReportText(paper.title)));
+    if (matchIndex < 0) return;
+    const field = card.querySelector(".field");
+    if (!field) return;
+    const paper = candidates[matchIndex];
+    used.add(matchIndex);
+    const current = ["like", "dislike"].includes(paper.preference) ? paper.preference : "none";
+    const bar = documentNode.createElement("div");
+    bar.className = "adr-report-mark-bar";
+    bar.dataset.source = String(paper.source);
+    bar.dataset.paperId = String(paper.paper_id);
+    bar.dataset.current = current;
+    bar.append(buildReportMarkButton(documentNode, "like", current), buildReportMarkButton(documentNode, "dislike", current));
+    field.insertBefore(bar, field.firstChild);
+    injected += 1;
+  });
+  if (injected) {
+    const style = documentNode.createElement("style");
+    style.textContent = ".adr-report-mark-bar{float:right;display:flex;gap:4px;margin-left:12px}.adr-report-mark-btn{border:1px solid rgba(127,127,127,.45);border-radius:8px;background:rgba(255,255,255,.78);cursor:pointer;font-size:13px;line-height:1;padding:4px 7px;color:inherit}.adr-report-mark-btn:hover{background:rgba(255,255,255,.95)}.adr-report-mark-btn.active[data-preference=like]{background:#16a34a;border-color:#16a34a;color:#fff}.adr-report-mark-btn.active[data-preference=dislike]{background:#dc2626;border-color:#dc2626;color:#fff}";
+    (documentNode.head || documentNode.documentElement).appendChild(style);
+    const script = documentNode.createElement("script");
+    script.textContent = "(function(){if(window.__adrReportMarks)return;window.__adrReportMarks=true;function set(bar,pref){pref=pref==='like'||pref==='dislike'?pref:'none';bar.dataset.current=pref;bar.querySelectorAll('.adr-report-mark-btn').forEach(function(button){button.classList.toggle('active',button.dataset.preference===pref);});}window.addEventListener('message',function(event){var data=event.data||{};if(data.type==='adr-report-mark-state'){document.querySelectorAll('.adr-report-mark-bar').forEach(function(bar){if(bar.dataset.source===String(data.source||'')&&bar.dataset.paperId===String(data.paper_id||'')){set(bar,data.preference);}});}});document.addEventListener('click',function(event){var button=event.target&&event.target.closest?event.target.closest('.adr-report-mark-btn'):null;if(!button)return;event.preventDefault();var bar=button.closest('.adr-report-mark-bar');if(!bar)return;var wanted=button.dataset.preference===(bar.dataset.current||'none')?'none':button.dataset.preference;set(bar,wanted);parent.postMessage({type:'adr-report-mark',source:bar.dataset.source,paper_id:bar.dataset.paperId,preference:wanted},'*');});})();";
+    (documentNode.body || documentNode.documentElement).appendChild(script);
+  }
+  return { html: `<!doctype html>${documentNode.documentElement.outerHTML}`, injected };
+}
+
+async function fetchReportHtml(reportId) {
+  const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}/file`, { credentials: "same-origin" });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || "读取报告失败。 ");
+  }
+  return response.text();
 }
 
 async function renderReports(token) {
   const root = $("#page-root");
+  // The report iframe is replaced on every selection.  Dispose its previous
+  // message listener before creating a new sandboxed preview.
+  state.reportMarkAbortController?.abort();
+  state.reportMarkAbortController = null;
   const showNonArxiv = Boolean(state.pageData.showNonArxiv);
   root.innerHTML = `${pageHeader()}<div class="loading">正在读取报告目录…</div>`;
   const reports = await api(`/api/reports?non_arxiv=${showNonArxiv ? "1" : "0"}`);
@@ -420,34 +532,71 @@ async function renderReports(token) {
   let selected = state.pageData.selectedReport;
   if (!selected || !all.some((item) => item.id === selected)) selected = all[0]?.id || "";
   state.pageData.selectedReport = selected;
-  root.innerHTML = `${pageHeader()}${section("报告浏览", `<div class="toolbar"><label class="toggle-field"><span>显示非 arXiv 来源报告</span><input id="report-non-arxiv" type="checkbox" ${showNonArxiv ? "checked" : ""}/><i></i></label><button id="reports-refresh" class="secondary-button">刷新列表</button></div><div class="report-grid">${reportList("每日研究", "📅", reports.daily, "reports-daily", selected)}${reportList("趋势研究", "🔬", reports.trend, "reports-trend", selected)}${reportList("关键词趋势", "📈", reports.keyword_trend, "reports-keyword", selected)}</div>`, { icon: "📚" })}${selected ? `<div id="report-preview" class="loading">正在加载报告预览…</div>` : section("报告预览", '<p class="empty-state">尚未生成可查看的报告。</p>')}`;
+  if (!state.pageData.reportSelections) state.pageData.reportSelections = {};
+  const chooseReport = (reportId) => {
+    const report = all.find((item) => item.id === reportId);
+    if (!report) return;
+    state.pageData.selectedReport = report.id;
+    state.pageData.reportSelections[reportGroupKey(report.type, report.source)] = report.id;
+    renderPage();
+  };
+  root.innerHTML = `${pageHeader()}${section("报告浏览", `<div class="toolbar"><label class="toggle-field"><span>显示非 arXiv 来源报告</span><input id="report-non-arxiv" type="checkbox" ${showNonArxiv ? "checked" : ""}/><i></i></label><button id="reports-refresh" class="secondary-button">刷新列表</button></div><div class="report-grid">${reportPicker("每日研究", "📅", "daily", reports.daily, selected)}${reportPicker("趋势研究", "🔬", "trend", reports.trend, selected)}${reportPicker("关键词趋势", "📈", "keyword_trend", reports.keyword_trend, selected)}</div>`, { icon: "📚" })}${selected ? `<div id="report-preview" class="loading">正在加载报告预览…</div>` : section("报告预览", '<p class="empty-state">尚未生成可查看的报告。</p>')}`;
   bindCommon(root);
-  $("#report-non-arxiv").addEventListener("change", (event) => { state.pageData.showNonArxiv = event.target.checked; state.pageData.selectedReport = ""; renderPage(); });
-  $("#reports-refresh").addEventListener("click", () => renderPage());
-  $$('[data-open-report]', root).forEach((button) => button.addEventListener("click", () => { state.pageData.selectedReport = button.dataset.openReport; renderPage(); }));
-  if (selected) await loadReportPreview(selected, token);
+  $("#report-non-arxiv").addEventListener("change", (event) => { state.pageData.showNonArxiv = event.target.checked; state.pageData.selectedReport = ""; state.pageData.reportSelections = {}; renderPage(); });
+  $("#reports-refresh").addEventListener("click", () => { state.pageData.selectedReport = ""; state.pageData.reportSelections = {}; renderPage(); });
+  $$('[data-report-select]', root).forEach((select) => select.addEventListener("change", () => chooseReport(select.value)));
+  $$('[data-preview-group]', root).forEach((button) => button.addEventListener("click", () => {
+    const select = $$('[data-report-select]', root).find((item) => item.dataset.reportSelect === button.dataset.previewGroup);
+    if (select) chooseReport(select.value);
+  }));
+  const report = all.find((item) => item.id === selected);
+  if (report) await loadReportPreview(report, reports, token, chooseReport);
 }
 
-async function loadReportPreview(reportId, token) {
+async function loadReportPreview(report, reports, token, chooseReport) {
   const preview = $("#report-preview");
   if (!preview) return;
   try {
-    const papers = await api(`/api/reports/${encodeURIComponent(reportId)}/papers`);
-    if (token !== state.renderToken) return;
-    const marks = papers.items?.length ? `<div class="report-marks"><h3>论文标记</h3><p class="hint-text">报告中的论文可在这里标记 👍 或 👎；偏好会写入同一 SQLite 历史库。</p>${pagedTable("report-papers", [
-      { label: "论文", html: (row) => `<strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.source)} · ${escapeHtml(row.paper_id)}</small>` },
-      { label: "标记", html: (row) => `<button class="mark-button" data-mark="like" data-paper="${encodeURIComponent(JSON.stringify(row))}">👍</button><button class="mark-button" data-mark="dislike" data-paper="${encodeURIComponent(JSON.stringify(row))}">👎</button><button class="mark-button" data-mark="none" data-paper="${encodeURIComponent(JSON.stringify(row))}">清除</button>` },
-    ], papers.items, { empty: "无法从此报告解析论文卡片。" })}</div>` : "";
-    preview.innerHTML = section("报告预览", `<iframe class="report-frame" sandbox="allow-same-origin allow-popups allow-forms" src="/api/reports/${encodeURIComponent(reportId)}/file" title="报告预览"></iframe>${marks}`);
-    bindCommon(preview);
-    $$('[data-mark]', preview).forEach((button) => button.addEventListener("click", async () => {
-      try {
-        const paper = JSON.parse(decodeURIComponent(button.dataset.paper));
-        await api("/api/preferences", { method: "PUT", body: { ...paper, preference: button.dataset.mark } });
-        toast("论文偏好已保存。 ");
-      } catch (error) { toast(error.message, "error"); }
+    const [html, paperResponse] = await Promise.all([
+      fetchReportHtml(report.id),
+      report.type === "daily"
+        ? api(`/api/reports/${encodeURIComponent(report.id)}/papers`).catch(() => ({ items: [] }))
+        : Promise.resolve({ items: [] }),
+    ]);
+    if (token !== state.renderToken || state.pageData.selectedReport !== report.id) return;
+    const marked = buildMarkedReportHtml(html, paperResponse.items || []);
+    const previous = report.type === "daily" ? findAdjacentDailyReport(report, reports.daily, -1) : null;
+    const next = report.type === "daily" ? findAdjacentDailyReport(report, reports.daily, 1) : null;
+    const navigation = report.type === "daily" ? `<div class="report-navigation"><button class="secondary-button compact-button" data-report-nav="${previous ? escapeAttribute(previous.id) : ""}" ${previous ? "" : "disabled"}>← 前一天</button><button class="secondary-button compact-button" data-report-nav="${next ? escapeAttribute(next.id) : ""}" ${next ? "" : "disabled"}>后一天 →</button></div>` : "";
+    preview.innerHTML = section("报告预览", `${reportInfoHtml(report)}${navigation}<iframe class="report-frame" sandbox="allow-scripts allow-popups" referrerpolicy="no-referrer" title="报告预览"></iframe>`);
+    const frame = $(".report-frame", preview);
+    frame.srcdoc = marked.html;
+    $$('[data-report-nav]', preview).forEach((button) => button.addEventListener("click", () => {
+      if (button.dataset.reportNav) chooseReport(button.dataset.reportNav);
     }));
-  } catch (error) { preview.innerHTML = section("报告预览", `<p class="error-message">${escapeHtml(error.message)}</p>`); }
+    if (report.type === "daily" && marked.injected) {
+      const markAbortController = new AbortController();
+      state.reportMarkAbortController = markAbortController;
+      window.addEventListener("message", async function onReportMark(event) {
+        if (event.source !== frame.contentWindow) return;
+        const action = event.data || {};
+        if (action.type !== "adr-report-mark") return;
+        const paper = (paperResponse.items || []).find((item) => String(item.source) === String(action.source || "") && String(item.paper_id) === String(action.paper_id || ""));
+        if (!paper || !["like", "dislike", "none"].includes(action.preference)) return;
+        try {
+          const saved = await api("/api/preferences", { method: "PUT", body: { ...paper, preference: action.preference } });
+          paper.preference = saved.preference;
+          frame.contentWindow?.postMessage({ type: "adr-report-mark-state", source: paper.source, paper_id: paper.paper_id, preference: saved.preference }, "*");
+          toast("论文偏好已保存。 ");
+        } catch (error) {
+          frame.contentWindow?.postMessage({ type: "adr-report-mark-state", source: paper.source, paper_id: paper.paper_id, preference: paper.preference || "none" }, "*");
+          toast(error.message, "error");
+        }
+      }, { signal: markAbortController.signal });
+    }
+  } catch (error) {
+    preview.innerHTML = section("报告预览", `<p class="error-message">${escapeHtml(error.message)}</p>`);
+  }
 }
 
 async function renderFavorites(token) {
@@ -1008,6 +1157,10 @@ const PAGE_RENDERERS = {
 
 async function renderPage() {
   clearTimers();
+  if (state.page !== "reports") {
+    state.reportMarkAbortController?.abort();
+    state.reportMarkAbortController = null;
+  }
   setLocation();
   const token = ++state.renderToken;
   const renderer = PAGE_RENDERERS[state.page] || renderDaily;
