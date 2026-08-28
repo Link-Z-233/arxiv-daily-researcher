@@ -394,10 +394,16 @@ function renderTrendForm(templates = []) {
   const defaultFrom = new Date(Date.now() - Number(config("trend_default_date_range_days", 365)) * 86400000).toISOString().slice(0, 10);
   const configuredPrompt = String(config("trend_analysis_prompt", "") || "");
   const matchingTemplate = templates.find((item) => item.text === configuredPrompt)?.name || "";
-  const values = state.pageData.trend || { keywords: "", date_from: defaultFrom, date_to: today, categories: [], max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"), analysis_prompt: configuredPrompt, template: matchingTemplate };
+  const configuredSkills = Array.isArray(config("trend_enabled_skills", ["comprehensive_analysis"])) ? config("trend_enabled_skills", ["comprehensive_analysis"]) : [];
+  const values = state.pageData.trend || { keywords: "", date_from: defaultFrom, date_to: today, categories: [], max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"), analysis_prompt: matchingTemplate ? configuredPrompt : "", template: matchingTemplate, skills: configuredSkills };
+  const selectedSkills = Array.isArray(values.skills) ? values.skills : configuredSkills;
   const categories = arxivCategories().map((item) => `<option value="${escapeAttribute(item.code)}" ${values.categories.includes(item.code) ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
   const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
-  return `<div class="form-grid two"><label class="form-field"><span>研究关键词</span><input id="trend-keywords" value="${escapeAttribute(values.keywords)}" placeholder="例如 quantum error correction" /></label><label class="form-field"><span>arXiv 分类（可选）</span><select id="trend-categories" multiple>${categories}</select></label><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><div class="form-grid two"><label class="form-field"><span>排序</span><select id="trend-sort"><option value="ascending" ${values.sort_order === "ascending" ? "selected" : ""}>由早到晚</option><option value="descending" ${values.sort_order === "descending" ? "selected" : ""}>由晚到早</option></select></label><label class="form-field"><span>最多结果数</span><input id="trend-max-results" type="number" min="1" max="5000" value="${escapeAttribute(values.max_results)}" /></label></div><div class="form-grid two"><label class="form-field"><span>已保存提示词模板</span><select id="trend-template"><option value="">不使用模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><button id="trend-template-delete" class="secondary-button" ${values.template ? "" : "disabled"}>删除当前模板</button></div></div><label class="form-field"><span>深度分析提示词（可选）</span><textarea id="trend-prompt" rows="6" placeholder="可留空">${escapeHtml(values.analysis_prompt)}</textarea></label><details class="compact-form"><summary>保存新的提示词模板</summary><div class="form-grid two"><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="5" maxlength="8000" placeholder="填写可复用的深度分析提示词"></textarea></label></div><div class="action-row"><button id="trend-template-save" class="secondary-button">保存模板</button></div></details>`;
+  return {
+    run: `<label class="form-field"><span>研究关键词</span><input id="trend-keywords" value="${escapeAttribute(values.keywords)}" placeholder="例如 quantum error correction" /></label>`,
+    parameters: `<div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><label class="form-field"><span>arXiv 分类（可选）</span><select id="trend-categories" multiple>${categories}</select></label>`,
+    configuration: `<div class="form-grid two"><label class="form-field"><span>排序</span><select id="trend-sort"><option value="ascending" ${values.sort_order === "ascending" ? "selected" : ""}>由早到晚</option><option value="descending" ${values.sort_order === "descending" ? "selected" : ""}>由晚到早</option></select></label><label class="form-field"><span>最多结果数</span><input id="trend-max-results" type="number" min="10" max="5000" value="${escapeAttribute(values.max_results)}" /></label>${field({ label: "默认日期范围（天）", key: "trend_default_date_range_days", type: "number", min: 30, max: 3650, fallback: 365 })}${field({ label: "报告位置", key: "trend_report_position", type: "select", choices: [{ value: "beginning", label: "报告开头" }, { value: "end", label: "报告末尾" }], fallback: "end" })}${field({ label: "生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true })}${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div><div class="form-grid two">${field({ label: "输出 Markdown", key: "trend_output_md", type: "checkbox", fallback: true })}${field({ label: "输出 HTML", key: "trend_output_html", type: "checkbox", fallback: true })}</div><label class="toggle-field"><span>综合分析</span><input id="trend-skill-comprehensive" type="checkbox" ${selectedSkills.includes("comprehensive_analysis") ? "checked" : ""}/><i></i></label><div class="form-grid two"><label class="form-field"><span>已保存提示词模板</span><select id="trend-template"><option value="">不使用模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><button id="trend-template-delete" class="secondary-button" ${values.template ? "" : "disabled"}>删除当前模板</button></div></div><p class="hint-text">选择模板后，模板内容会作为本次趋势研究的深度分析提示词；不选择时使用默认分析流程。</p><details class="compact-form"><summary>保存新的提示词模板</summary><div class="form-grid two"><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="5" maxlength="8000" placeholder="填写可复用的深度分析提示词"></textarea></label></div><div class="action-row"><button id="trend-template-save" class="secondary-button">保存模板</button></div></details>`,
+  };
 }
 
 async function renderTrend(token) {
@@ -406,19 +412,20 @@ async function renderTrend(token) {
   const [status, templateData] = await Promise.all([fetchStatus("trend"), api("/api/trend/templates")]);
   if (token !== state.renderToken) return;
   const templates = templateData.items || [];
-  root.innerHTML = `${pageHeader()}${section("趋势研究", `${renderTrendForm(templates)}<div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button><button class="secondary-button" data-refresh-status="trend">刷新状态</button></div>${statusCard(status, { kind: "trend" })}`, { icon: "📈" })}${divider()}${section("趋势研究配置", `<div class="form-grid two">${field({ label: "默认日期范围（天）", key: "trend_default_date_range_days", type: "number", min: 30, max: 3650, fallback: 365 })}${field({ label: "报告位置", key: "trend_report_position", type: "select", choices: [{ value: "beginning", label: "报告开头" }, { value: "end", label: "报告末尾" }], fallback: "end" })}${field({ label: "生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true })}${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div><div class="form-grid two">${field({ label: "输出 HTML", key: "trend_output_html", type: "checkbox", fallback: true })}${field({ label: "输出 Markdown", key: "trend_output_md", type: "checkbox", fallback: true })}</div>`, { icon: "⚙️", hint: "输出格式会在保存时转换为兼容配置。" })}`;
+  const form = renderTrendForm(templates);
+  root.innerHTML = `${pageHeader()}${section("趋势研究", `${form.run}<div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button><button class="secondary-button" data-refresh-status="trend">刷新状态</button></div>${statusCard(status, { kind: "trend" })}`, { icon: "📈" })}${divider()}${section("分析参数", form.parameters, { icon: "🔍" })}${divider()}${section("趋势研究配置", form.configuration, { icon: "⚙️", hint: "输出格式会在保存时转换为兼容配置。" })}`;
   bindCommon(root);
   const preserveTrend = () => {
     state.pageData.trend = {
       keywords: $("#trend-keywords").value, date_from: $("#trend-from").value, date_to: $("#trend-to").value,
       categories: Array.from($("#trend-categories").selectedOptions).map((item) => item.value), sort_order: $("#trend-sort").value,
-      max_results: Number($("#trend-max-results").value), analysis_prompt: $("#trend-prompt").value, template: $("#trend-template").value,
+      max_results: Number($("#trend-max-results").value), template: $("#trend-template").value,
+      analysis_prompt: templates.find((item) => item.name === $("#trend-template").value)?.text || "",
+      skills: $("#trend-skill-comprehensive").checked ? ["comprehensive_analysis"] : [],
     };
   };
-  ["#trend-keywords", "#trend-from", "#trend-to", "#trend-categories", "#trend-sort", "#trend-max-results", "#trend-prompt", "#trend-template"].forEach((selector) => $(selector).addEventListener("change", preserveTrend));
+  ["#trend-keywords", "#trend-from", "#trend-to", "#trend-categories", "#trend-sort", "#trend-max-results", "#trend-template", "#trend-skill-comprehensive"].forEach((selector) => $(selector).addEventListener("change", preserveTrend));
   $("#trend-template").addEventListener("change", (event) => {
-    const selected = templates.find((item) => item.name === event.target.value);
-    if (selected) $("#trend-prompt").value = selected.text;
     preserveTrend();
   });
   $("#trend-template-save").addEventListener("click", async () => {
@@ -435,7 +442,7 @@ async function renderTrend(token) {
     if (!name || !window.confirm(`确认删除提示词模板“${name}”？`)) return;
     try {
       await api("/api/trend/templates/delete", { method: "POST", body: { name } });
-      preserveTrend(); state.pageData.trend.template = "";
+      preserveTrend(); state.pageData.trend.template = ""; state.pageData.trend.analysis_prompt = "";
       toast("提示词模板已删除。", "success"); renderPage();
     } catch (error) { toast(error.message, "error"); }
   });
@@ -448,7 +455,6 @@ async function renderTrend(token) {
       toast("趋势任务已加入队列。 "); renderPage();
     } catch (error) { toast(error.message, "error"); }
   });
-  if (status.is_active) scheduleRefresh("trend", () => renderPage(), 5000);
 }
 
 function reportTypeLabel(type) {
@@ -1268,6 +1274,15 @@ function normalizeForSave() {
     config.trend_output_formats = formats;
     delete config.trend_output_html;
     delete config.trend_output_md;
+  }
+  // Trend prompt/skill state belongs to the task page rather than a generic
+  // field.  Persist it only after that page has been opened so an unrelated
+  // save never replaces a configured template selection.
+  if (state.pageData.trend) {
+    config.trend_analysis_prompt = String(state.pageData.trend.analysis_prompt || "");
+    config.trend_enabled_skills = Array.isArray(state.pageData.trend.skills)
+      ? state.pageData.trend.skills.filter((item) => item === "comprehensive_analysis")
+      : [];
   }
   config.score_strategy_explicit = true;
   return config;
