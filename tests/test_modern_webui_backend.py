@@ -230,6 +230,67 @@ class ModernBackendTests(unittest.TestCase):
             webdav_sync=webdav_client,
         )
 
+    def test_history_status_exposes_progress_timing_and_retry_metadata(self) -> None:
+        store = MagicMock()
+        store.get_app_state.return_value = ""
+        store.active_run_progress.return_value = {
+            "run_kind": "history_data_repair",
+            "phase": "history_repair",
+            "detail": "正在补全 TL;DR",
+            "current": 2,
+            "total": 5,
+        }
+        records = [
+            {
+                "request_id": "running",
+                "mode": "history_data_repair",
+                "state": "running",
+                "created_at": "2026-08-29T00:00:00+00:00",
+                "started_at": "2026-08-29T00:01:00+00:00",
+                "updated_at": "2026-08-29T00:02:00+00:00",
+                "issue": "",
+                "args": {},
+            },
+            {
+                "request_id": "failed",
+                "mode": "legacy_import",
+                "state": "failed",
+                "created_at": "2026-08-28T00:00:00+00:00",
+                "started_at": "2026-08-28T00:01:00+00:00",
+                "updated_at": "2026-08-28T00:02:00+00:00",
+                "issue": "读取报告失败",
+                "args": {"full_repair": True},
+            },
+        ]
+        with patch.object(backend, "flat_config", return_value={}), patch.object(
+            backend, "open_store", return_value=store
+        ), patch.object(backend, "task_records", return_value=records), patch.object(
+            backend, "run_status", return_value={"is_active": True}
+        ):
+            payload = backend.history_status()
+
+        running = next(item for item in payload["tasks"] if item["request_id"] == "running")
+        failed = next(item for item in payload["tasks"] if item["request_id"] == "failed")
+        self.assertEqual(running["label"], "历史数据补全")
+        self.assertIn("补全历史数据", running["progress"])
+        self.assertIn("正在补全 TL;DR", running["progress"])
+        self.assertIn("2/5", running["progress"])
+        self.assertEqual(running["started_at"], "2026-08-29T00:01:00+00:00")
+        self.assertTrue(failed["retryable"])
+        self.assertEqual(failed["completed_at"], "2026-08-28T00:02:00+00:00")
+
+    def test_daily_status_hides_history_locks_but_keeps_launch_guard(self) -> None:
+        history_lock = {"name": "legacy_import.lock", "pid": 42}
+        with patch.object(backend, "flat_config", return_value={}), patch.object(
+            backend, "active_locks", return_value=[history_lock]
+        ), patch.object(backend, "task_records", return_value=[]), patch.object(
+            backend, "open_store", return_value=None
+        ):
+            status = backend.run_status("daily")
+
+        self.assertEqual(status["active_locks"], [])
+        self.assertFalse(status["can_start"])
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

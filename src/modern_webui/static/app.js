@@ -329,7 +329,7 @@ function statusCard(status, options = {}) {
   const relatedLocks = (Array.isArray(status.active_locks) ? status.active_locks : []).filter((lock) => !relevantNames.has(String(lock.name || "")));
   const relatedLine = relatedLocks.length ? `<p class="status-locks">同时运行：${relatedLocks.map((lock) => escapeHtml(lock.name || "—")).join(" · ")}</p>` : "";
   const liveLog = status.live_log && typeof status.live_log === "object" && status.live_log.content ? `<details class="live-log" open><summary>📜 ${escapeHtml(status.live_log.name || "运行日志")} · 日志尾部 80 行${status.live_log.truncated ? "（已截断）" : ""}</summary><pre>${escapeHtml(status.live_log.content)}</pre></details>` : "";
-  const stop = status.is_active ? '<button class="danger-button" data-stop-task="1">停止当前任务</button>' : "";
+  const stop = status.is_active && options.allowStop !== false ? '<button class="danger-button" data-stop-task="1">停止当前任务</button>' : "";
   const refresh = options.refresh === false ? "" : `<button class="secondary-button" data-refresh-status="${escapeAttribute(options.kind || "daily")}">刷新状态</button>`;
   return `<div class="status-card"><div class="status-line"><i class="status-dot ${escapeAttribute(task.state || "idle")}"></i><div><p class="eyebrow">当前任务</p><h3>${escapeHtml(task.label || "正在读取状态")}</h3><p class="muted">${escapeHtml(task.phase || "")}</p></div><span class="timestamp">${task.started_at ? `开始于 ${escapeHtml(formatTime(task.started_at))}` : ""}</span></div>${counterText ? `<p class="status-counters">${escapeHtml(counterText)}</p>` : ""}${progress}${lockLine}${relatedLine}${task.detail ? `<p class="issue-box">${escapeHtml(task.detail)}</p>` : ""}${liveLog}<div class="action-row">${options.startLabel ? `<button class="primary-button" data-start-task="${escapeAttribute(options.mode)}" ${status.can_start ? "" : "disabled"}>${escapeHtml(options.startLabel)} <span>→</span></button>` : ""}${stop}${refresh}</div></div>`;
 }
@@ -1111,8 +1111,24 @@ async function renderBackupSync(token) {
 function importSummary(summary) {
   if (!summary) return '<p class="empty-state">尚无旧历史导入记录。</p>';
   const metric = (label, key, fallback = 0) => ({ label, value: formatNumber(summary[key] ?? fallback), help: "" });
-  const missing = ["missing_cards", "missing_tldr", "missing_translation", "missing_analysis"].map((key) => Number(summary[key] || 0)).reduce((a, b) => a + b, 0);
-  return `<p class="hint-text">完成时间：${escapeHtml(formatTime(summary.finished_at))} · ${summary.full_repair_enabled ? "完整导入流程" : "仅导入已有 HTML 论文"}</p>${metrics([metric("扫描报告", "reports_scanned"), metric("导入论文卡", "cards_selected", summary.cards_found), metric("写入投递记录", "delivered_ledger_rows"), metric("补充任务", "backlog_queued")])}${missing ? `<p class="issue-box">仍有 ${missing} 项历史数据待补全；可运行“补全历史数据”。</p>` : ""}`;
+  const missingParts = [
+    ["报告卡", "missing_cards"], ["TL;DR", "missing_tldr"],
+    ["翻译", "missing_translation"], ["分析", "missing_analysis"],
+  ].map(([label, key]) => [label, Number(summary[key] || 0)]).filter(([, value]) => value > 0);
+  const sources = summary.source_breakdown && typeof summary.source_breakdown === "object"
+    ? Object.entries(summary.source_breakdown).filter(([name, value]) => name && Number.isFinite(Number(value))).map(([name, value]) => `${escapeHtml(name)}：${formatNumber(value)}`).join(" · ")
+    : "";
+  const missing = missingParts.length
+    ? `<p class="issue-box">待补全：${missingParts.map(([label, value]) => `${escapeHtml(label)} ${formatNumber(value)}`).join(" · ")}。可运行“补全历史数据”。</p>`
+    : "";
+  return `<p class="hint-text">完成时间：${escapeHtml(formatTime(summary.finished_at))} · ${summary.full_repair_enabled ? "完整导入流程" : "仅导入已有 HTML 论文"}</p>${metrics([metric("扫描报告", "reports_scanned"), metric("导入论文卡", "cards_selected", summary.cards_found), metric("写入投递记录", "delivered_ledger_rows"), metric("补充任务", "backlog_queued")])}${missing}${sources ? `<p class="hint-text">来源分布：${sources}</p>` : ""}`;
+}
+
+function historyTaskStateLabel(value) {
+  return ({
+    queued: "等待中", starting: "正在接手", running: "运行中", succeeded: "已完成",
+    failed: "失败", rejected: "已拒绝", interrupted: "已中断", skipped_busy: "因互斥跳过",
+  })[String(value || "")] || String(value || "—");
 }
 
 async function renderHistory(token) {
@@ -1123,15 +1139,26 @@ async function renderHistory(token) {
   if (token !== state.renderToken) return;
   const status = data.status || {};
   const tasks = data.tasks || [];
-  root.innerHTML = `${pageHeader()}${section("旧版本历史导入", `<p class="hint-text">导入旧版本 HTML 报告中的论文。SQLite 是历史论文数据的唯一索引；HTML 解析与新报告生成都会同步写入。</p>${field({ label: "启用完整补全流程", key: "legacy_import_full_repair_enabled", type: "checkbox", fallback: false, redraw: true })}<p class="hint-text">${fullRepair ? "开启后会在导入后安排缺失字段补全、遗漏扫描和补充报告。" : "关闭后仅导入 HTML 已包含的论文，避免新的每日研究重复处理。"}</p><div class="action-row"><button id="history-import" class="primary-button" ${status.can_start ? "" : "disabled"}>读取旧历史 <span>→</span></button><button id="history-repair" class="secondary-button">补全历史数据</button><button id="history-omission" class="secondary-button">扫描历史遗漏</button></div>`, { icon: "📜" })}${divider()}${section("状态面板", `${statusCard(status, { kind: "history" })}${divider()}<h3>最近一次导入结果</h3>${importSummary(data.last_import)}${divider()}<h3>未完成任务</h3>${pagedTable("history-tasks", [{ label: "任务", value: (row) => ({ legacy_import: "旧版本历史导入", history_data_repair: "历史数据补全", history_omission_scan: "历史遗漏扫描" }[row.mode] || row.mode) }, { label: "状态", key: "state" }, { label: "时间", value: (row) => formatTime(row.updated_at || row.created_at) }, { label: "问题摘要", value: (row) => row.issue || "—" }, { label: "操作", html: (row) => ["failed", "rejected", "interrupted", "skipped_busy"].includes(row.state) ? `<button class="secondary-button compact-button" data-history-retry="${escapeAttribute(row.request_id)}">重试</button>` : "—" }], tasks, { empty: "没有未完成的历史维护任务。" })}`, { icon: "📊" })}`;
+  const pendingModes = new Set(tasks.filter((task) => ["queued", "starting", "running"].includes(task.state)).map((task) => task.mode));
+  const autoRefresh = state.pageData.historyAutoRefresh !== false;
+  const isLive = Boolean(status.is_active) || tasks.some((task) => ["queued", "starting", "running"].includes(task.state));
+  const latestResult = isLive
+    ? '<p class="hint-text">任务进行中时会在完成后显示最新导入结果。</p>'
+    : importSummary(data.last_import);
+  root.innerHTML = `${pageHeader()}${section("旧版本历史导入", `<p class="hint-text">导入旧版本 HTML 报告中的论文。SQLite 是历史论文数据的唯一索引；HTML 解析与新报告生成都会同步写入。</p>${field({ label: "启用完整补全流程", key: "legacy_import_full_repair_enabled", type: "checkbox", fallback: false, redraw: true })}<p class="hint-text">${fullRepair ? "开启后会在导入后安排缺失字段补全、遗漏扫描和补充报告。" : "关闭后仅导入 HTML 已包含的论文，避免新的每日研究重复处理。"}</p><div class="action-row"><button id="history-import" class="primary-button" ${pendingModes.has("legacy_import") ? "disabled" : ""}>读取旧历史 <span>→</span></button></div><h3>历史维护</h3><div class="form-grid two"><button id="history-repair" class="secondary-button" ${pendingModes.has("history_data_repair") ? "disabled" : ""}>补全历史数据</button><button id="history-omission" class="secondary-button" ${pendingModes.has("history_omission_scan") ? "disabled" : ""}>扫描历史遗漏</button></div>`, { icon: "📜" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，在历史任务运行或等待工作进程接手时每 5 秒刷新状态、进度和日志尾部。</small></span><input id="history-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label>${statusCard(status, { kind: "history", refresh: false, allowStop: false })}${divider()}<h3>最近一次导入结果</h3>${latestResult}${divider()}<h3>未完成任务</h3>${pagedTable("history-tasks", [{ label: "任务", value: (row) => row.label || row.mode || "—" }, { label: "状态", value: (row) => historyTaskStateLabel(row.state) }, { label: "进度", value: (row) => row.progress || "—" }, { label: "开始时间", value: (row) => formatTime(row.started_at || row.created_at) }, { label: "完成时间", value: (row) => formatTime(row.completed_at) }, { label: "问题摘要", value: (row) => row.issue || "—" }, { label: "操作", html: (row) => row.retryable ? `<button class="secondary-button compact-button" data-history-retry="${escapeAttribute(row.request_id)}">重试</button>` : "—" }], tasks, { empty: "没有未完成的历史维护任务。" })}`, { icon: "📊" })}`;
   bindCommon(root);
+  $("#history-auto-refresh", root)?.addEventListener("change", (event) => {
+    state.pageData.historyAutoRefresh = event.target.checked;
+    if (!event.target.checked) window.clearTimeout(state.timers.get("history"));
+    else if (isLive) scheduleRefresh("history", () => renderPage(), 5000);
+  });
   $("#history-import").addEventListener("click", async () => {
-    try { await api("/api/tasks/legacy_import", { method: "POST", body: { args: { full_repair: Boolean(configValue("legacy_import_full_repair_enabled", false)) } } }); toast("旧历史导入已加入闲时队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
+    try { const selectedFullRepair = Boolean(configValue("legacy_import_full_repair_enabled", false)); await saveAll(false); await api("/api/tasks/legacy_import", { method: "POST", body: { args: { full_repair: selectedFullRepair } } }); toast("旧历史导入已加入闲时队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
   });
   $("#history-repair").addEventListener("click", async () => { try { await api("/api/tasks/history_data_repair", { method: "POST", body: { args: {} } }); toast("历史数据补全已加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); } });
   $("#history-omission").addEventListener("click", async () => { try { await api("/api/tasks/history_omission_scan", { method: "POST", body: { args: {} } }); toast("历史遗漏扫描已加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); } });
   $$('[data-history-retry]', root).forEach((button) => button.addEventListener("click", async () => { try { await api(`/api/history/${encodeURIComponent(button.dataset.historyRetry)}/retry`, { method: "POST", body: {} }); toast("历史维护任务已重新加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); } }));
-  if (status.is_active) scheduleRefresh("history", () => renderPage(), 5000);
+  if (isLive && autoRefresh) scheduleRefresh("history", () => renderPage(), 5000);
 }
 
 function healthTable(key, kind, rows) {

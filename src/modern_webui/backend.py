@@ -129,6 +129,20 @@ PHASE_LABELS = {
     "history_omission_scan": "扫描历史遗漏",
     "history_omission_week": "生成周补充报告",
 }
+HISTORY_TASK_LABELS = {
+    "legacy_import": "旧版本历史导入",
+    "history_data_repair": "历史数据补全",
+    "history_omission_scan": "历史遗漏扫描",
+}
+HISTORY_RUN_KINDS = {
+    "legacy_import": "legacy_import",
+    "history_data_repair": "history_data_repair",
+    "history_omission_scan": "history_omission_scan",
+}
+_LIVE_TASK_STATES = frozenset({"queued", "starting", "running"})
+_RETRYABLE_TASK_STATES = frozenset(
+    {"failed", "rejected", "interrupted", "skipped_busy"}
+)
 
 # Secrets never leave the server.  An empty form input therefore keeps the
 # existing value; explicit clearing is available through ``clear_env``.
@@ -416,6 +430,11 @@ def _locks_for_kind(locks: Iterable[Mapping[str, Any]], kind: str) -> list[dict[
     return rows
 
 
+def _is_history_lock(lock: Mapping[str, Any]) -> bool:
+    """Whether a lock belongs exclusively to idle-time history maintenance."""
+    return bool(_locks_for_kind((lock,), "history"))
+
+
 def _label_for_lock(name: str) -> str:
     if name.startswith("trend_research_"):
         return MODE_LABELS["trend_research"]
@@ -490,6 +509,7 @@ def _read_status_file(path: Path) -> dict[str, Any] | None:
         "request_id": request_id,
         "mode": str(raw["mode"]),
         "created_at": str(raw.get("created_at") or ""),
+        "started_at": str(raw.get("started_at") or ""),
         "updated_at": str(raw.get("updated_at") or ""),
         "state": str(raw.get("state") or "unknown"),
         "issue": sanitize_task_error_summary(raw.get("error_summary") or raw.get("error")),
@@ -513,6 +533,7 @@ def task_records(modes: Iterable[str] | None = None, *, limit: int = 200) -> lis
                 "request_id": request_id,
                 "mode": str(payload["mode"]),
                 "created_at": str(payload.get("created_at") or ""),
+                "started_at": "",
                 "updated_at": "",
                 "state": "queued",
                 "issue": "",
@@ -527,6 +548,7 @@ def task_records(modes: Iterable[str] | None = None, *, limit: int = 200) -> lis
                 "request_id": request_id,
                 "mode": str(payload["mode"]),
                 "created_at": str(payload.get("created_at") or ""),
+                "started_at": "",
                 "updated_at": "",
                 "state": "starting",
                 "issue": "",
@@ -674,6 +696,13 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         # idle-time queue behind normal research, but duplicate history work
         # remains disabled until its preceding request has finished.
         can_start = not bool(live_records)
+    # The compatibility panel intentionally keeps history-maintenance status
+    # out of the normal daily/previous-date cards.  Its locks still take part
+    # in launch safety above, but operators inspect their details only from
+    # the dedicated History Maintenance page.
+    display_locks = locks if kind == "history" else [
+        lock for lock in locks if not _is_history_lock(lock)
+    ]
     return {
         "task": task,
         "is_active": active,
@@ -684,7 +713,7 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         },
         "backfill": backfill,
         "last_run": last_run,
-        "active_locks": locks,
+        "active_locks": display_locks,
         "relevant_locks": relevant_locks,
         "has_relevant_lock": bool(relevant_locks),
         "live_log": _live_log_tail(relevant_locks) if active else None,
@@ -714,6 +743,14 @@ def stop_active_tasks() -> list[int]:
 
 
 def history_status() -> dict[str, Any]:
+    """Return the focused, durable status model for history maintenance.
+
+    History work deliberately runs through the ordinary worker trigger queue,
+    but it is not part of the daily-run panel.  This response mirrors the
+    Streamlit history panel: task receipts remain compact and safe, while a
+    matching SQLite heartbeat supplies meaningful phase progress for the one
+    task currently being processed.
+    """
     flat = flat_config()
     store = open_store(flat)
     summary = None
@@ -724,12 +761,74 @@ def history_status() -> dict[str, Any]:
             summary = parsed if isinstance(parsed, dict) else None
         except Exception:
             summary = None
-    records = [row for row in task_records(HISTORY_MODES) if row["state"] != "succeeded"]
+    active_progress: Mapping[str, Any] | None = None
+    if store is not None:
+        try:
+            candidate = store.active_run_progress()
+            active_progress = candidate if isinstance(candidate, Mapping) else None
+        except Exception:
+            active_progress = None
+    records = [
+        _history_task_row(row, active_progress)
+        for row in task_records(HISTORY_MODES)
+        if row["state"] != "succeeded"
+    ]
     return {
         "status": run_status("history"),
         "last_import": summary,
         "tasks": records,
     }
+
+
+def _history_task_progress(
+    record: Mapping[str, Any], progress: Mapping[str, Any] | None
+) -> str:
+    """Turn a receipt plus optional SQLite heartbeat into concise task text."""
+    state = str(record.get("state") or "")
+    mode = str(record.get("mode") or "")
+    if state == "queued":
+        return "已加入闲时队列，等待其他研究任务完成"
+    if state == "starting":
+        return "工作进程正在接手任务"
+    if state != "running":
+        return ""
+    if not isinstance(progress, Mapping) or progress.get("run_kind") != HISTORY_RUN_KINDS.get(mode):
+        return "等待系统空闲后继续运行"
+
+    phase = PHASE_LABELS.get(
+        str(progress.get("phase") or ""), str(progress.get("phase") or "处理中")
+    )
+    detail = sanitize_task_error_summary(progress.get("detail"), max_chars=160)
+    parts = [phase]
+    if detail:
+        parts.append(detail)
+    current = progress.get("current")
+    total = progress.get("total")
+    if (
+        isinstance(current, int)
+        and not isinstance(current, bool)
+        and isinstance(total, int)
+        and not isinstance(total, bool)
+        and total > 0
+    ):
+        parts.append(f"{max(0, current)}/{total}")
+    return " · ".join(parts)
+
+
+def _history_task_row(
+    record: Mapping[str, Any], progress: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Provide the UI-only columns used by the history task table."""
+    row = dict(record)
+    state = str(row.get("state") or "unknown")
+    row["label"] = HISTORY_TASK_LABELS.get(str(row.get("mode") or ""), str(row.get("mode") or "未知任务"))
+    row["started_at"] = str(row.get("started_at") or "")
+    row["completed_at"] = (
+        str(row.get("updated_at") or "") if state not in _LIVE_TASK_STATES else ""
+    )
+    row["progress"] = _history_task_progress(row, progress)
+    row["retryable"] = state in _RETRYABLE_TASK_STATES
+    return row
 
 
 def retry_history_task(request_id: str) -> dict[str, Any]:
