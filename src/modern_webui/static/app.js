@@ -356,6 +356,13 @@ function renderDailySettings() {
   return `<details class="settings-expander"><summary>⚙️ 每日研究设置</summary><p class="hint-text">修改后点击侧边栏的“保存所有更改”生效。</p><div class="form-grid three">${field({ label: "生成 HTML 报告", key: "enable_html_report", type: "checkbox", fallback: true })}${field({ label: "生成 Markdown 报告", key: "enable_markdown_report", type: "checkbox", fallback: true })}${field({ label: "报告包含全部论文", key: "include_all_in_report", type: "checkbox", fallback: true })}</div><div class="form-grid two">${field({ label: "本次最多处理论文数（0 不限）", key: "daily_max_papers_per_run", type: "number", min: 0, step: 1, fallback: 200 })}${field({ label: "每日运行时间", key: "daily_run_time", type: "time", fallback: "12:00" })}</div></details>`;
 }
 
+function compactTaskNotice(status) {
+  const task = status?.task || {};
+  if (status?.is_active) return `<p class="info-box">⏳ ${escapeHtml(task.label || "任务")}${task.phase ? ` · ${escapeHtml(task.phase)}` : ""}</p>`;
+  if (["failed", "rejected", "interrupted", "skipped_busy"].includes(task.state)) return `<p class="issue-box">${escapeHtml(task.label || "上次任务未完成")}${task.detail ? `：${escapeHtml(task.detail)}` : ""}</p>`;
+  return "";
+}
+
 async function renderPastDaily(token) {
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const values = state.pageData.past || { from: yesterday, to: yesterday };
@@ -364,12 +371,13 @@ async function renderPastDaily(token) {
   const status = await fetchStatus("past");
   if (token !== state.renderToken) return;
   const queue = status.backfill || {};
-  root.innerHTML = `${pageHeader()}${section("过去日报", `<p class="hint-text">选择过去日期范围后开始运行。系统会按天把任务写入持久化队列，并与其他研究任务安全互斥。</p><div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="backfill-from" type="date" max="${yesterday}" value="${escapeAttribute(values.from)}" /></label><label class="form-field"><span>结束日期</span><input id="backfill-to" type="date" max="${yesterday}" value="${escapeAttribute(values.to)}" /></label></div><div class="action-row"><button id="backfill-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button><button class="secondary-button" data-refresh-status="past">刷新状态</button></div>${statusCard(status, { kind: "past" })}`, { icon: "🗓" })}${divider()}${section("过去日报队列", `${metrics([
+  const hasQueue = ["pending", "running", "completed", "failed"].some((key) => Number(queue[key] || 0) > 0);
+  root.innerHTML = `${pageHeader()}${section("过去日报", `<p class="hint-text">选择过去日期范围后开始运行。系统会按天把任务写入持久化队列，并与其他研究任务安全互斥。</p><div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="backfill-from" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.from)}" /></label><label class="form-field"><span>结束日期</span><input id="backfill-to" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.to)}" /></label></div><div class="action-row"><button id="backfill-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button><button class="secondary-button" data-refresh-status="past">刷新状态</button></div>${compactTaskNotice(status)}`, { icon: "🗓" })}${divider()}${section("过去日报队列", hasQueue ? metrics([
     { label: "等待中", value: formatNumber(queue.pending), help: queue.next_date ? `下一日期：${queue.next_date}` : "暂无待处理日期" },
     { label: "运行中", value: formatNumber(queue.running), help: queue.active_date ? `当前日期：${queue.active_date}` : "" },
     { label: "已完成", value: formatNumber(queue.completed), help: "已生成历史日期报告" },
     { label: "失败", value: formatNumber(queue.failed), help: queue.first_error || "失败任务可在日志中查看" },
-  ])}`, { icon: "📋" })}`;
+  ]) : '<p class="empty-state">当前没有过去日报任务。</p>', { icon: "📋" })}`;
   bindCommon(root);
   $("#backfill-from").addEventListener("change", (event) => { state.pageData.past = { ...values, from: event.target.value }; });
   $("#backfill-to").addEventListener("change", (event) => { state.pageData.past = { ...values, to: event.target.value }; });
@@ -378,7 +386,6 @@ async function renderPastDaily(token) {
     if (!from || !to || from > to) return toast("请填写有效的开始和结束日期。", "error");
     try { await api("/api/tasks/backfill_run", { method: "POST", body: { args: { date_from: from, date_to: to } } }); toast("过去日报已加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
   });
-  if (status.is_active) scheduleRefresh("past", () => renderPage(), 5000);
 }
 
 function renderTrendForm(templates = []) {
