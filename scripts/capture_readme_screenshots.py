@@ -92,7 +92,17 @@ def capture(page: Page, filename: str) -> None:
 def scroll_to_text(page: Page, label: str) -> None:
     target = page.get_by_text(re.compile(re.escape(label))).first
     target.scroll_into_view_if_needed(timeout=10_000)
-    target.evaluate("node => node.scrollIntoView({block: 'start', inline: 'nearest'})")
+    # Streamlit keeps its top chrome fixed.  A plain ``block: start`` places
+    # a section title beneath that chrome, leaving only its underline visible
+    # in the screenshot.  ``stMain`` is the actual scroll container, so move
+    # that container back a small amount after positioning the title.
+    target.evaluate(
+        """node => {
+            node.scrollIntoView({block: 'start', inline: 'nearest'});
+            const main = node.closest('section[data-testid="stMain"]');
+            if (main) main.scrollBy({top: -84, left: 0});
+        }"""
+    )
     page.wait_for_timeout(500)
 
 
@@ -111,6 +121,11 @@ def isolate_section(page: Page, label: str, keep_following: int) -> None:
                     child.style.display = 'none';
                 }
             });
+            // Hiding the preceding sections moves the retained title beneath
+            // Streamlit's fixed chrome. Preserve a little top breathing room
+            // so the title itself, rather than only its underline, remains
+            // visible in the cropped documentation image.
+            heading.style.marginTop = '84px';
         }""",
         keep_following,
     )
@@ -148,9 +163,9 @@ def main() -> int:
         page.reload(wait_until="domcontentloaded", timeout=30_000)
         wait_for_streamlit(page)
         show_page(page, "🗂 历史维护")
-        isolate_section(page, "旧版本历史导入", keep_following=2)
+        isolate_section(page, "旧版本历史导入", keep_following=5)
         scroll_to_text(page, "旧版本历史导入")
-        page.set_viewport_size({"width": VIEWPORT["width"], "height": 360})
+        page.set_viewport_size({"width": VIEWPORT["width"], "height": 500})
         capture(page, "webui_history_import_v4.png")
 
         browser.close()
