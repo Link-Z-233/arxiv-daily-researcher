@@ -57,6 +57,13 @@ class _FakeStreamlit:
     def code(self, *args, **kwargs):
         self.calls.append(("code", args, kwargs))
 
+    def dataframe(self, *args, **kwargs):
+        self.calls.append(("dataframe", args, kwargs))
+
+    def segmented_control(self, *args, **kwargs):
+        self.calls.append(("segmented_control", args, kwargs))
+        return kwargs.get("default")
+
     def container(self, *args, **kwargs):
         self.calls.append(("container", args, kwargs))
         return _ContextBox(self, "container")
@@ -157,7 +164,7 @@ class LLMHealthTests(unittest.TestCase):
                 )
         self.assertEqual([(event[0], event[2]) for event in events], [("smart", True), ("smart", False)])
 
-    def test_analytics_renders_passive_health_cards(self):
+    def test_analytics_renders_model_table_and_direct_redacted_failure(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "daily.db"
             store = DailyResearchStore(db_path)
@@ -170,10 +177,12 @@ class LLMHealthTests(unittest.TestCase):
             ), patch.object(analytics, "_daily_db_path_from_config", return_value=db_path):
                 analytics._render_llm_health_section({})
 
-        metric_labels = [args[0] for name, args, _kwargs in fake_st.calls if name == "metric"]
-        self.assertIn("llm_health_last_result", metric_labels)
-        self.assertIn("llm_health_consecutive_failures", metric_labels)
-        self.assertTrue(any(name == "code" for name, _args, _kwargs in fake_st.calls))
+        rendered = repr(fake_st.calls)
+        self.assertIn("fast-model", rendered)
+        self.assertIn("provider unavailable", rendered)
+        self.assertTrue(any(name == "dataframe" for name, _args, _kwargs in fake_st.calls))
+        self.assertFalse(any(name == "expander" for name, _args, _kwargs in fake_st.calls))
+        self.assertFalse(any(name == "code" for name, _args, _kwargs in fake_st.calls))
 
 
 if __name__ == "__main__":

@@ -77,6 +77,9 @@ class _FakeStreamlit:
     def warning(self, *args, **kwargs):
         self.calls.append(("warning", args, kwargs))
 
+    def divider(self, *args, **kwargs):
+        self.calls.append(("divider", args, kwargs))
+
     def button(self, *args, **kwargs):
         self.calls.append(("button", args, kwargs))
         return False
@@ -290,7 +293,7 @@ class WebUiRunObservabilityTests(unittest.TestCase):
         self.assertNotIn("cat:quant-ph", rendered)
         self.assertTrue(any(kind == "dataframe" for kind, _args, _kwargs in fake_st.calls))
 
-    def test_health_rendering_uses_the_safe_aggregate_diagnostic_contract(self):
+    def test_run_diagnostics_shows_a_safe_table_instead_of_summary_cards(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "daily.db"
             _seed_scan_receipts(db_path)
@@ -306,7 +309,8 @@ class WebUiRunObservabilityTests(unittest.TestCase):
         self.assertNotIn("supersecret", rendered)
         self.assertNotIn("https://", rendered)
         self.assertNotIn("cat:quant-ph", rendered)
-        self.assertTrue(any(kind == "metric" for kind, _args, _kwargs in fake_st.calls))
+        self.assertTrue(any(kind == "dataframe" for kind, _args, _kwargs in fake_st.calls))
+        self.assertFalse(any(kind == "metric" for kind, _args, _kwargs in fake_st.calls))
 
     def test_trigger_failure_status_does_not_echo_worker_exception_text(self):
         fake_st = _FakeStreamlit()

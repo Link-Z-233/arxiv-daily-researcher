@@ -14,11 +14,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from utils.daily_research_store import DailyResearchStore
-from utils.scoring_evaluation import (
-    ScoringEvaluationError,
-    build_operational_diagnostics,
-    build_recent_scan_receipt_summaries,
-)
 from utils.source_registry import source_display_names
 from webui.i18n import t
 from webui.tabs.run_manager import _daily_db_path_from_config
@@ -50,6 +45,16 @@ _RANGE_DAYS = [
     ("30", 30),
     ("90", 90),
     ("365", 365),
+    ("all", None),
+]
+
+# 健康面板按日历时间筛选，而不是按最近 N 次请求截断。两个面板使用
+# 独立的 session key，因此可以同时比较不同观察窗口。
+_HEALTH_RANGE_DAYS = [
+    ("3", 3),
+    ("7", 7),
+    ("14", 14),
+    ("30", 30),
     ("all", None),
 ]
 
@@ -491,6 +496,56 @@ def _format_health_time(value: object) -> str:
         return "—"
 
 
+def _selected_health_window(widget_key: str) -> int | None:
+    """Return one independently persisted health-observation window."""
+    labels = {key: t(f"health_window_{key}") for key, _ in _HEALTH_RANGE_DAYS}
+    choice = st.segmented_control(
+        t("health_window_label"),
+        list(labels),
+        selection_mode="single",
+        default="7",
+        format_func=lambda key: labels[key],
+        key=widget_key,
+    )
+    if choice not in labels:
+        choice = "7"
+    return dict(_HEALTH_RANGE_DAYS)[choice]
+
+
+def _health_status_label(status: object) -> str:
+    return (
+        t("llm_health_status_ok")
+        if status == "succeeded"
+        else t("llm_health_status_failed")
+    )
+
+
+def _health_failure_detail(error: object, occurred_at: object) -> str:
+    """Show the latest already-redacted failure directly in its table row."""
+    if not isinstance(error, str) or not error.strip():
+        return "—"
+    timestamp = _format_health_time(occurred_at)
+    return f"{timestamp} · {error.strip()}" if timestamp != "—" else error.strip()
+
+
+def _task_kind_label(value: object) -> str:
+    """Translate known workflow identifiers without hiding future task kinds."""
+    task_kind = str(value or "").strip().lower()
+    labels = {
+        "daily": "health_task_daily",
+        "daily_research": "health_task_daily",
+        "backfill": "health_task_backfill",
+        "backfill_run": "health_task_backfill",
+        "history_import": "health_task_history_import",
+        "legacy_history_import": "health_task_history_import",
+        "history_data_repair": "health_task_history_repair",
+        "history_omission_scan": "health_task_history_omission",
+        "supplement": "health_task_supplement",
+        "trend_research": "health_task_trend",
+    }
+    return t(labels[task_kind]) if task_kind in labels else (task_kind or "—")
+
+
 def _render_llm_health_section(config_values: dict) -> None:
     """Render passive LLM health from persisted real-call outcomes only."""
     st.markdown(
@@ -498,13 +553,14 @@ def _render_llm_health_section(config_values: dict) -> None:
         unsafe_allow_html=True,
     )
     st.caption(t("llm_health_hint"))
+    days = _selected_health_window("llm_health_window_days")
 
     db_path = _daily_db_path_from_config(config_values or {})
     if not db_path.exists():
         st.info(t("llm_health_no_data"))
         return
     try:
-        summaries = DailyResearchStore(db_path).get_llm_health(window=20)
+        summaries = DailyResearchStore(db_path).get_llm_health_by_model(days)
     except Exception as exc:
         st.warning(t("llm_health_load_failed").format(exc))
         return
@@ -516,36 +572,38 @@ def _render_llm_health_section(config_values: dict) -> None:
         "cheap": t("llm_health_cheap"),
         "smart": t("llm_health_smart"),
     }
-    for role in ("cheap", "smart"):
-        summary = summaries.get(role)
-        if not summary:
-            continue
-        succeeded = summary.get("last_status") == "succeeded"
-        icon = "✅" if succeeded else "❌"
-        status = t("llm_health_status_ok") if succeeded else t("llm_health_status_failed")
-        model = str(summary.get("last_model") or "—")
-        with st.container(border=True):
-            st.markdown(f"**{icon} {role_labels[role]}**  \n`{model}`")
-            result_col, failure_col, rate_col = st.columns(3)
-            result_col.metric(t("llm_health_last_result"), status)
-            failure_col.metric(
-                t("llm_health_consecutive_failures"),
-                str(summary.get("consecutive_failures", 0)),
-            )
-            rate = summary.get("success_rate")
-            rate_col.metric(
-                t("llm_health_recent_success"),
-                f"{float(rate) * 100:.0f}%" if isinstance(rate, (int, float)) else "—",
-            )
-            st.caption(
-                t("llm_health_times").format(
-                    event=_format_health_time(summary.get("last_event_at")),
-                    success=_format_health_time(summary.get("last_success_at")),
-                )
-            )
-            if not succeeded and summary.get("last_error"):
-                with st.expander(t("llm_health_last_error")):
-                    st.code(str(summary["last_error"]), language=None)
+    rows = []
+    for summary in summaries:
+        roles = [
+            role_labels.get(str(role), str(role))
+            for role in summary.get("roles", [])
+            if str(role).strip()
+        ]
+        total = int(summary.get("events_in_window") or 0)
+        succeeded = int(summary.get("succeeded_in_window") or 0)
+        rate = summary.get("success_rate")
+        rows.append(
+            {
+                t("llm_health_col_model"): str(summary.get("model") or "—"),
+                t("llm_health_col_roles"): " / ".join(roles) or "—",
+                t("llm_health_col_latest"): _format_health_time(
+                    summary.get("last_event_at")
+                ),
+                t("llm_health_col_status"): _health_status_label(
+                    summary.get("last_status")
+                ),
+                t("llm_health_col_calls"): f"{succeeded}/{total}",
+                t("llm_health_col_success_rate"): (
+                    f"{float(rate) * 100:.0f}%"
+                    if isinstance(rate, (int, float))
+                    else "—"
+                ),
+                t("llm_health_col_last_error"): _health_failure_detail(
+                    summary.get("last_error"), summary.get("last_error_at")
+                ),
+            }
+        )
+    _render_bounded_dataframe(rows)
 
 
 def _render_source_health_section(_env_values: dict, config_values: dict) -> None:
@@ -554,6 +612,7 @@ def _render_source_health_section(_env_values: dict, config_values: dict) -> Non
         unsafe_allow_html=True,
     )
     st.caption(t("sh_hint"))
+    days = _selected_health_window("source_health_window_days")
 
     db_path = _daily_db_path_from_config(config_values or {})
     if not db_path.exists():
@@ -566,7 +625,7 @@ def _render_source_health_section(_env_values: dict, config_values: dict) -> Non
         return
 
     try:
-        summaries = store.get_source_health(window=20)
+        summaries = store.get_source_health_for_days(days)
     except Exception as exc:
         st.error(t("sh_load_failed").format(exc))
         return
@@ -575,83 +634,58 @@ def _render_source_health_section(_env_values: dict, config_values: dict) -> Non
         st.info(t("sh_no_receipts"))
         return
 
-    display_names = source_display_names()
-    ordered = sorted(
-        summaries.items(),
-        key=lambda pair: (pair[0] != "arxiv", pair[0]),
-    )
-
-    for source, summary in ordered:
-        name = display_names.get(source, source)
-        ok = summary["last_status"] == "succeeded"
-        icon = "✅" if ok else "❌"
-        rate = summary["success_rate"]
-
-        with st.container(border=True):
-            col_name, col_rate, col_new, col_last = st.columns([2, 1, 1, 2])
-            col_name.markdown(f"**{icon} {name}** `{source}`")
-            col_rate.metric(
-                t("sh_success_rate"),
-                f"{rate * 100:.0f}%",
-                help=t("sh_success_rate_help"),
-            )
-            new_candidates = summary.get("last_new_candidates")
-            col_new.metric(
-                t("sh_new_candidates"),
-                f"{new_candidates:,}" if new_candidates is not None else "—",
-                help=t("sh_new_candidates_help"),
-            )
-            last_scan = (summary.get("last_scan_at") or "")[:19]
-            col_last.caption(
-                t("sh_last_scan").format(time=last_scan or "—")
-            )
-
-            if summary.get("last_error"):
-                with st.expander(t("sh_last_error")):
-                    st.code(summary["last_error"], language=None)
-
-    st.caption(
-        t("sh_window_note").format(
-            scans=sum(s["scans_in_window"] for s in summaries.values())
-        )
-    )
-
-
-# ─── 运行诊断（精简）─────────────────────────────────────────────────────────
-
-
-def _format_scan_time(value: object) -> str:
-    """Render the already-sanitized timestamp returned by read-only diagnostics."""
-    import datetime as _dt
-
-    if not isinstance(value, str):
-        return "—"
     try:
-        return _dt.datetime.fromisoformat(value.replace("Z", "+00:00")).strftime(
-            "%Y-%m-%d %H:%M:%S"
+        display_names = source_display_names(
+            (config_values or {}).get("extra_source_definitions")
         )
     except ValueError:
-        return "—"
+        # 已保存的旧配置即使已不符合新校验，也不应让诊断页不可用。
+        display_names = source_display_names()
+    ordered = sorted(
+        summaries.items(),
+        key=lambda pair: (str(pair[1].get("last_scan_at") or ""), pair[0]),
+        reverse=True,
+    )
 
-
-def _diagnostic_count(value: object) -> int:
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-        return value
-    return 0
-
-
-def _format_percentage(value: object) -> str:
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1:
-        return f"{value:.1%}"
-    return "—"
+    rows = []
+    for source, summary in ordered:
+        name = display_names.get(source, source)
+        total = int(summary.get("scans_in_window") or 0)
+        succeeded = int(summary.get("succeeded_in_window") or 0)
+        rate = summary.get("success_rate")
+        new_candidates = summary.get("last_new_candidates")
+        rows.append(
+            {
+                t("sh_col_source"): name,
+                t("sh_col_latest"): _format_health_time(summary.get("last_scan_at")),
+                t("sh_col_status"): _health_status_label(summary.get("last_status")),
+                t("sh_col_task"): _task_kind_label(summary.get("last_task_kind")),
+                t("sh_col_requests"): f"{succeeded}/{total}",
+                t("sh_col_success_rate"): (
+                    f"{float(rate) * 100:.0f}%"
+                    if isinstance(rate, (int, float))
+                    else "—"
+                ),
+                t("sh_col_candidates"): (
+                    f"{int(new_candidates):,}"
+                    if isinstance(new_candidates, int)
+                    else "—"
+                ),
+                t("sh_col_last_error"): _health_failure_detail(
+                    summary.get("last_error"), summary.get("last_error_at")
+                ),
+            }
+        )
+    _render_bounded_dataframe(rows)
 
 
 def _render_diagnostics_section(config_values: dict) -> None:
-    """精简版运行诊断：核心指标一行 + 最近一次扫描收据一张表。"""
+    """Show only the five latest normal daily or past-date report runs."""
     st.markdown(
         f'<p class="section-title">🩺 {t("an_diag_title")}</p>',
         unsafe_allow_html=True,
     )
+    st.caption(t("an_diag_runs_hint"))
 
     database_path = _daily_db_path_from_config(config_values)
     if not database_path.is_file():
@@ -659,82 +693,37 @@ def _render_diagnostics_section(config_values: dict) -> None:
         return
 
     try:
-        diagnostics = build_operational_diagnostics(
-            database_path, recent_runs=10, baseline_runs=20
-        )
-    except ScoringEvaluationError:
+        runs = DailyResearchStore(database_path).get_recent_operational_runs(limit=5)
+    except Exception:
         st.warning(t("rm_health_load_error"))
         return
-
-    recent = diagnostics.get("windows", {}).get("recent", {})
-    runs = recent.get("runs", {}) if isinstance(recent, dict) else {}
-    papers = recent.get("papers", {}) if isinstance(recent, dict) else {}
-    scoring = papers.get("scoring", {}) if isinstance(papers, dict) else {}
-    run_states = runs.get("status_counts", {}) if isinstance(runs, dict) else {}
-    notifications = diagnostics.get("outbox", {}).get("notifications", {})
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric(
-        t("an_diag_recent_runs"),
-        f"{_diagnostic_count(run_states.get('completed'))}/"
-        f"{_diagnostic_count(runs.get('available_run_count'))}",
-        help=t("an_diag_recent_runs_help"),
-    )
-    col2.metric(
-        t("rm_health_qualification_rate"),
-        _format_percentage(
-            scoring.get("qualification_rate") if isinstance(scoring, dict) else None
-        ),
-    )
-    col3.metric(
-        t("rm_health_notification_backlog"),
-        _diagnostic_count(
-            notifications.get("open_rows") if isinstance(notifications, dict) else None
-        ),
-    )
-    failed_runs = _diagnostic_count(run_states.get("failed"))
-    if failed_runs:
-        st.warning(t("an_diag_failed_runs").format(n=failed_runs))
-
-    # 最近一次运行的来源扫描收据：每来源一行，状态/候选数/扫描时间。
-    try:
-        snapshot = build_recent_scan_receipt_summaries(database_path, limit=5)
-    except ScoringEvaluationError:
-        st.caption(t("rm_scan_receipts_legacy"))
-        return
-    if not snapshot.get("receipt_table_available"):
-        st.caption(t("rm_scan_receipts_legacy"))
-        return
-    completed_runs = [
-        run for run in snapshot.get("runs", []) if run.get("receipts")
-    ]
-    if not completed_runs:
-        st.caption(t("rm_scan_receipts_empty"))
+    if not runs:
+        st.info(t("an_diag_runs_empty"))
         return
 
-    latest = completed_runs[0]
-    receipts = [r for r in latest.get("receipts", []) if isinstance(r, dict)]
-    succeeded = sum(1 for r in receipts if r.get("status") == "succeeded")
-    st.caption(
-        t("an_diag_latest_scan").format(
-            time=_format_scan_time(latest.get("scan_started_at") or latest.get("started_at")),
-            ok=succeeded,
-            total=len(receipts),
-        )
-    )
     _render_bounded_dataframe(
         [
             {
-                t("rm_scan_receipt_source"): r.get("source", "unknown"),
-                t("rm_scan_receipt_status"): r.get("status", "unknown"),
-                t("rm_scan_receipt_candidates"): _diagnostic_count(
-                    r.get("candidate_count")
-                ),
-                t("rm_scan_receipt_scanned_at"): _format_scan_time(r.get("scanned_at")),
+                t("an_diag_col_kind"): _task_kind_label(run.get("run_kind")),
+                t("an_diag_col_status"): _task_run_status_label(run.get("status")),
+                t("an_diag_col_started"): _format_health_time(run.get("started_at")),
+                t("an_diag_col_finished"): _format_health_time(run.get("completed_at")),
+                t("an_diag_col_papers"): int(run.get("total_papers") or 0),
+                t("an_diag_col_issue"): str(run.get("error_summary") or "—"),
             }
-            for r in receipts
+            for run in runs
         ]
     )
+
+
+def _task_run_status_label(value: object) -> str:
+    status = str(value or "").strip().lower()
+    labels = {
+        "completed": "an_diag_status_completed",
+        "failed": "an_diag_status_failed",
+        "running": "an_diag_status_running",
+    }
+    return t(labels[status]) if status in labels else t("an_diag_status_unknown")
 
 
 # ─── 主渲染 ───────────────────────────────────────────────────────────────────

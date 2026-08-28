@@ -1,6 +1,7 @@
 """数据分析页用量统计改版的回归测试：近一年热力图 + 静态自适应折线图。"""
 
 import sys
+import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -9,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from webui.tabs import analytics  # noqa: E402
+from utils.daily_research_store import DailyResearchStore  # noqa: E402
 
 
 def _row(prompt: int, completion: int, runs: int = 1) -> dict:
@@ -63,6 +65,82 @@ class AnalyticsPlacementTests(unittest.TestCase):
         llm_health.assert_called_once_with({"sample": "config"})
         source_health.assert_called_once_with({"sample": "env"}, {"sample": "config"})
         self.assertEqual(divider.call_count, 2)
+
+
+class _HealthPanelStreamlit:
+    """Minimal Streamlit spy for health-table rendering regression tests."""
+
+    def __init__(self):
+        self.calls = []
+
+    def markdown(self, *args, **kwargs):
+        self.calls.append(("markdown", args, kwargs))
+
+    def caption(self, *args, **kwargs):
+        self.calls.append(("caption", args, kwargs))
+
+    def info(self, *args, **kwargs):
+        self.calls.append(("info", args, kwargs))
+
+    def warning(self, *args, **kwargs):
+        self.calls.append(("warning", args, kwargs))
+
+    def error(self, *args, **kwargs):
+        self.calls.append(("error", args, kwargs))
+
+    def segmented_control(self, *args, **kwargs):
+        self.calls.append(("segmented_control", args, kwargs))
+        return kwargs.get("default")
+
+    def dataframe(self, *args, **kwargs):
+        self.calls.append(("dataframe", args, kwargs))
+
+
+class HealthPanelTests(unittest.TestCase):
+    def test_health_panels_have_independent_seven_day_table_filters(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "daily.db"
+            store = DailyResearchStore(db_path)
+            store.record_llm_health_event(
+                "cheap", "fast-model", False, "provider unavailable"
+            )
+            store.record_source_health_event(
+                "semantic_scholar",
+                False,
+                task_kind="history_omission_scan",
+                error_summary="HTTP 429 https://api.example.test/?token=must-not-appear",
+                origin_key="test-semantic-failure",
+            )
+            fake_st = _HealthPanelStreamlit()
+            with (
+                patch.object(analytics, "st", fake_st),
+                patch.object(analytics, "t", side_effect=lambda key: key),
+                patch.object(
+                    analytics, "_daily_db_path_from_config", return_value=db_path
+                ),
+            ):
+                analytics._render_llm_health_section({})
+                analytics._render_source_health_section({}, {})
+
+        segmented_keys = [
+            kwargs.get("key")
+            for name, _args, kwargs in fake_st.calls
+            if name == "segmented_control"
+        ]
+        self.assertEqual(
+            segmented_keys,
+            ["llm_health_window_days", "source_health_window_days"],
+        )
+        tables = [args[0] for name, args, _kwargs in fake_st.calls if name == "dataframe"]
+        self.assertEqual(len(tables), 2)
+        self.assertIn("fast-model", repr(tables[0]))
+        self.assertIn("provider unavailable", repr(tables[0]))
+        rendered_sources = repr(tables[1])
+        self.assertIn("Semantic Scholar", rendered_sources)
+        self.assertIn("health_task_history_omission", rendered_sources)
+        self.assertIn("429", rendered_sources)
+        self.assertNotIn("must-not-appear", rendered_sources)
+        self.assertNotIn("https://", rendered_sources)
 
 
 class HeatmapTests(unittest.TestCase):
