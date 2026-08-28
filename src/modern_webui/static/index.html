@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b1020" />
+    <title>ArXiv Daily Researcher</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">A</div>
+          <div>
+            <strong>ArXiv Researcher</strong>
+            <span>Modern WebUI · Preview</span>
+          </div>
+        </div>
+        <nav aria-label="主导航">
+          <p class="nav-group">运行</p>
+          <a class="nav-item is-active" href="#daily" aria-current="page">
+            <span>✦</span> 每日研究
+          </a>
+          <p class="nav-group nav-group-muted">即将迁移</p>
+          <span class="nav-item is-disabled">◌ 过去日报</span>
+          <span class="nav-item is-disabled">◌ 趋势任务</span>
+          <span class="nav-item is-disabled">◌ 队列与历史维护</span>
+        </nav>
+        <div class="sidebar-footer">
+          <span class="preview-pill">首个页面预览</span>
+          <button id="logout-button" class="text-button">退出登录</button>
+        </div>
+      </aside>
+
+      <main class="content" id="daily">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">运行 / 每日研究</p>
+            <h1>每日研究</h1>
+            <p class="subtitle">扫描、筛选、分析与报告生成，始终使用现有的任务队列和 SQLite 数据库。</p>
+          </div>
+          <button id="refresh-button" class="icon-button" title="刷新状态" aria-label="刷新状态">↻</button>
+        </header>
+
+        <section class="hero-card" aria-labelledby="task-status-heading">
+          <div class="status-row">
+            <div class="status-orb" id="status-orb"></div>
+            <div>
+              <p class="eyebrow" id="task-status-heading">当前任务</p>
+              <h2 id="task-label">正在读取状态…</h2>
+              <p id="task-phase" class="muted">请稍候</p>
+            </div>
+            <div class="task-timestamp" id="task-started"></div>
+          </div>
+          <div id="progress-wrap" class="progress-wrap" hidden>
+            <div class="progress-track"><div id="progress-value" class="progress-value"></div></div>
+            <p id="progress-caption" class="progress-caption"></p>
+          </div>
+          <p id="task-detail" class="task-detail" hidden></p>
+          <div class="action-row">
+            <button id="start-button" class="primary-button">开始每日研究 <span>→</span></button>
+            <button id="stop-button" class="secondary-button" hidden>停止当前任务</button>
+          </div>
+          <p id="action-message" class="action-message" role="status"></p>
+        </section>
+
+        <section class="metric-grid" aria-label="运行概览">
+          <article class="metric-card">
+            <p>待处理论文</p>
+            <strong id="pending-count">—</strong>
+            <span>会在后续每日研究中处理</span>
+          </article>
+          <article class="metric-card">
+            <p>待重试论文</p>
+            <strong id="retry-count">—</strong>
+            <span>保留阶段状态与问题记录</span>
+          </article>
+          <article class="metric-card">
+            <p>最近一次运行</p>
+            <strong id="last-run-count">—</strong>
+            <span id="last-run-meta">尚无记录</span>
+          </article>
+        </section>
+
+        <section class="refresh-card">
+          <div>
+            <h2>状态自动刷新</h2>
+            <p>任务运行或等待工作进程接手时，每 5 秒刷新一次；空闲后自动停止。</p>
+          </div>
+          <label class="switch" aria-label="状态自动刷新">
+            <input id="auto-refresh" type="checkbox" checked />
+            <span></span>
+          </label>
+        </section>
+      </main>
+    </div>
+
+    <div id="auth" class="auth-shell" hidden>
+      <div class="auth-card">
+        <div class="brand-mark large">A</div>
+        <p class="eyebrow">ArXiv Daily Researcher</p>
+        <h1>登录管理面板</h1>
+        <p id="auth-hint">使用与 Streamlit 面板相同的管理员账户。</p>
+        <form id="login-form">
+          <label>用户名<input id="username" autocomplete="username" required /></label>
+          <label>密码<input id="password" type="password" autocomplete="current-password" required /></label>
+          <button class="primary-button" type="submit">登录 <span>→</span></button>
+          <p id="login-error" class="error-message" role="alert"></p>
+        </form>
+      </div>
+    </div>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

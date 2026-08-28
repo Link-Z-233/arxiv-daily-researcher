@@ -137,3 +137,27 @@ HEALTHCHECK --interval=30s --timeout=15s --retries=3 --start-period=20s \
 
 ENTRYPOINT ["/webui-entrypoint.sh"]
 CMD ["streamlit", "run", "src/webui/config_panel.py", "--server.port=8501"]
+
+# ==================== Modern WebUI preview (parallel to Streamlit) ==========
+# This target builds from the same dependency-complete webui stage. Starlette
+# and Uvicorn are already installed transitively by the WebUI stack, so the
+# optional preview adds no separate Python package-resolution point.
+FROM webui AS modern-webui
+
+LABEL description="ArXiv Daily Researcher - Parallel modern daily-research WebUI preview"
+
+COPY src/modern_webui/ ./src/modern_webui/
+
+RUN mkdir -p /app/data /app/logs /app/.modern-webui && \
+    chown -R adr:adr /app/data /app/logs /app/.modern-webui
+
+COPY docker/webui-entrypoint.sh /webui-entrypoint.sh
+RUN chmod 0755 /webui-entrypoint.sh
+
+EXPOSE 8504
+
+HEALTHCHECK --interval=30s --timeout=15s --retries=3 --start-period=20s \
+    CMD python /app/src/utils/container_health.py webui --url http://127.0.0.1:8504/api/health || exit 1
+
+ENTRYPOINT ["/webui-entrypoint.sh"]
+CMD ["uvicorn", "src.modern_webui.app:app", "--host", "127.0.0.1", "--port", "8504"]
