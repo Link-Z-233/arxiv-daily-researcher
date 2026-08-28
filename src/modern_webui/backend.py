@@ -1369,17 +1369,23 @@ def connection_test(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"ok": bool(ok), "message": sanitize_task_error_summary(message, max_chars=600)}
 
 
-def _log_group(name: str) -> str:
+def _log_category(name: str) -> str:
+    """Classify logs with the same three buckets as the Streamlit viewer."""
     lowered = name.lower()
-    if lowered.startswith(("manual_", "legacy_import_", "history_data_repair_", "history_omission_scan_", "supplement_", "backfill_")):
-        return "面板任务"
-    if lowered.startswith(("daily_", "cron_", "startup_")):
-        return "每日研究"
-    if lowered.startswith("trend_"):
-        return "趋势任务"
     if lowered.startswith(("system", "arxiv_researcher")):
-        return "系统"
-    return "其他"
+        return "system"
+    if lowered.startswith(("manual_", "legacy_import_", "history_data_repair_", "history_omission_scan_", "supplement_", "backfill_", "daily_", "cron_", "startup_")):
+        return "run"
+    return "other"
+
+
+def _log_group(name: str) -> str:
+    category = _log_category(name)
+    if category == "system":
+        return "系统日志"
+    if category == "run":
+        return "运行日志"
+    return "其他日志"
 
 
 def list_logs() -> list[dict[str, Any]]:
@@ -1401,6 +1407,7 @@ def list_logs() -> list[dict[str, Any]]:
                 "id": base64.urlsafe_b64encode(relative.encode("utf-8")).decode("ascii").rstrip("="),
                 "name": relative,
                 "group": _log_group(path.name),
+                "category": _log_category(path.name),
                 "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
                 "size_bytes": stat.st_size,
             }
@@ -1409,7 +1416,7 @@ def list_logs() -> list[dict[str, Any]]:
     return rows[:500]
 
 
-def read_log(token: str, *, max_lines: int = 2_000) -> dict[str, Any]:
+def read_log(token: str, *, max_lines: int = 300) -> dict[str, Any]:
     if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,2048}", token):
         raise ModernWebUIError("日志标识无效。")
     try:

@@ -73,6 +73,12 @@ class ModernBackendTests(unittest.TestCase):
         self.assertEqual(status["task"]["label"], "趋势任务")
         self.assertEqual(status["relevant_locks"][0]["pid"], 42)
 
+    def test_log_categories_match_the_streamlit_three_picker_layout(self) -> None:
+        self.assertEqual(backend._log_category("system.log"), "system")
+        self.assertEqual(backend._log_category("daily_20260829.log"), "run")
+        self.assertEqual(backend._log_category("history_data_repair_20260829.log"), "run")
+        self.assertEqual(backend._log_category("trend_20260829.log"), "other")
+
     def test_report_tokens_are_bound_to_the_report_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

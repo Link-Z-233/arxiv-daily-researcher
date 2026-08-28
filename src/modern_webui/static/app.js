@@ -1167,17 +1167,31 @@ async function renderLogs(token) {
   root.innerHTML = `${pageHeader()}<div class="loading">正在读取日志列表…</div>`;
   const data = await api("/api/logs");
   if (token !== state.renderToken) return;
+  const items = data.items || [];
+  const group = (category) => items.filter((item) => (item.category || "other") === category);
+  const systemLogs = group("system");
+  const runLogs = group("run");
+  const otherLogs = group("other");
   let selected = state.pageData.selectedLog;
-  if (!selected || !(data.items || []).some((item) => item.id === selected)) selected = data.items?.[0]?.id || "";
+  if (!selected || !items.some((item) => item.id === selected)) selected = runLogs[0]?.id || otherLogs[0]?.id || "";
   state.pageData.selectedLog = selected;
-  root.innerHTML = `${pageHeader()}${section("日志列表", pagedTable("logs", [{ label: "日志", html: (row) => `<button class="report-link ${row.id === selected ? "is-selected" : ""}" data-open-log="${escapeAttribute(row.id)}">${escapeHtml(row.name)}</button>` }, { label: "分组", key: "group" }, { label: "修改时间", value: (row) => formatTime(row.modified_at) }, { label: "大小", value: (row) => `${Math.round(Number(row.size_bytes) / 1024)} KB` }], data.items || [], { empty: "尚无运行日志。" }), { icon: "🧾" })}${selected ? `<div id="log-content" class="loading">正在读取日志内容…</div>` : ""}`;
-  bindCommon(root);
-  $$('[data-open-log]', root).forEach((button) => button.addEventListener("click", () => { state.pageData.selectedLog = button.dataset.openLog; renderPage(); }));
+  const logLabel = (item) => `${item.name}  [${formatTime(item.modified_at).slice(5, 16)}  ${Math.round(Number(item.size_bytes) / 1024)} KB]`;
+  const selector = (id, title, rows) => `<label class="log-select-field"><span>${escapeHtml(title)}</span><select id="${escapeAttribute(id)}" ${rows.length ? "" : "disabled"}><option value="">—</option>${rows.map((item) => `<option value="${escapeAttribute(item.id)}" ${selected === item.id ? "selected" : ""}>${escapeHtml(logLabel(item))}</option>`).join("")}</select></label>`;
+  root.innerHTML = `${pageHeader()}<div class="log-selector-grid">${selector("log-system-select", "📌 系统日志", systemLogs)}${selector("log-run-select", "📀 运行日志", runLogs)}${selector("log-other-select", "📄 其他日志", otherLogs)}</div>${selected && !state.pageData.logClosed ? '<div id="log-content" class="loading">正在读取日志内容…</div>' : '<p class="empty-state">选择一个日志文件后可在这里查看内容。</p>'}`;
+  ["#log-system-select", "#log-run-select", "#log-other-select"].forEach((selectorId) => $(selectorId, root)?.addEventListener("change", (event) => {
+    if (!event.target.value) return;
+    state.pageData.selectedLog = event.target.value;
+    state.pageData.logClosed = false;
+    renderPage();
+  }));
   if (selected) {
     try {
       const log = await api(`/api/logs/${encodeURIComponent(selected)}`); if (token !== state.renderToken) return;
-      $("#log-content").outerHTML = section("日志内容", `<p class="hint-text">${escapeHtml(log.name)}${log.truncated ? " · 仅显示最后 2,000 行" : ""}</p><pre class="log-viewer">${escapeHtml(log.content)}</pre>`, { icon: "📋" });
-    } catch (error) { $("#log-content").innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
+      const selectedItem = items.find((item) => item.id === selected);
+      $("#log-content", root)?.replaceWith(`<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · 修改时间：${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? " · 仅显示最后 300 行" : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`);
+      $("#log-refresh-latest", root)?.addEventListener("click", () => { state.pageData.selectedLog = runLogs[0]?.id || otherLogs[0]?.id || ""; state.pageData.logClosed = false; renderPage(); });
+      $("#log-close", root)?.addEventListener("click", () => { state.pageData.logClosed = true; renderPage(); });
+    } catch (error) { $("#log-content", root)?.replaceWith(`<p class="error-message">${escapeHtml(error.message)}</p>`); }
   }
 }
 
