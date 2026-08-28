@@ -227,6 +227,26 @@ def _save_admin_account(env_values: Mapping[str, object], username: str, passwor
     st.cache_data.clear()
 
 
+def _disabled_auth_values(env_values: Mapping[str, object]) -> dict[str, object]:
+    """Return a safe env map for the explicit trusted-LAN opt-out."""
+    updated = dict(env_values)
+    updated.update(
+        {
+            "WEBUI_AUTH_ENABLED": "false",
+            "WEBUI_ADMIN_USERNAME": "",
+            "WEBUI_ADMIN_PASSWORD_HASH": "",
+        }
+    )
+    return updated
+
+
+def _disable_authentication(env_values: Mapping[str, object]) -> None:
+    """Persist the explicit trusted-LAN opt-out from the first-run screen."""
+    updated = _disabled_auth_values(env_values)
+    write_env(updated)
+    st.cache_data.clear()
+
+
 def _render_first_setup(env_values: Mapping[str, object]) -> None:
     st.title(t("auth_setup_title"))
     st.info(t("auth_setup_notice"))
@@ -241,6 +261,15 @@ def _render_first_setup(env_values: Mapping[str, object]) -> None:
             key="webui_auth_setup_password_confirm",
         )
         submitted = st.form_submit_button(t("auth_create_account"), type="primary")
+        st.caption(t("auth_skip_intranet_notice"))
+        skip_authentication = st.form_submit_button(
+            t("auth_skip_intranet"), type="secondary"
+        )
+    if skip_authentication:
+        _disable_authentication(env_values)
+        _clear_session(st.session_state)
+        st.success(t("auth_skip_intranet_success"))
+        st.rerun()
     if not submitted:
         return
 

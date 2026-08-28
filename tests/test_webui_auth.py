@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from webui.auth import (  # noqa: E402
+    _disabled_auth_values,
     hash_password,
     read_auth_config,
     validate_password,
@@ -37,6 +38,19 @@ class WebUIAuthTests(unittest.TestCase):
 
         invalid_timeout = read_auth_config({"WEBUI_SESSION_TIMEOUT_MINUTES": "0"})
         self.assertEqual(invalid_timeout.session_timeout_minutes, 480)
+
+    def test_trusted_lan_skip_disables_auth_and_clears_admin_record(self):
+        values = _disabled_auth_values(
+            {
+                "WEBUI_AUTH_ENABLED": "true",
+                "WEBUI_ADMIN_USERNAME": "admin",
+                "WEBUI_ADMIN_PASSWORD_HASH": "pbkdf2_sha256:example",
+            }
+        )
+
+        self.assertFalse(read_auth_config(values).enabled)
+        self.assertEqual(values["WEBUI_ADMIN_USERNAME"], "")
+        self.assertEqual(values["WEBUI_ADMIN_PASSWORD_HASH"], "")
 
     def test_username_and_password_validation(self):
         self.assertIsNone(validate_username("admin.user-1"))

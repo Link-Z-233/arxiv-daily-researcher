@@ -71,6 +71,18 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Use at least 12 characters for the password.",
     },
     "auth_create_account": {"zh": "创建管理员账户", "en": "Create administrator account"},
+    "auth_skip_intranet": {
+        "zh": "仅内网使用，跳过登录",
+        "en": "Trusted LAN only: skip sign-in",
+    },
+    "auth_skip_intranet_notice": {
+        "zh": "仅限完全受信任的内网：跳过后可直接修改密钥、任务与备份，请勿通过公网或不受控的反向代理访问。",
+        "en": "Use only on a fully trusted LAN: skipping sign-in grants direct access to credentials, tasks, and backups. Do not expose the panel through the public internet or an uncontrolled reverse proxy.",
+    },
+    "auth_skip_intranet_success": {
+        "zh": "已关闭面板登录保护；页面将直接进入配置面板。",
+        "en": "Panel sign-in is disabled. Opening the panel now goes directly to configuration.",
+    },
     "auth_password_mismatch": {"zh": "两次输入的密码不一致。", "en": "The passwords do not match."},
     "auth_setup_success": {"zh": "管理员账户已创建，请登录。", "en": "Administrator account created. Please sign in."},
     "auth_login_title": {"zh": "登录配置面板", "en": "Sign in to the configuration panel"},
