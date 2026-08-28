@@ -52,7 +52,7 @@ from utils.source_registry import (
     builtin_extra_source_definitions,
     source_display_names,
 )
-from utils.webdav_sync import create_sync_client
+from utils.webdav_sync import WebDAVSync
 from utils.webui_trigger import (
     SUPPORTED_MODES,
     enqueue_trigger,
@@ -1236,15 +1236,71 @@ def local_backups() -> list[dict[str, Any]]:
         raise ModernWebUIError(f"读取本地备份失败：{exc}") from exc
 
 
+def _configured_webdav_client(
+    settings: Mapping[str, Any] | None = None,
+    env_values: Mapping[str, Any] | None = None,
+    *,
+    allow_unconfigured: bool = False,
+) -> Any | None:
+    """Build a WebDAV client from the current persisted panel values.
+
+    ``config.settings`` is intentionally a long-lived worker snapshot.  The
+    modern panel must instead use the just-saved JSON/.env values for a manual
+    test, sync, or backup; otherwise an operator can save new credentials and
+    still send the operation to the old endpoint until the container restarts.
+    ``allow_unconfigured`` is used by local backup: an incomplete optional
+    WebDAV setup must never prevent a healthy local archive from being made.
+    """
+    flat = dict(settings or flat_config())
+    if not _coerce_bool(flat.get("webdav_enabled"), False):
+        if allow_unconfigured:
+            return None
+        raise ModernWebUIError("请先启用 WebDAV 同步。")
+
+    env = env_values if env_values is not None else read_env()
+    url = str(env.get("WEBDAV_URL") or "").strip()
+    username = str(env.get("WEBDAV_USERNAME") or "").strip()
+    password = str(env.get("WEBDAV_PASSWORD") or "")
+    remote_path = str(
+        flat.get("webdav_remote_path") or "/arxiv-daily-researcher/"
+    ).strip()
+    if not url or not username:
+        if allow_unconfigured:
+            return None
+        raise ModernWebUIError("WebDAV URL 或用户名尚未配置完整。")
+
+    proxy_url = ""
+    if _coerce_bool(flat.get("proxy_enabled"), False) and _coerce_bool(
+        flat.get("proxy_webdav"), True
+    ):
+        proxy_url = str(flat.get("proxy_url") or "").strip()
+    try:
+        return WebDAVSync(
+            url=url,
+            username=username,
+            password=password,
+            remote_path=remote_path,
+            proxy_url=proxy_url,
+        )
+    except (ImportError, OSError, TypeError, ValueError) as exc:
+        raise ModernWebUIError(f"创建 WebDAV 客户端失败：{exc}") from exc
+
+
 def create_local_backup() -> dict[str, Any]:
+    """Create the same local snapshot and optional incremental mirror as Streamlit."""
     settings = flat_config()
     try:
-        return create_backup(
+        webdav_sync = _configured_webdav_client(settings, allow_unconfigured=True)
+        result = create_backup(
             configured_data_dir(settings),
             database=configured_db_path(settings),
             retention_days=int(settings.get("backup_local_retention_days", LOCAL_BACKUP_RETENTION_DAYS)),
             same_day_max_count=int(settings.get("backup_local_same_day_max_count", LOCAL_BACKUP_SAME_DAY_MAX_COUNT)),
+            webdav_sync=webdav_sync,
         )
+        if _coerce_bool(settings.get("webdav_enabled"), False) and webdav_sync is None:
+            result["webdav_skipped"] = "credentials_incomplete"
+        return result
     except (OSError, ValueError) as exc:
         raise ModernWebUIError(f"创建本地备份失败：{exc}") from exc
 
@@ -1293,28 +1349,34 @@ def export_configuration() -> tuple[bytes, str]:
     return buffer.getvalue(), "arxiv_researcher_config.zip"
 
 
-def _webdav_client() -> Any:
-    settings = flat_config()
-    if not settings.get("webdav_enabled"):
-        raise ModernWebUIError("请先启用 WebDAV 同步。")
-    try:
-        client = create_sync_client()
-    except Exception as exc:
-        raise ModernWebUIError(f"创建 WebDAV 客户端失败：{exc}") from exc
-    if client is None:
-        raise ModernWebUIError("WebDAV 凭据尚未配置完整。")
-    return client
-
-
 def webdav_operation(operation: str) -> dict[str, Any]:
-    client = _webdav_client()
+    settings = flat_config()
+    client = _configured_webdav_client(settings)
     try:
         if operation == "test":
             return {"ok": bool(client.test_connection())}
         if operation == "upload":
-            return {"ok": True, "result": client.sync_all(direction="upload")}
+            return {
+                "ok": True,
+                "result": client.sync_all(
+                    direction="upload",
+                    include_reports=_coerce_bool(settings.get("webdav_sync_reports"), False),
+                    include_configs=_coerce_bool(settings.get("webdav_sync_configs"), True),
+                    include_history=_coerce_bool(settings.get("webdav_sync_history"), True),
+                    include_keywords=_coerce_bool(settings.get("webdav_sync_keywords"), True),
+                ),
+            }
         if operation == "download":
-            return {"ok": True, "result": client.sync_all(direction="download")}
+            return {
+                "ok": True,
+                "result": client.sync_all(
+                    direction="download",
+                    include_reports=_coerce_bool(settings.get("webdav_sync_reports"), False),
+                    include_configs=_coerce_bool(settings.get("webdav_sync_configs"), True),
+                    include_history=_coerce_bool(settings.get("webdav_sync_history"), True),
+                    include_keywords=_coerce_bool(settings.get("webdav_sync_keywords"), True),
+                ),
+            }
     except Exception as exc:
         raise ModernWebUIError(f"WebDAV {operation} 失败：{exc}") from exc
     raise ModernWebUIError("不支持的 WebDAV 操作。")

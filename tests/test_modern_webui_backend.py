@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from modern_webui import backend
 from utils.webui_trigger import enqueue_trigger
@@ -156,6 +156,79 @@ class ModernBackendTests(unittest.TestCase):
                 self.assertEqual(backend.delete_trend_prompt_template("量子计算"), [])
                 with self.assertRaisesRegex(backend.ModernWebUIError, "名称不能为空"):
                     backend.save_trend_prompt_template("", "内容")
+
+    def test_webdav_client_uses_current_saved_panel_values(self) -> None:
+        settings = {
+            "webdav_enabled": True,
+            "webdav_remote_path": "/research/",
+            "proxy_enabled": True,
+            "proxy_webdav": True,
+            "proxy_url": "http://proxy.example:7890",
+        }
+        env = {
+            "WEBDAV_URL": "https://dav.example.test/root/",
+            "WEBDAV_USERNAME": "operator",
+            "WEBDAV_PASSWORD": "saved-password",
+        }
+        client = MagicMock()
+        with patch.object(backend, "WebDAVSync", return_value=client) as construct:
+            result = backend._configured_webdav_client(settings, env)
+
+        self.assertIs(result, client)
+        construct.assert_called_once_with(
+            url=env["WEBDAV_URL"],
+            username=env["WEBDAV_USERNAME"],
+            password=env["WEBDAV_PASSWORD"],
+            remote_path="/research/",
+            proxy_url="http://proxy.example:7890",
+        )
+
+    def test_manual_webdav_sync_uses_saved_scope(self) -> None:
+        client = MagicMock()
+        client.sync_all.return_value = {"success": 2, "total": 2}
+        settings = {
+            "webdav_enabled": True,
+            "webdav_sync_configs": False,
+            "webdav_sync_history": True,
+            "webdav_sync_keywords": False,
+            "webdav_sync_reports": True,
+        }
+        with patch.object(backend, "flat_config", return_value=settings), patch.object(
+            backend, "_configured_webdav_client", return_value=client
+        ):
+            result = backend.webdav_operation("upload")
+
+        self.assertTrue(result["ok"])
+        client.sync_all.assert_called_once_with(
+            direction="upload",
+            include_reports=True,
+            include_configs=False,
+            include_history=True,
+            include_keywords=False,
+        )
+
+    def test_manual_backup_keeps_local_snapshot_and_mirrors_when_configured(self) -> None:
+        settings = {
+            "webdav_enabled": True,
+            "backup_local_retention_days": 31,
+            "backup_local_same_day_max_count": 4,
+        }
+        webdav_client = MagicMock()
+        with patch.object(backend, "flat_config", return_value=settings), patch.object(
+            backend, "configured_data_dir", return_value=Path("/data")
+        ), patch.object(backend, "configured_db_path", return_value=Path("/data/db.sqlite")), patch.object(
+            backend, "_configured_webdav_client", return_value=webdav_client
+        ), patch.object(backend, "create_backup", return_value={"created": True, "name": "snapshot.db.gz"}) as create:
+            result = backend.create_local_backup()
+
+        self.assertTrue(result["created"])
+        create.assert_called_once_with(
+            Path("/data"),
+            database=Path("/data/db.sqlite"),
+            retention_days=31,
+            same_day_max_count=4,
+            webdav_sync=webdav_client,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

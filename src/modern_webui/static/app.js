@@ -1036,22 +1036,57 @@ async function renderAdvancedPage(_token) {
   bindCommon(root);
 }
 
+function webdavScheduleTime(cron) {
+  const parts = String(cron || "").trim().split(/\s+/);
+  const minute = Number(parts[0]);
+  const hour = Number(parts[1]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) return "23:00";
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function webdavOperationMessage(operation, payload) {
+  if (operation === "test") return payload.ok ? "连接与目录权限正常。" : "连接或目录权限验证失败。";
+  const summary = payload.result || {};
+  const success = Number(summary.success || 0);
+  const total = Number(summary.total || 0);
+  const failed = Object.entries(summary.results || {}).filter(([, ok]) => !ok).map(([path]) => path);
+  const verb = operation === "upload" ? "上传" : "下载";
+  const detail = failed.length ? `；失败项目：${failed.join("、")}` : "";
+  return `${verb}完成：${success}/${total}${summary.elapsed_seconds !== undefined ? `，耗时 ${summary.elapsed_seconds} 秒` : ""}${detail}`;
+}
+
+function localBackupMessage(result) {
+  if (!result?.created) return `未创建备份：${result?.reason || "未知原因"}`;
+  if (result.upload_error) return `本地备份已创建；WebDAV 上传失败：${result.upload_error}`;
+  if (result.uploaded) return `本地备份已创建并已增量上传：${result.name}`;
+  if (result.skipped_reason === "content_unchanged") return `本地备份已创建；WebDAV 数据未变化，已跳过上传：${result.name}`;
+  if (result.webdav_skipped === "credentials_incomplete") return `本地备份已创建；WebDAV 凭据尚未配置完整：${result.name}`;
+  return `已创建本地备份：${result.name}`;
+}
+
 function webdavSettings() {
   const enabled = Boolean(configValue("webdav_enabled", false));
   const backupEnabled = Boolean(configValue("backup_enabled", true));
   const database = configValue("daily_research_db_path", "data/daily_research/daily_research.db").split("/").pop();
-  return `${section("配置导出", `<p class="hint-text">导出当前 config.json 与 .env。导出文件含凭据，请妥善保存。</p><button id="config-export" class="secondary-button">导出配置</button>`, { icon: "📦" })}${divider()}${section("WebDAV", `${field({ label: "启用 WebDAV 同步", key: "webdav_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "WebDAV URL", key: "WEBDAV_URL", scope: "env", placeholder: "https://dav.example.com/dav/" })}${field({ label: "用户名", key: "WEBDAV_USERNAME", scope: "env" })}${field({ label: "密码", key: "WEBDAV_PASSWORD", scope: "env", type: "secret" })}</div><div class="action-row"><button class="secondary-button" data-webdav="test">测试连接</button><button class="secondary-button" data-webdav="upload">上传</button><button class="secondary-button" data-webdav="download">下载</button><span id="webdav-result" class="inline-result"></span></div><h3>同步设置</h3><div class="form-grid two">${field({ label: "远程目录", key: "webdav_remote_path", fallback: "/arxiv-daily-researcher/" })}${field({ label: "同步时机", key: "webdav_sync_mode", type: "select", choices: [{ value: "manual", label: "手动" }, { value: "scheduled", label: "定时" }, { value: "after_report", label: "报告完成后" }], fallback: "after_report", redraw: true })}${configValue("webdav_sync_mode", "after_report") === "scheduled" ? field({ label: "Cron 表达式", key: "webdav_cron_schedule", fallback: "0 23 * * *" }) : ""}</div><h3>同步范围</h3><div class="form-grid two">${field({ label: "配置文件", key: "webdav_sync_configs", type: "checkbox", fallback: true })}${field({ label: `历史数据（${database}）`, key: "webdav_sync_history", type: "checkbox", fallback: true })}${field({ label: "关键词数据", key: "webdav_sync_keywords", type: "checkbox", fallback: true })}${field({ label: "报告文件", key: "webdav_sync_reports", type: "checkbox", fallback: false })}</div>` : '<p class="hint-text">启用后可展开连接凭据、同步设置和同步范围。</p>'}`, { icon: "☁️" })}${divider()}${section("本地备份", `${field({ label: "启用自动备份", key: "backup_enabled", type: "checkbox", fallback: true, redraw: true })}${backupEnabled ? `<div class="form-grid two">${field({ label: "本地保存天数（0 永久保存）", key: "backup_local_retention_days", type: "number", min: 0, fallback: 7 })}${field({ label: "当天最多数量（0 不限）", key: "backup_local_same_day_max_count", type: "number", min: 0, fallback: 0 })}</div>` : ""}<div class="action-row"><button id="backup-create" class="primary-button">生成本地备份</button><button id="backup-export" class="secondary-button">导出备份</button></div><div class="action-row"><label class="file-button">导入备份<input id="backup-file" type="file" accept=".zip,.gz,.db" hidden /></label><button id="backup-restore" class="secondary-button" disabled>上传并恢复</button><span id="backup-result" class="inline-result"></span></div><div id="backup-list"><div class="loading">正在读取备份列表…</div></div>`, { icon: "🗄️" })}`;
+  const scheduled = configValue("webdav_sync_mode", "after_report") === "scheduled";
+  return `${section("配置导出", `<p class="hint-text">导出当前 config.json 与 .env。导出文件含凭据，请妥善保存。</p><button id="config-export" class="secondary-button">导出配置</button>`, { icon: "📦" })}${divider()}${section("WebDAV", `<p class="hint-text">按需同步配置、SQLite 历史、关键词和报告文件。</p>${field({ label: "启用 WebDAV 同步", key: "webdav_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "WebDAV URL", key: "WEBDAV_URL", scope: "env", placeholder: "https://dav.example.com/dav/" })}${field({ label: "用户名", key: "WEBDAV_USERNAME", scope: "env" })}${field({ label: "密码", key: "WEBDAV_PASSWORD", scope: "env", type: "secret" })}</div><div class="action-row"><button class="secondary-button" data-webdav="test">测试连接</button><button class="secondary-button" data-webdav="upload">上传</button><button class="secondary-button" data-webdav="download">下载</button><span id="webdav-result" class="inline-result"></span></div><h3>⚙️ 同步设置</h3><div class="form-grid two">${field({ label: "远程目录", key: "webdav_remote_path", fallback: "/arxiv-daily-researcher/" })}${field({ label: "同步时机", key: "webdav_sync_mode", type: "select", choices: [{ value: "manual", label: "手动" }, { value: "scheduled", label: "定时" }, { value: "after_report", label: "报告完成后" }], fallback: "after_report", redraw: true })}${scheduled ? `<label class="form-field"><span>定时同步时间<span class="field-help">每天在此时间执行同步。</span></span><input id="webdav-scheduled-time" type="time" value="${escapeAttribute(webdavScheduleTime(configValue("webdav_cron_schedule", "0 23 * * *")))}" /></label>` : ""}</div><h3>📂 同步范围</h3><div class="form-grid two">${field({ label: "配置文件", key: "webdav_sync_configs", type: "checkbox", fallback: true })}${field({ label: `历史数据（${database}）`, key: "webdav_sync_history", type: "checkbox", fallback: true })}${field({ label: "关键词数据", key: "webdav_sync_keywords", type: "checkbox", fallback: true })}${field({ label: "报告文件", key: "webdav_sync_reports", type: "checkbox", fallback: false })}</div>` : '<p class="hint-text">启用后可展开连接凭据、同步设置和同步范围。</p>'}`, { icon: "☁️" })}${divider()}${section("本地备份", `<p class="hint-text">本地备份按保留策略自动整理；启用 WebDAV 后会在本地快照成功后增量镜像到远端。</p>${field({ label: "启用自动备份", key: "backup_enabled", type: "checkbox", fallback: true, redraw: true })}${backupEnabled ? `<div class="form-grid two">${field({ label: "本地保存天数（0 永久保存）", key: "backup_local_retention_days", type: "number", min: 0, fallback: 7 })}${field({ label: "当天最多数量（0 不限）", key: "backup_local_same_day_max_count", type: "number", min: 0, fallback: 0 })}</div>` : ""}<div class="action-row"><button id="backup-create" class="primary-button">生成本地备份</button><button id="backup-export" class="secondary-button">导出备份</button></div><div class="action-row"><label class="file-button">导入备份<input id="backup-file" type="file" accept=".zip,.gz,.db" hidden /></label><button id="backup-restore" class="secondary-button" disabled>上传并恢复</button><span id="backup-result" class="inline-result"></span></div><div id="backup-list"><div class="loading">正在读取备份列表…</div></div>`, { icon: "🗄️" })}`;
 }
 
 async function renderBackupSync(token) {
   const root = $("#page-root");
   root.innerHTML = `${pageHeader()}${webdavSettings()}`;
   bindCommon(root);
+  $("#webdav-scheduled-time", root)?.addEventListener("change", (event) => {
+    const [hour, minute] = String(event.target.value || "").split(":").map(Number);
+    if (Number.isInteger(hour) && hour >= 0 && hour <= 23 && Number.isInteger(minute) && minute >= 0 && minute <= 59) {
+      state.draft.config.webdav_cron_schedule = `${minute} ${hour} * * *`;
+    }
+  });
   $("#config-export", root).addEventListener("click", () => { window.location.assign("/api/configuration/export"); });
   $$("[data-webdav]", root).forEach((button) => button.addEventListener("click", async () => {
-    try { await saveAll(false); const result = await api("/api/webdav", { method: "POST", body: { operation: button.dataset.webdav } }); $("#webdav-result").textContent = result.ok ? "操作完成" : "连接失败"; $("#webdav-result").className = `inline-result ${result.ok ? "success" : "error"}`; } catch (error) { toast(error.message, "error"); }
+    try { await saveAll(false); const result = await api("/api/webdav", { method: "POST", body: { operation: button.dataset.webdav } }); $("#webdav-result").textContent = webdavOperationMessage(button.dataset.webdav, result); $("#webdav-result").className = `inline-result ${result.ok ? "success" : "error"}`; } catch (error) { toast(error.message, "error"); }
   }));
-  $("#backup-create", root).addEventListener("click", async () => { try { await saveAll(false); const result = await api("/api/backups/create", { method: "POST", body: {} }); toast(result.created ? `已创建备份：${result.name}` : `未创建备份：${result.reason || "未知原因"}`, result.created ? "success" : "error"); renderPage(); } catch (error) { toast(error.message, "error"); } });
+  $("#backup-create", root).addEventListener("click", async () => { try { await saveAll(false); const result = await api("/api/backups/create", { method: "POST", body: {} }); toast(localBackupMessage(result), result.created && !result.upload_error ? "success" : "error"); renderPage(); } catch (error) { toast(error.message, "error"); } });
   $("#backup-export", root).addEventListener("click", () => { window.location.assign("/api/backups/export"); });
   $("#backup-file", root).addEventListener("change", (event) => { $("#backup-restore").disabled = !event.target.files?.[0]; });
   $("#backup-restore", root).addEventListener("click", async () => {
