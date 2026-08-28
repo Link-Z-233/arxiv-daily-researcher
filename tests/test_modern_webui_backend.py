@@ -26,6 +26,9 @@ class ModernBackendTests(unittest.TestCase):
         self.assertNotIn("CHEAP_LLM__API_KEY", payload["env"])
         self.assertTrue(payload["secrets"]["CHEAP_LLM__API_KEY"])
         self.assertEqual(payload["env"]["CHEAP_LLM__MODEL_NAME"], "small-model")
+        categories = {item["code"]: item["label"] for item in payload["arxiv_categories"]}
+        self.assertGreater(len(categories), 100)
+        self.assertEqual(categories["quant-ph"], "quant-ph · Quantum Physics")
 
     def test_save_settings_rejects_unknown_fields_before_writing(self) -> None:
         with self.assertRaisesRegex(backend.ModernWebUIError, "不支持"):

@@ -62,6 +62,7 @@ from utils.webui_trigger import (
     trigger_directory,
     trigger_status_directory,
 )
+from webui.arxiv_categories import ARXIV_CATEGORIES, format_arxiv_category
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -268,6 +269,13 @@ def public_settings() -> dict[str, Any]:
                 "issn": list(OPENALEX_JOURNAL_CATALOG["prl"]["issn"]),
             },
             *builtin_extra_source_definitions(),
+        ],
+        # Keep both modern selectors on the same complete arXiv catalog as
+        # the Streamlit panel.  The display label is sent by the server so
+        # category additions cannot silently diverge between two UIs.
+        "arxiv_categories": [
+            {"code": code, "label": format_arxiv_category(code)}
+            for code in ARXIV_CATEGORIES
         ],
     }
 

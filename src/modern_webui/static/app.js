@@ -48,7 +48,7 @@ const PAGE_META = {
   logs: ["系统 / 日志", "运行日志", "按任务分组读取最近的本地运行日志。"],
 };
 
-const ARXIV_CATEGORIES = [
+const FALLBACK_ARXIV_CATEGORIES = [
   "quant-ph", "hep-th", "hep-ex", "hep-lat", "gr-qc", "astro-ph", "cond-mat", "physics", "math-ph", "cs.AI", "cs.LG", "stat.ML",
 ];
 const BUILTIN_SOURCES = [
@@ -112,6 +112,19 @@ function envValue(key, fallback = "") {
 
 function secretConfigured(key) {
   return Boolean(state.settings?.secrets?.[key]);
+}
+
+function arxivCategories() {
+  const supplied = state.settings?.arxiv_categories;
+  if (Array.isArray(supplied) && supplied.length) {
+    return supplied
+      .filter((item) => item && typeof item.code === "string")
+      .map((item) => ({ code: item.code, label: String(item.label || item.code) }));
+  }
+  // The fallback keeps an already-loaded offline page usable while the
+  // settings request is still pending.  Normal deployments receive the full
+  // shared catalog from the backend above.
+  return FALLBACK_ARXIV_CATEGORIES.map((code) => ({ code, label: code }));
 }
 
 async function api(path, options = {}) {
@@ -345,7 +358,7 @@ function renderTrendForm(templates = []) {
   const configuredPrompt = String(config("trend_analysis_prompt", "") || "");
   const matchingTemplate = templates.find((item) => item.text === configuredPrompt)?.name || "";
   const values = state.pageData.trend || { keywords: "", date_from: defaultFrom, date_to: today, categories: [], max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"), analysis_prompt: configuredPrompt, template: matchingTemplate };
-  const categories = ARXIV_CATEGORIES.map((item) => `<option value="${item}" ${values.categories.includes(item) ? "selected" : ""}>${item}</option>`).join("");
+  const categories = arxivCategories().map((item) => `<option value="${escapeAttribute(item.code)}" ${values.categories.includes(item.code) ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
   const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
   return `<div class="form-grid two"><label class="form-field"><span>研究关键词</span><input id="trend-keywords" value="${escapeAttribute(values.keywords)}" placeholder="例如 quantum error correction" /></label><label class="form-field"><span>arXiv 分类（可选）</span><select id="trend-categories" multiple>${categories}</select></label><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><div class="form-grid two"><label class="form-field"><span>排序</span><select id="trend-sort"><option value="ascending" ${values.sort_order === "ascending" ? "selected" : ""}>由早到晚</option><option value="descending" ${values.sort_order === "descending" ? "selected" : ""}>由晚到早</option></select></label><label class="form-field"><span>最多结果数</span><input id="trend-max-results" type="number" min="1" max="5000" value="${escapeAttribute(values.max_results)}" /></label></div><div class="form-grid two"><label class="form-field"><span>已保存提示词模板</span><select id="trend-template"><option value="">不使用模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><button id="trend-template-delete" class="secondary-button" ${values.template ? "" : "disabled"}>删除当前模板</button></div></div><label class="form-field"><span>深度分析提示词（可选）</span><textarea id="trend-prompt" rows="6" placeholder="可留空">${escapeHtml(values.analysis_prompt)}</textarea></label><details class="compact-form"><summary>保存新的提示词模板</summary><div class="form-grid two"><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="5" maxlength="8000" placeholder="填写可复用的深度分析提示词"></textarea></label></div><div class="action-row"><button id="trend-template-save" class="secondary-button">保存模板</button></div></details>`;
 }
@@ -727,7 +740,8 @@ function renderSources() {
     data.custom.map((item, index) => `<div class="list-row"><span><strong>${escapeHtml(item.display_name)}</strong> · ${escapeHtml(item.code)} · ${escapeHtml(item.full_name)}${item.issn?.length ? ` · ISSN: ${escapeHtml(item.issn.join(", "))}` : ""}</span><button class="icon-danger" data-remove-custom="${index}" aria-label="移除来源">×</button></div>`),
     "暂无自定义额外来源。",
   );
-  return `${section("arXiv", `<label class="toggle-field"><span>启动 arXiv 来源</span><input id="source-arxiv" type="checkbox" ${data.arxiv ? "checked" : ""}/><i></i></label>${data.arxiv ? `<p class="hint-text">选择需要扫描的 arXiv 分类。</p><div class="form-grid two"><label class="form-field"><span>arXiv 分类</span><select id="source-domains" multiple>${ARXIV_CATEGORIES.map((item) => `<option value="${item}" ${data.domains.includes(item) ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>${field({ label: "请求超时（秒）", key: "arxiv_fetch_timeout_seconds", type: "number", min: 30, max: 1800, fallback: 180 })}${field({ label: "公告回看宽限（天）", key: "arxiv_announcement_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}</div>` : ""}`)}${divider()}${section("额外数据源", `<label class="toggle-field"><span>启动额外数据源</span><input id="extra-enabled" type="checkbox" ${data.extraEnabled ? "checked" : ""}/><i></i></label>${data.extraEnabled ? `<div class="form-grid two"><label class="form-field"><span>内置来源</span><select id="extra-builtins" multiple>${builtinOptions}</select></label>${field({ label: "按数据源分类整理报告", key: "reports_by_source", type: "checkbox", fallback: true })}</div><div class="source-custom"><h3>自定义来源</h3>${customRows}<details><summary>添加自定义 OpenAlex 期刊来源</summary><div class="form-grid two"><label class="form-field"><span>来源代码</span><input id="custom-code" placeholder="optica_express" /></label><label class="form-field"><span>展示名称</span><input id="custom-display" placeholder="Opt. Express" /></label><label class="form-field"><span>完整名称</span><input id="custom-full" placeholder="Optics Express" /></label><label class="form-field"><span>ISSN（逗号分隔）</span><input id="custom-issn" placeholder="1094-4087" /></label></div><button id="custom-add" class="secondary-button">添加来源</button></details></div>${data.builtins.includes("huggingface_papers") ? `<div class="form-grid two">${field({ label: "Hugging Face 可用性滞后（天）", key: "huggingface_papers_availability_lag_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "回看宽限（天）", key: "huggingface_papers_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "请求超时（秒）", key: "huggingface_papers_request_timeout_seconds", type: "number", min: 5, max: 600, fallback: 30 })}${field({ label: "请求间隔（秒）", key: "huggingface_papers_request_interval_seconds", type: "number", min: 0, max: 60, step: 0.05, fallback: 0.25 })}</div>` : ""}` : '<p class="hint-text">开启后可选择内置来源或添加 ISSN 期刊来源。</p>'}`)}`;
+  const categoryOptions = arxivCategories().map((item) => `<option value="${escapeAttribute(item.code)}" ${data.domains.includes(item.code) ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  return `${section("arXiv", `<label class="toggle-field"><span>启动 arXiv 来源</span><input id="source-arxiv" type="checkbox" ${data.arxiv ? "checked" : ""}/><i></i></label>${data.arxiv ? `<p class="hint-text">选择需要扫描的 arXiv 分类。</p><div class="form-grid two"><label class="form-field"><span>arXiv 分类</span><select id="source-domains" multiple>${categoryOptions}</select></label>${field({ label: "请求超时（秒）", key: "arxiv_fetch_timeout_seconds", type: "number", min: 30, max: 1800, fallback: 180 })}${field({ label: "公告回看宽限（天）", key: "arxiv_announcement_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}</div>` : ""}`)}${divider()}${section("额外数据源", `<label class="toggle-field"><span>启动额外数据源</span><input id="extra-enabled" type="checkbox" ${data.extraEnabled ? "checked" : ""}/><i></i></label>${data.extraEnabled ? `<div class="form-grid two"><label class="form-field"><span>内置来源</span><select id="extra-builtins" multiple>${builtinOptions}</select></label>${field({ label: "按数据源分类整理报告", key: "reports_by_source", type: "checkbox", fallback: true })}</div><div class="source-custom"><h3>自定义来源</h3>${customRows}<details><summary>添加自定义 OpenAlex 期刊来源</summary><div class="form-grid two"><label class="form-field"><span>来源代码</span><input id="custom-code" placeholder="optica_express" /></label><label class="form-field"><span>展示名称</span><input id="custom-display" placeholder="Opt. Express" /></label><label class="form-field"><span>完整名称</span><input id="custom-full" placeholder="Optics Express" /></label><label class="form-field"><span>ISSN（逗号分隔）</span><input id="custom-issn" placeholder="1094-4087" /></label></div><button id="custom-add" class="secondary-button">添加来源</button></details></div>${data.builtins.includes("huggingface_papers") ? `<div class="form-grid two">${field({ label: "Hugging Face 可用性滞后（天）", key: "huggingface_papers_availability_lag_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "回看宽限（天）", key: "huggingface_papers_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "请求超时（秒）", key: "huggingface_papers_request_timeout_seconds", type: "number", min: 5, max: 600, fallback: 30 })}${field({ label: "请求间隔（秒）", key: "huggingface_papers_request_interval_seconds", type: "number", min: 0, max: 60, step: 0.05, fallback: 0.25 })}</div>` : ""}` : '<p class="hint-text">开启后可选择内置来源或添加 ISSN 期刊来源。</p>'}`)}`;
 }
 
 function bindSources(root) {
@@ -1089,8 +1103,11 @@ function normalizeForSave() {
       if (sourceState.builtins.includes("prl")) enabled.push("prl");
       enabled.push(...definitions.map((item) => item.code));
     }
+    const validDomains = new Set(arxivCategories().map((item) => item.code));
     config.enabled_sources = enabled;
-    config.domains = sourceState.domains;
+    // Streamlit drops legacy/invalid category values during collection rather
+    // than persisting a source filter that arXiv cannot honour.
+    config.domains = sourceState.domains.filter((code) => validDomains.has(code));
     config.extra_sources_enabled = Boolean(sourceState.extraEnabled);
     config.extra_source_definitions = definitions;
   }
