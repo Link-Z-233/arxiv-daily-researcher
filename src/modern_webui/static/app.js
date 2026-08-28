@@ -630,8 +630,26 @@ async function renderFavorites(token) {
     root.innerHTML = `${pageHeader()}${section("收藏", '<p class="empty-state">SQLite 数据库尚未创建；运行一次每日研究或导入历史后即可查看。</p>', { icon: "⭐" })}`;
     return;
   }
-  const cards = data.liked.map((row) => `<article class="favorite-card"><span>${escapeHtml(formatTime(row.updated_at))}</span><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.source)} · ${escapeHtml(row.paper_id)}</small></article>`);
-  root.innerHTML = `${pageHeader()}${section("收藏的论文", `${metrics([{ label: "👍 收藏", value: formatNumber(data.counts?.like), help: "正向偏好" }, { label: "👎 不喜欢", value: formatNumber(data.counts?.dislike), help: "负向偏好" }])}<div class="card-list">${pagedItems("favorite-cards", cards, "暂无已收藏论文")}</div>`, { icon: "⭐" })}${divider()}${section("收藏画像", `<div class="form-grid two">${pagedTable("favorite-authors", [{ label: "作者", key: "name" }, { label: "收藏次数", key: "count" }], data.authors || [], { empty: "暂无作者统计" })}${pagedTable("favorite-keywords", [{ label: "关键词", key: "keyword" }, { label: "次数", key: "count" }], data.keywords || [], { empty: "暂无关键词统计" })}</div>`, { icon: "🧩" })}`;
+  const likeCount = Number(data.counts?.like || 0);
+  const dislikeCount = Number(data.counts?.dislike || 0);
+  if (!likeCount && !dislikeCount) {
+    root.innerHTML = `${pageHeader()}${section("收藏", '<p class="empty-state">尚未标记论文。可直接在每日研究报告的论文卡片中使用 👍 或 👎。</p>', { icon: "⭐" })}`;
+    return;
+  }
+  const cards = data.liked.map((row) => {
+    const fallback = String(row.source || "").toLowerCase() === "arxiv" && row.paper_id
+      ? `https://arxiv.org/abs/${row.paper_id}`
+      : null;
+    const url = safeExternalUrl(row.url) || fallback;
+    const title = url
+      ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.title || row.paper_id)}</a>`
+      : escapeHtml(row.title || row.paper_id);
+    return `<article class="favorite-card"><span>${escapeHtml(formatTime(row.updated_at))}</span><strong>${title}</strong><small>${escapeHtml(row.source)} · ${escapeHtml(row.paper_id)}</small></article>`;
+  });
+  const likedList = cards.length
+    ? `<p class="hint-text">按标记时间倒序展示；点击标题可打开论文页面。</p><div class="card-list">${pagedItems("favorite-cards", cards, "暂无已收藏论文")}</div>`
+    : '<p class="empty-state">暂无 👍 收藏论文。</p>';
+  root.innerHTML = `${pageHeader()}${section("收藏的论文", `${metrics([{ label: "👍 收藏", value: formatNumber(likeCount), help: "正向偏好" }, { label: "👎 不喜欢", value: formatNumber(dislikeCount), help: "负向偏好" }])}${likedList}`, { icon: "⭐" })}${divider()}${section("收藏画像", `<div class="form-grid two">${pagedTable("favorite-authors", [{ label: "收藏作者 Top", key: "name" }, { label: "收藏次数", key: "count" }], data.authors || [], { empty: "暂无收藏作者统计" })}${pagedTable("favorite-keywords", [{ label: "收藏关键词", key: "keyword" }, { label: "次数", key: "count" }], data.keywords || [], { empty: "暂无收藏关键词统计" })}</div>`, { icon: "🧩" })}`;
   bindCommon(root);
 }
 

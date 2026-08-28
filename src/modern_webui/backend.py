@@ -647,10 +647,16 @@ def preferences_summary() -> dict[str, Any]:
         return {"available": False, "counts": {"like": 0, "dislike": 0}, "liked": [], "authors": [], "keywords": []}
     try:
         aggregate = store.aggregate_liked_preferences()
+        liked = store.list_preferences(preference="like", limit=500)
+        urls = store.liked_paper_urls()
+        for row in liked:
+            row["url"] = urls.get(
+                (str(row.get("source") or ""), str(row.get("paper_id") or ""))
+            )
         return {
             "available": True,
             "counts": store.get_preference_counts(),
-            "liked": store.list_preferences(preference="like", limit=500),
+            "liked": liked,
             "authors": aggregate.get("authors") or [],
             "keywords": store.aggregate_liked_keywords(limit=500),
         }
