@@ -589,6 +589,22 @@ def build_main_command(payload: Mapping[str, Any], project_root: Path) -> list[s
     return command
 
 
+def _status_receipt_args(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Keep only retry-safe maintenance options in a durable status receipt.
+
+    A trigger receipt is readable by the panel for several weeks.  It must
+    never become a generic copy of a user request (trend prompts can be long
+    and may contain private research context).  Legacy import's boolean mode
+    switch is the sole option required to make its retry deterministic.
+    """
+    if payload.get("mode") != "legacy_import":
+        return {}
+    args = payload.get("args")
+    if not isinstance(args, Mapping) or not isinstance(args.get("full_repair"), bool):
+        return {}
+    return {"full_repair": args["full_repair"]}
+
+
 def _write_status(data_dir: Path, payload: Mapping[str, Any], state: str, **details: Any) -> Path:
     safe_details = dict(details)
     for key in ("error", "error_summary"):
@@ -597,6 +613,7 @@ def _write_status(data_dir: Path, payload: Mapping[str, Any], state: str, **deta
     status_payload: Dict[str, Any] = {
         "request_id": payload["request_id"],
         "mode": payload["mode"],
+        "args": _status_receipt_args(payload),
         "created_at": payload.get("created_at", ""),
         "state": state,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -719,7 +736,14 @@ def execute_trigger_request(
             raise RuntimeError(f"worker entrypoint is unavailable: {main_path}")
 
         command = build_main_command(payload, root)
-        _write_status(data_dir, payload, "running", command=command)
+        started_at = datetime.now(timezone.utc).isoformat()
+        _write_status(
+            data_dir,
+            payload,
+            "running",
+            command=command,
+            started_at=started_at,
+        )
         child = subprocess.Popen(
             command,
             cwd=str(root),
@@ -752,7 +776,11 @@ def execute_trigger_request(
             state = "skipped_busy"
         else:
             state = "failed"
-        details: Dict[str, Any] = {"return_code": return_code, "command": command}
+        details: Dict[str, Any] = {
+            "return_code": return_code,
+            "command": command,
+            "started_at": started_at,
+        }
         if state == "failed":
             details["error_summary"] = summarize_trigger_failure_output(
                 payload["mode"], output_tail

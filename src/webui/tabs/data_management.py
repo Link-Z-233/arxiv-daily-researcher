@@ -1,6 +1,7 @@
 """数据管理 Tab — 配置导出 + WebDAV 同步 + 数据库备份 + 旧历史导入"""
 
 import io
+import json
 import zipfile
 import logging
 import subprocess
@@ -23,7 +24,13 @@ from utils.backup import (
     validate_local_backup_same_day_max_count,
 )
 from utils.legacy_history import LEGACY_IMPORT_STATE_KEY
-from utils.webui_trigger import enqueue_trigger, read_trigger_payload, trigger_directory
+from utils.webui_trigger import (
+    enqueue_trigger,
+    read_trigger_payload,
+    sanitize_task_error_summary,
+    trigger_directory,
+    trigger_status_directory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +42,20 @@ DEFAULT_ENV_PATH = _PROJECT_ROOT / ".env"
 SECRET_FIELD_KEYS = ("webdav_password",)
 _MAX_VISIBLE_LIST_ROWS = 10
 _TABLE_SCROLL_HEIGHT_PX = 390
+_HISTORY_TASK_LIMIT = 40
+_HISTORY_TASK_MODES = frozenset(
+    {"legacy_import", "history_data_repair", "history_omission_scan"}
+)
+_HISTORY_TASK_LABEL_KEYS = {
+    "legacy_import": "dm_task_legacy_import",
+    "history_data_repair": "dm_task_history_repair",
+    "history_omission_scan": "dm_task_history_omission",
+}
+_HISTORY_RUN_KIND_BY_MODE = {
+    "legacy_import": "legacy_import",
+    "history_data_repair": "history_data_repair",
+    "history_omission_scan": "history_omission_scan",
+}
 
 
 def render_backup_sync(env_values: dict, config_values: dict) -> None:
@@ -324,7 +345,9 @@ def render_backup_sync(env_values: dict, config_values: dict) -> None:
 
 
 def render_history_maintenance(_env_values: dict, config_values: dict) -> None:
-    """Render legacy import and SQLite-backed history maintenance controls."""
+    """Render task audit first, then legacy import and repair launch controls."""
+    _render_history_task_list(config_values)
+    st.divider()
     _render_legacy_import_section(config_values)
 
 
@@ -381,11 +404,270 @@ def _legacy_import_already_queued(queue_dir: Path) -> bool:
     return _history_task_already_queued(queue_dir, "legacy_import")
 
 
+def _history_task_label(mode: object) -> str:
+    """Return a localized maintenance-workflow name without trusting disk data."""
+    normalized = str(mode or "").strip()
+    key = _HISTORY_TASK_LABEL_KEYS.get(normalized)
+    return t(key) if key else normalized or t("dm_task_unknown")
+
+
+def _format_history_task_time(value: object) -> str:
+    """Format ISO timestamps from the durable trigger protocol defensively."""
+    if not isinstance(value, str) or not value.strip():
+        return "—"
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    except ValueError:
+        return "—"
+
+
+def _history_task_phase_text(mode: str, state: str, store) -> str:
+    """Show current SQLite progress when a WebUI maintenance request is active."""
+    if state == "queued":
+        return t("dm_task_progress_queued")
+    if state == "starting":
+        return t("dm_task_progress_starting")
+    if state != "running":
+        return t("dm_task_progress_terminal")
+    if store is None:
+        return t("dm_task_progress_running")
+    try:
+        progress = store.active_run_progress()
+    except Exception:
+        progress = None
+    expected_kind = _HISTORY_RUN_KIND_BY_MODE.get(mode)
+    if not isinstance(progress, dict) or progress.get("run_kind") != expected_kind:
+        return t("dm_task_progress_waiting_idle")
+
+    phase = str(progress.get("phase") or "").strip()
+    detail = sanitize_task_error_summary(progress.get("detail"), max_chars=120)
+    current = progress.get("current")
+    total = progress.get("total")
+    parts = [phase or t("dm_task_progress_running")]
+    if detail:
+        parts.append(detail)
+    if (
+        isinstance(current, int)
+        and not isinstance(current, bool)
+        and isinstance(total, int)
+        and not isinstance(total, bool)
+        and total > 0
+    ):
+        parts.append(f"{max(0, current)}/{total}")
+    return " · ".join(parts)
+
+
+def _read_history_task_records(
+    config_values: dict,
+    *,
+    queue_dir: Path | None = None,
+    status_dir: Path | None = None,
+    store=None,
+    limit: int = _HISTORY_TASK_LIMIT,
+) -> list[dict]:
+    """Read bounded, user-triggered history tasks from queue/status receipts.
+
+    The watcher owns task execution and its receipt files.  This reader only
+    consumes the compact protocol fields, so the panel never parses raw logs
+    or exposes command lines, host paths, endpoints, or credentials.
+    """
+    data_dir = _PROJECT_ROOT / "data"
+    queue_dir = queue_dir or trigger_directory(data_dir)
+    status_dir = status_dir or trigger_status_directory(data_dir)
+    records: dict[str, dict] = {}
+
+    def add_record(record: dict, *, replace: bool = False) -> None:
+        request_id = str(record.get("request_id") or "").strip()
+        mode = str(record.get("mode") or "").strip()
+        if not request_id or mode not in _HISTORY_TASK_MODES:
+            return
+        existing = records.get(request_id)
+        if existing is None or replace:
+            records[request_id] = record
+
+    # Terminal/running status receipts are sufficient for start, completion,
+    # and sanitized issue evidence after the watcher has claimed a request.
+    try:
+        status_paths = sorted(
+            status_dir.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        status_paths = []
+    for path in status_paths[: max(1, limit * 3)]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        mode = str(payload.get("mode") or "")
+        state = str(payload.get("state") or "unknown")
+        issue = sanitize_task_error_summary(
+            payload.get("error_summary") or payload.get("error")
+        )
+        if state == "skipped_busy" and not issue:
+            issue = t("dm_task_issue_busy")
+        completed_at = (
+            payload.get("updated_at")
+            if state in {"succeeded", "failed", "rejected", "interrupted", "skipped_busy"}
+            else ""
+        )
+        add_record(
+            {
+                "request_id": payload.get("request_id") or path.stem,
+                "mode": mode,
+                "state": state,
+                "created_at": payload.get("created_at"),
+                "started_at": payload.get("started_at"),
+                "completed_at": completed_at,
+                "issue": issue,
+                "args": payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                "sort_at": payload.get("updated_at") or payload.get("created_at") or "",
+            }
+        )
+
+    # A request still in the shared queue has not written a receipt yet. It
+    # remains a first-class task: its purpose is exactly to wait for idle work
+    # rather than disappear from the operator's view.
+    for pattern, state in (("*.json", "queued"), ("*.running", "starting")):
+        try:
+            request_paths = list(queue_dir.glob(pattern))
+        except OSError:
+            request_paths = []
+        for path in request_paths:
+            try:
+                payload = read_trigger_payload(path)
+            except (OSError, ValueError):
+                continue
+            add_record(
+                {
+                    "request_id": payload.get("request_id"),
+                    "mode": payload.get("mode"),
+                    "state": state,
+                    "created_at": payload.get("created_at"),
+                    "started_at": "",
+                    "completed_at": "",
+                    "issue": "",
+                    "args": payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                    "sort_at": payload.get("created_at") or "",
+                },
+                # The live queue is newer authority than a status file that
+                # was written during watcher hand-off.
+                replace=True,
+            )
+
+    rows = list(records.values())
+    rows.sort(key=lambda row: str(row.get("sort_at") or ""), reverse=True)
+    live_store = store if store is not None else _legacy_import_store(config_values)
+    for row in rows:
+        row["label"] = _history_task_label(row["mode"])
+        row["progress"] = _history_task_phase_text(
+            str(row["mode"]), str(row["state"]), live_store
+        )
+        row["retryable"] = row["state"] in {
+            "failed", "rejected", "interrupted", "skipped_busy"
+        }
+    return rows[: max(1, limit)]
+
+
+def _render_history_task_list(config_values: dict) -> None:
+    """Render a compact, retryable audit of WebUI history-maintenance tasks."""
+    st.markdown(
+        f'<p class="section-title">🗂 {t("dm_history_task_list_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<p class="hint-text">{t("dm_history_task_list_hint")}</p>',
+        unsafe_allow_html=True,
+    )
+    tasks = _read_history_task_records(config_values)
+    if not tasks:
+        st.caption(t("dm_history_task_list_empty"))
+        return
+
+    rows = [
+        {
+            t("dm_task_col_name"): task["label"],
+            t("dm_task_col_state"): t(f"dm_task_state_{task['state']}")
+            if f"dm_task_state_{task['state']}" in _KNOWN_I18N_TASK_STATE_KEYS
+            else str(task["state"]),
+            t("dm_task_col_progress"): task["progress"],
+            t("dm_task_col_started"): _format_history_task_time(task["started_at"]),
+            t("dm_task_col_completed"): _format_history_task_time(task["completed_at"]),
+            t("dm_task_col_issue"): task["issue"] or "—",
+        }
+        for task in tasks
+    ]
+    if len(rows) > _MAX_VISIBLE_LIST_ROWS:
+        with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
+            st.dataframe(rows, hide_index=True, width="stretch")
+    else:
+        st.dataframe(rows, hide_index=True, width="stretch")
+
+    retryable = [task for task in tasks if task["retryable"]]
+    if not retryable:
+        return
+    st.caption(t("dm_task_retry_hint"))
+    for task in retryable:
+        col_label, col_action = st.columns([5, 1])
+        col_label.caption(
+            f"{task['label']} · {_format_history_task_time(task['completed_at'])}"
+        )
+        if col_action.button(
+            t("dm_task_retry_btn"),
+            key=f"history_task_retry_{task['request_id']}",
+            width="stretch",
+        ):
+            _retry_history_task(task, config_values)
+
+
+def _retry_history_task(task: dict, config_values: dict) -> None:
+    """Queue one retry through the same validated workflow as the primary controls."""
+    mode = str(task.get("mode") or "")
+    if mode == "legacy_import":
+        args = task.get("args")
+        if isinstance(args, dict) and isinstance(args.get("full_repair"), bool):
+            full_repair = args["full_repair"]
+        else:
+            full_repair = bool(
+                st.session_state.get(
+                    "legacy_import_full_repair_enabled",
+                    config_values.get("legacy_import_full_repair_enabled", False),
+                )
+            )
+        _enqueue_legacy_import(full_repair)
+        return
+    if mode == "history_data_repair":
+        _enqueue_history_task(mode, "dm_history_repair_queued")
+        return
+    if mode == "history_omission_scan":
+        _enqueue_history_task(mode, "dm_history_omission_queued")
+
+
+# ``t()`` returns its key for unknown values. Keep state labels explicit so a
+# future protocol state stays readable instead of looking like a translation
+# failure in the task table.
+_KNOWN_I18N_TASK_STATE_KEYS = frozenset(
+    {
+        "dm_task_state_queued",
+        "dm_task_state_starting",
+        "dm_task_state_running",
+        "dm_task_state_succeeded",
+        "dm_task_state_failed",
+        "dm_task_state_rejected",
+        "dm_task_state_interrupted",
+        "dm_task_state_skipped_busy",
+    }
+)
+
+
 def _render_legacy_import_section(config_values: dict) -> None:
     """v3.2 importer plus independent SQLite repair/omission workflows."""
     import json as json_module
-
-    st.divider()
 
     # ==================== 旧版本历史导入 ====================
     st.markdown(

@@ -163,6 +163,8 @@ class WebUITriggerTests(unittest.TestCase):
             status = json.loads(statuses[0].read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "failed")
             self.assertEqual(status["return_code"], 1)
+            self.assertTrue(status.get("started_at"))
+            self.assertTrue(status.get("updated_at"))
 
             malformed = claimed_path.with_name("malformed.running")
             malformed.write_text("not json", encoding="utf-8")
