@@ -14,6 +14,7 @@ import json
 import mimetypes
 import os
 import re
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,6 +69,7 @@ DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_REPORTS_DIR = DEFAULT_DATA_DIR / "reports"
 DEFAULT_DB_RELATIVE_PATH = Path("daily_research") / "daily_research.db"
 LOGS_DIR = PROJECT_ROOT / "logs"
+TREND_PROMPT_TEMPLATES_PATH = DEFAULT_DATA_DIR / "trend_prompt_templates.json"
 HISTORY_MODES = frozenset({"legacy_import", "history_data_repair", "history_omission_scan"})
 OPERATING_MODES = frozenset({"daily_research", "backfill_run", "trend_research"})
 LOCK_NAMES = (
@@ -693,6 +695,83 @@ def extracted_keywords() -> list[dict[str, Any]]:
     return sorted(rows, key=lambda item: (-item["weight"], item["keyword"]))
 
 
+def _read_trend_prompt_templates() -> dict[str, str]:
+    """Read the small user-owned template library without failing the UI."""
+    try:
+        raw = json.loads(TREND_PROMPT_TEMPLATES_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        name.strip(): text.strip()
+        for name, text in raw.items()
+        if isinstance(name, str)
+        and isinstance(text, str)
+        and name.strip()
+        and len(name.strip()) <= 120
+        and len(text.strip()) <= 8_000
+    }
+
+
+def list_trend_prompt_templates() -> list[dict[str, str]]:
+    return [
+        {"name": name, "text": text}
+        for name, text in sorted(_read_trend_prompt_templates().items(), key=lambda item: item[0].casefold())
+    ]
+
+
+def _write_trend_prompt_templates(templates: Mapping[str, str]) -> None:
+    path = TREND_PROMPT_TEMPLATES_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(dict(templates), handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+    except OSError as exc:
+        raise ModernWebUIError(f"保存趋势提示词模板失败：{exc}") from exc
+
+
+def save_trend_prompt_template(name: object, text: object) -> list[dict[str, str]]:
+    safe_name = str(name or "").strip()
+    safe_text = str(text or "").strip()
+    if not safe_name:
+        raise ModernWebUIError("模板名称不能为空。")
+    if len(safe_name) > 120 or any(char in safe_name for char in "\r\n\x00"):
+        raise ModernWebUIError("模板名称长度或格式无效。")
+    if not safe_text:
+        raise ModernWebUIError("模板内容不能为空。")
+    if len(safe_text) > 8_000 or "\x00" in safe_text:
+        raise ModernWebUIError("模板内容长度或格式无效。")
+    templates = _read_trend_prompt_templates()
+    if safe_name not in templates and len(templates) >= 50:
+        raise ModernWebUIError("最多保存 50 个趋势提示词模板。")
+    templates[safe_name] = safe_text
+    _write_trend_prompt_templates(templates)
+    return list_trend_prompt_templates()
+
+
+def delete_trend_prompt_template(name: object) -> list[dict[str, str]]:
+    safe_name = str(name or "").strip()
+    templates = _read_trend_prompt_templates()
+    if safe_name not in templates:
+        raise ModernWebUIError("未找到该趋势提示词模板。")
+    del templates[safe_name]
+    _write_trend_prompt_templates(templates)
+    return list_trend_prompt_templates()
+
+
 def diagnostics(days: int | None) -> dict[str, Any]:
     if days is not None and days not in {3, 7, 14, 30}:
         raise ModernWebUIError("诊断时间范围无效。")
@@ -739,6 +818,9 @@ def analytics(days: int | None) -> dict[str, Any]:
             "available": True,
             "daily": store.get_daily_token_totals(days),
             "models": store.get_token_usage_by_model(days),
+            # The Streamlit dashboard always renders a one-year activity
+            # heatmap independently of the selected trend range.
+            "heatmap_daily": store.get_daily_token_totals(days=365),
         }
     except Exception as exc:
         raise ModernWebUIError(f"读取数据分析失败：{exc}") from exc

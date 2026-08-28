@@ -85,6 +85,47 @@ class ModernWebUIAppTests(unittest.TestCase):
             settings = self.client.get("/api/settings")
         self.assertEqual(settings.status_code, 200)
 
+    def test_trend_template_routes_require_the_same_session(self) -> None:
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/setup",
+                json={
+                    "username": "template_admin",
+                    "password": "secret6",
+                    "password_confirmation": "secret6",
+                },
+            ).status_code,
+            200,
+        )
+        with patch.object(
+            modern_app.backend,
+            "list_trend_prompt_templates",
+            return_value=[{"name": "模板", "text": "内容"}],
+        ):
+            listed = self.client.get("/api/trend/templates")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json()["items"][0]["name"], "模板")
+
+        with patch.object(
+            modern_app.backend,
+            "save_trend_prompt_template",
+            return_value=[{"name": "模板", "text": "内容"}],
+        ) as save:
+            saved = self.client.put(
+                "/api/trend/templates", json={"name": "模板", "text": "内容"}
+            )
+        self.assertEqual(saved.status_code, 200)
+        save.assert_called_once_with("模板", "内容")
+
+        with patch.object(
+            modern_app.backend,
+            "delete_trend_prompt_template",
+            return_value=[],
+        ) as delete:
+            deleted = self.client.post("/api/trend/templates/delete", json={"name": "模板"})
+        self.assertEqual(deleted.status_code, 200)
+        delete.assert_called_once_with("模板")
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

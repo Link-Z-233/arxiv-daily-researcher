@@ -67,6 +67,20 @@ class ModernBackendTests(unittest.TestCase):
             self.assertEqual(backend._daily_report_source(legacy, root), "arxiv")
             self.assertEqual(backend._daily_report_source(nested, root), "openalex")
 
+    def test_trend_prompt_templates_round_trip_with_bounded_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trend_prompt_templates.json"
+            with patch.object(backend, "TREND_PROMPT_TEMPLATES_PATH", path):
+                rows = backend.save_trend_prompt_template("量子计算", "关注实验进展")
+                self.assertEqual(rows, [{"name": "量子计算", "text": "关注实验进展"}])
+                self.assertEqual(
+                    backend.list_trend_prompt_templates(),
+                    [{"name": "量子计算", "text": "关注实验进展"}],
+                )
+                self.assertEqual(backend.delete_trend_prompt_template("量子计算"), [])
+                with self.assertRaisesRegex(backend.ModernWebUIError, "名称不能为空"):
+                    backend.save_trend_prompt_template("", "内容")
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
