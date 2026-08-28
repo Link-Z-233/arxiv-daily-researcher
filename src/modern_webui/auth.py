@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import threading
 import time
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ _HASH_SCHEME = "pbkdf2_sha256"
 _USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$")
 _ACCOUNTS_ENV_KEY = "WEBUI_ACCOUNTS"
 _MAX_MANAGED_ACCOUNTS = 20
+_PBKDF2_ITERATIONS = 600_000
 _ATTEMPT_WINDOW_SECONDS = 15 * 60
 _attempt_lock = threading.Lock()
 _attempt_state: dict[str, tuple[int, float, float]] = {}
@@ -158,6 +160,72 @@ def read_auth_config(env_values: Mapping[str, object]) -> AuthConfig:
 
 def _configured(config: AuthConfig) -> bool:
     return bool(config.accounts)
+
+
+def validate_username(username: object) -> str | None:
+    """Return a localized-safe validation message for a managed username."""
+    if not _USERNAME_PATTERN.fullmatch(str(username or "").strip()):
+        return "用户名须为 3–64 位字母、数字、`.`、`_` 或 `-`，且以字母或数字开头。"
+    return None
+
+
+def validate_password(password: object) -> str | None:
+    """Keep the modern panel aligned with the Streamlit six-character policy."""
+    if len(str(password or "")) < 6:
+        return "密码至少需要 6 个字符。"
+    return None
+
+
+def hash_password(password: str) -> str:
+    """Create the same PBKDF2 record used by the Streamlit account manager."""
+    if message := validate_password(password):
+        raise ValueError(message)
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS
+    )
+    return ":".join(
+        (
+            _HASH_SCHEME,
+            str(_PBKDF2_ITERATIONS),
+            base64.urlsafe_b64encode(salt).decode("ascii"),
+            base64.urlsafe_b64encode(digest).decode("ascii"),
+        )
+    )
+
+
+def serialize_accounts(accounts: tuple[Account, ...] | list[Account]) -> str:
+    """Encode a validated account registry into one dotenv-safe value."""
+    values = tuple(accounts)
+    if not values or len(values) > _MAX_MANAGED_ACCOUNTS:
+        raise ValueError("账户列表无效。")
+    owners = [account for account in values if account.is_owner]
+    if len(owners) != 1:
+        raise ValueError("账户列表必须包含一个所有者账户。")
+    seen: set[str] = set()
+    for account in values:
+        if (
+            validate_username(account.username)
+            or account.username in seen
+            or verify_password_hash(account.password_hash, "") is None
+        ):
+            raise ValueError("账户列表无效。")
+        seen.add(account.username)
+    payload = {
+        "v": 1,
+        "accounts": [
+            {"u": account.username, "p": account.password_hash, "o": account.is_owner}
+            for account in values
+        ],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def account_is_owner(config: AuthConfig, username: object) -> bool:
+    """Whether the authenticated account may manage the account registry."""
+    account = find_account(config, username)
+    return bool(account and account.is_owner)
 
 
 def find_account(config: AuthConfig, username: object) -> Optional[Account]:
