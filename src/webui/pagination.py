@@ -7,7 +7,7 @@ changing another tab's page or page-size selection.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence, TypeVar
 
 import streamlit as st
 
@@ -15,6 +15,7 @@ from webui.i18n import t
 
 
 PAGE_SIZES = (5, 10)
+Item = TypeVar("Item")
 
 
 def page_window(total: int, page: int, page_size: int) -> tuple[int, int, int, int]:
@@ -130,7 +131,7 @@ def render_paginated_dataframe(
     ui: Any = None,
     translate: Any = None,
     **dataframe_kwargs: Any,
-) -> None:
+) -> tuple[int, int]:
     """Render rows in 5/10-row pages with an independent navigation state."""
     active_ui = ui or st
     active_translate = translate or t
@@ -149,11 +150,12 @@ def render_paginated_dataframe(
         ui=active_ui,
         translate=active_translate,
     )
+    return start, end
 
 
 def render_paginated_table(
     table: Any, *, key: str, ui: Any = None, translate: Any = None
-) -> None:
+) -> tuple[int, int]:
     """Render a DataFrame-like table in 5/10-row pages without scroll frames."""
     active_ui = ui or st
     active_translate = translate or t
@@ -176,3 +178,34 @@ def render_paginated_table(
         ui=active_ui,
         translate=active_translate,
     )
+    return start, end
+
+
+def render_paginated_items(
+    items: Sequence[Item],
+    render_item: Callable[[Item], None],
+    *,
+    key: str,
+    ui: Any = None,
+    translate: Any = None,
+) -> tuple[int, int]:
+    """Render arbitrary repeated UI rows with the same 5/10-row controls."""
+    active_ui = ui or st
+    active_translate = translate or t
+    values = list(items)
+    start, end, page, pages = _pagination_state(
+        len(values), key, ui=active_ui, translate=active_translate
+    )
+    for item in values[start:end]:
+        render_item(item)
+    _render_page_controls(
+        total=len(values),
+        start=start,
+        end=end,
+        page=page,
+        pages=pages,
+        key=key,
+        ui=active_ui,
+        translate=active_translate,
+    )
+    return start, end

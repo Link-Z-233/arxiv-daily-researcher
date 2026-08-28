@@ -1718,8 +1718,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "单个学习关键词/作者的最大绝对权重，超出按此截断",
         "en": "Maximum absolute weight of a single learned keyword/author",
     },
-    "learned_library_keywords": {"zh": "学习关键词库（前 10）", "en": "Learned keywords (top 10)"},
-    "learned_library_authors": {"zh": "学习作者库（前 10）", "en": "Learned authors (top 10)"},
+    "learned_library_keywords": {"zh": "学习关键词库", "en": "Learned keywords"},
+    "learned_library_authors": {"zh": "学习作者库", "en": "Learned authors"},
+    "learned_term_col_term": {"zh": "词条", "en": "Term"},
+    "learned_term_col_weight": {"zh": "权重", "en": "Weight"},
     "learned_library_empty": {
         "zh": "学习库为空：标记收藏/不喜欢或运行几次 v1 评分后，这里会逐步出现带权重的关键词与作者。",
         "en": "The learned library is empty: mark likes/dislikes or run a few v1-scored days and weighted keywords/authors will accumulate here.",

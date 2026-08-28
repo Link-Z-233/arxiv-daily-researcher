@@ -2,10 +2,9 @@
 
 import streamlit as st
 from webui.i18n import t
+from webui.pagination import render_paginated_dataframe
 
 
-_MAX_VISIBLE_LIBRARY_ROWS = 10
-_LIBRARY_SCROLL_HEIGHT_PX = 320
 _STRATEGY_OPTIONS = (
     "core_relevance_v2",
     "legacy_weighted_keyword_v1",
@@ -219,17 +218,30 @@ def render(_env_values: dict, config_values: dict):
 
 
 
-def _render_learned_term_rows(terms: list[dict]) -> None:
-    """Render all learned terms, using a native scroll viewport after 10."""
-    def render_rows() -> None:
-        for row in terms:
-            st.markdown(f"- `{row['term']}` ({row['weight']:+.2f})")
+def _render_learned_term_rows(terms: list[dict], *, key: str) -> None:
+    """Render learned terms as a compact, independently paged table."""
 
-    if len(terms) > _MAX_VISIBLE_LIBRARY_ROWS:
-        with st.container(height=_LIBRARY_SCROLL_HEIGHT_PX, border=True):
-            render_rows()
-    else:
-        render_rows()
+    def formatted_weight(value: object) -> str:
+        try:
+            return f"{float(value):+.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    rows = [
+        {
+            t("learned_term_col_term"): str(row.get("term") or "—"),
+            t("learned_term_col_weight"): formatted_weight(row.get("weight")),
+        }
+        for row in terms
+    ]
+    render_paginated_dataframe(
+        rows,
+        key=key,
+        ui=st,
+        translate=t,
+        hide_index=True,
+        width="stretch",
+    )
 
 
 def _render_learned_library_summary(flat: dict):
@@ -243,7 +255,7 @@ def _render_learned_library_summary(flat: dict):
             st.caption(t("learned_library_empty"))
             return
         store = DailyResearchStore(db_path)
-        terms = store.get_learned_preference_terms(limit=30)
+        terms = store.get_learned_preference_terms(limit=200)
     except Exception:
         st.caption(t("learned_library_empty"))
         return
@@ -257,10 +269,10 @@ def _render_learned_library_summary(flat: dict):
     col_k, col_a = st.columns(2)
     with col_k:
         st.caption(t("learned_library_keywords"))
-        _render_learned_term_rows(keywords)
+        _render_learned_term_rows(keywords, key="learned_library_keywords")
     with col_a:
         st.caption(t("learned_library_authors"))
-        _render_learned_term_rows(authors)
+        _render_learned_term_rows(authors, key="learned_library_authors")
     st.caption(t("learned_library_note"))
 
 

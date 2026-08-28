@@ -9,11 +9,20 @@ from webui.tabs import favorites  # noqa: E402
 
 
 class _Context:
+    def __init__(self, parent=None):
+        self.parent = parent
+
     def __enter__(self):
         return self
 
     def __exit__(self, *_args):
         return False
+
+    def button(self, *_args, **_kwargs):
+        return False
+
+    def caption(self, *_args, **_kwargs):
+        return None
 
 
 class _FakeStreamlit:
@@ -21,9 +30,10 @@ class _FakeStreamlit:
         self.containers = []
         self.tables = []
         self.markdowns = []
+        self.session_state = {}
 
     def columns(self, count):
-        return [_Context() for _ in range(count)]
+        return [_Context() for _ in range(count if isinstance(count, int) else len(count))]
 
     def markdown(self, value, **_kwargs):
         self.markdowns.append(value)
@@ -37,6 +47,9 @@ class _FakeStreamlit:
 
     def table(self, value):
         self.tables.append(value)
+
+    def selectbox(self, _label, options, index=0, **_kwargs):
+        return options[index]
 
 
 class _Store:
@@ -61,22 +74,19 @@ class _FavoriteListStore:
 
 
 class FavoriteStatsTests(unittest.TestCase):
-    def test_long_statistics_keep_all_rows_in_native_scroll_containers(self):
+    def test_long_statistics_use_the_shared_five_ten_row_pager(self):
         fake_st = _FakeStreamlit()
 
-        with patch.object(favorites, "st", fake_st):
+        with (
+            patch.object(favorites, "st", fake_st),
+            patch.object(favorites, "t", side_effect=lambda key: key),
+        ):
             favorites._render_preference_stats(_Store())
 
-        self.assertEqual(
-            fake_st.containers,
-            [
-                {"height": favorites._TABLE_SCROLL_HEIGHT_PX, "border": True},
-                {"height": favorites._TABLE_SCROLL_HEIGHT_PX, "border": True},
-            ],
-        )
-        self.assertEqual([len(table) for table in fake_st.tables], [11, 11])
+        self.assertEqual(fake_st.containers, [])
+        self.assertEqual([len(table) for table in fake_st.tables], [5, 5])
 
-    def test_long_favorite_list_uses_a_ten_row_native_scroll_viewport(self):
+    def test_long_favorite_list_uses_the_same_five_ten_row_pager(self):
         fake_st = _FakeStreamlit()
         liked = [
             {
@@ -88,14 +98,14 @@ class FavoriteStatsTests(unittest.TestCase):
             for index in range(11)
         ]
 
-        with patch.object(favorites, "st", fake_st):
+        with (
+            patch.object(favorites, "st", fake_st),
+            patch.object(favorites, "t", side_effect=lambda key: key),
+        ):
             favorites._render_favorites_list(_FavoriteListStore(), liked)
 
-        self.assertEqual(
-            fake_st.containers,
-            [{"border": True, "height": favorites._LIST_SCROLL_HEIGHT_PX}],
-        )
-        self.assertEqual(len(fake_st.markdowns), 11)
+        self.assertEqual(fake_st.containers, [{"border": True}])
+        self.assertEqual(len(fake_st.markdowns), 5)
 
 
 if __name__ == "__main__":

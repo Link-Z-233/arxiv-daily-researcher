@@ -52,7 +52,7 @@ class _FakeColumn:
 
 
 class LongListViewportTests(unittest.TestCase):
-    def test_backup_history_keeps_every_row_inside_a_native_scroll_container(self):
+    def test_backup_history_uses_a_five_row_first_page_without_scroll_container(self):
         fake_st = _FakeStreamlit()
         backups = [
             {
@@ -68,26 +68,23 @@ class LongListViewportTests(unittest.TestCase):
         ):
             data_management._render_backup_list(backups)
 
-        self.assertEqual(
-            fake_st.containers,
-            [{"height": data_management._TABLE_SCROLL_HEIGHT_PX, "border": True}],
-        )
-        self.assertEqual(len(fake_st.tables[0]), 11)
+        self.assertEqual(fake_st.containers, [])
+        self.assertEqual(len(fake_st.tables[0]), 5)
 
-    def test_learned_preference_terms_do_not_drop_the_eleventh_row(self):
+    def test_learned_preference_terms_use_the_shared_first_page_policy(self):
         fake_st = _FakeStreamlit()
         terms = [
             {"term": f"term {index}", "weight": 1.0}
             for index in range(11)
         ]
-        with patch.object(scoring, "st", fake_st):
-            scoring._render_learned_term_rows(terms)
+        with (
+            patch.object(scoring, "st", fake_st),
+            patch.object(scoring, "t", side_effect=lambda key: key),
+        ):
+            scoring._render_learned_term_rows(terms, key="test_terms")
 
-        self.assertEqual(
-            fake_st.containers,
-            [{"height": scoring._LIBRARY_SCROLL_HEIGHT_PX, "border": True}],
-        )
-        self.assertEqual(len(fake_st.markdowns), 11)
+        self.assertEqual(fake_st.containers, [])
+        self.assertEqual(len(fake_st.dataframes[0][0]), 5)
 
     def test_analytics_tables_use_five_ten_row_paging_instead_of_scroll_frames(self):
         fake_st = _FakeStreamlit()

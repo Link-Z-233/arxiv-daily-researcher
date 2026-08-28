@@ -27,6 +27,7 @@ from extra_streamlit_components import CookieManager
 
 from utils.config_io import write_env
 from webui.i18n import t
+from webui.pagination import render_paginated_dataframe
 
 
 _HASH_SCHEME = "pbkdf2_sha256"
@@ -848,23 +849,27 @@ def render_account_management(env_values: Mapping[str, object]) -> None:
         return
 
     st.caption(f"**{t('auth_account_list_title')}**")
-    st.dataframe(
-        [
-            {
-                t("auth_account_col_username"): account.username,
-                t("auth_account_col_role"): t(
-                    "auth_account_role_owner"
-                    if account.is_owner
-                    else "auth_account_role_admin"
-                ),
-                t("auth_account_col_current"): (
-                    t("auth_account_current")
-                    if account.username == actor.username
-                    else "—"
-                ),
-            }
-            for account in accounts_for_config(config)
-        ],
+    account_rows = [
+        {
+            t("auth_account_col_username"): account.username,
+            t("auth_account_col_role"): t(
+                "auth_account_role_owner"
+                if account.is_owner
+                else "auth_account_role_admin"
+            ),
+            t("auth_account_col_current"): (
+                t("auth_account_current")
+                if account.username == actor.username
+                else "—"
+            ),
+        }
+        for account in accounts_for_config(config)
+    ]
+    render_paginated_dataframe(
+        account_rows,
+        key="account_management_accounts",
+        ui=st,
+        translate=t,
         hide_index=True,
         width="stretch",
     )

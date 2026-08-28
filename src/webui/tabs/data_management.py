@@ -11,6 +11,7 @@ import streamlit as st
 from pathlib import Path
 
 from webui.i18n import t
+from webui.pagination import render_paginated_dataframe, render_paginated_table
 from webui.secret_fields import render_secret_input, resolve_secret_value
 from webui.tabs.run_manager import _daily_db_path_from_config
 from utils.backup import (
@@ -40,8 +41,6 @@ DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "configs" / "config.json"
 DEFAULT_ENV_PATH = _PROJECT_ROOT / ".env"
 
 SECRET_FIELD_KEYS = ("webdav_password",)
-_MAX_VISIBLE_LIST_ROWS = 10
-_TABLE_SCROLL_HEIGHT_PX = 390
 _HISTORY_TASK_LIMIT = 40
 _HISTORY_TASK_MODES = frozenset(
     {"legacy_import", "history_data_repair", "history_omission_scan"}
@@ -725,13 +724,16 @@ def _render_history_pending_tasks(tasks: list[dict], config_values: dict) -> Non
         }
         for task in tasks
     ]
-    if len(rows) > _MAX_VISIBLE_LIST_ROWS:
-        with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
-            st.dataframe(rows, hide_index=True, width="stretch")
-    else:
-        st.dataframe(rows, hide_index=True, width="stretch")
+    start, end = render_paginated_dataframe(
+        rows,
+        key="history_maintenance_tasks",
+        ui=st,
+        translate=t,
+        hide_index=True,
+        width="stretch",
+    )
 
-    retryable = [task for task in tasks if task["retryable"]]
+    retryable = [task for task in tasks[start:end] if task["retryable"]]
     if not retryable:
         return
     st.caption(t("dm_task_retry_hint"))
@@ -1073,7 +1075,7 @@ def _list_backups(config_values: dict | None = None):
 
 
 def _render_backup_list(backups: list[dict]) -> None:
-    """Show every local backup, keeping the page viewport to ten rows."""
+    """Show local backups in independently paged five- or ten-row pages."""
     if not backups:
         st.caption(t("dm_backup_none"))
         return
@@ -1086,11 +1088,7 @@ def _render_backup_list(backups: list[dict]) -> None:
         }
         for item in backups
     ]
-    if len(rows) > _MAX_VISIBLE_LIST_ROWS:
-        with st.container(height=_TABLE_SCROLL_HEIGHT_PX, border=True):
-            st.table(rows)
-    else:
-        st.table(rows)
+    render_paginated_table(rows, key="local_backup_history", ui=st, translate=t)
 
 
 def _do_backup(env_values: dict, config_values: dict | None = None):
