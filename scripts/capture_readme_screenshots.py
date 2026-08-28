@@ -18,8 +18,17 @@ from pathlib import Path
 from playwright.sync_api import Page, sync_playwright
 
 
-BASE_URL = "http://127.0.0.1:8503"
-OUTPUT_DIR = Path(__file__).resolve().parents[1] / "assets"
+# Keep the checked-in defaults convenient for release documentation, while
+# allowing an isolated local container to be used for a privacy-safe preview.
+BASE_URL = os.environ.get(
+    "ADR_SCREENSHOT_BASE_URL", "http://127.0.0.1:8503"
+).rstrip("/")
+OUTPUT_DIR = Path(
+    os.environ.get(
+        "ADR_SCREENSHOT_OUTPUT_DIR",
+        str(Path(__file__).resolve().parents[1] / "assets"),
+    )
+)
 VIEWPORT = {"width": 1440, "height": 980}
 
 
@@ -60,14 +69,16 @@ def authenticate(page: Page) -> None:
     page.get_by_label(re.compile("^(用户名|Username)$")).fill(username)
     page.get_by_label(re.compile("^(密码|Password)$")).fill(password)
     page.get_by_role("button", name=re.compile("^(登录|Sign in)$")).click()
-    page.get_by_role("tab", name=re.compile("^(每日推送|Daily Push)$")).wait_for(
-        timeout=30_000
-    )
+    page.locator('section[data-testid="stSidebar"]').get_by_role(
+        "button", name=re.compile("每日研究|Daily Research")
+    ).wait_for(timeout=30_000)
     wait_for_streamlit(page)
 
 
-def show_tab(page: Page, label: str) -> None:
-    page.get_by_role("tab", name=re.compile(f"^{re.escape(label)}$")).click()
+def show_page(page: Page, label: str) -> None:
+    """Open one sidebar workflow page in the current vertical navigation."""
+    sidebar = page.locator('section[data-testid="stSidebar"]')
+    sidebar.get_by_role("button", name=label, exact=True).click()
     wait_for_streamlit(page)
     page.evaluate("window.scrollTo(0, 0)")
     page.wait_for_timeout(250)
@@ -76,12 +87,6 @@ def show_tab(page: Page, label: str) -> None:
 def capture(page: Page, filename: str) -> None:
     page.screenshot(path=str(OUTPUT_DIR / filename), full_page=False)
     print(f"captured {filename}")
-
-
-def hide_sidebar(page: Page) -> None:
-    page.locator('section[data-testid="stSidebar"]').evaluate(
-        "node => node.style.display = 'none'"
-    )
 
 
 def scroll_to_text(page: Page, label: str) -> None:
@@ -121,21 +126,19 @@ def main() -> int:
         wait_for_streamlit(page, timeout_seconds=60)
         authenticate(page)
 
-        # Keeping the main content wide makes README images legible while
-        # avoiding the sidebar's runtime controls and local-version text.
-        hide_sidebar(page)
-
-        show_tab(page, "每日推送")
+        # The current sidebar is part of the documented interface. The
+        # isolated capture profile uses no secrets, so it can remain visible.
+        show_page(page, "🚀 每日研究")
         capture(page, "webui_daily_push_v4.png")
 
-        show_tab(page, "数据分析")
+        show_page(page, "📊 数据分析")
         scroll_to_text(page, "LLM 健康")
         capture(page, "webui_analytics_v4.png")
 
-        show_tab(page, "评分")
+        show_page(page, "⚖️ 评分")
         capture(page, "webui_scoring_v4.png")
 
-        show_tab(page, "数据管理")
+        show_page(page, "☁️ 备份与同步")
         isolate_section(page, "数据库备份", keep_following=4)
         scroll_to_text(page, "数据库备份")
         page.set_viewport_size({"width": VIEWPORT["width"], "height": 540})
@@ -144,8 +147,7 @@ def main() -> int:
         page.set_viewport_size(VIEWPORT)
         page.reload(wait_until="domcontentloaded", timeout=30_000)
         wait_for_streamlit(page)
-        hide_sidebar(page)
-        show_tab(page, "数据管理")
+        show_page(page, "🗂 历史维护")
         isolate_section(page, "旧版本历史导入", keep_following=2)
         scroll_to_text(page, "旧版本历史导入")
         page.set_viewport_size({"width": VIEWPORT["width"], "height": 360})
