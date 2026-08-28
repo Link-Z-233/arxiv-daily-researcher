@@ -37,8 +37,8 @@ _MAX_VISIBLE_LIST_ROWS = 10
 _TABLE_SCROLL_HEIGHT_PX = 390
 
 
-def render(env_values: dict, config_values: dict):
-    """渲染数据管理 Tab。"""
+def render_backup_sync(env_values: dict, config_values: dict) -> None:
+    """Render configuration export, WebDAV sync, and local SQLite backups."""
     flat = config_values
 
     # ==================== 配置导出 ====================
@@ -322,7 +322,17 @@ def render(env_values: dict, config_values: dict):
 
     _render_backup_list(_list_backups(flat))
 
+
+def render_history_maintenance(_env_values: dict, config_values: dict) -> None:
+    """Render legacy import and SQLite-backed history maintenance controls."""
     _render_legacy_import_section(config_values)
+
+
+def render(env_values: dict, config_values: dict) -> None:
+    """Backward-compatible composite view for the former data-management tab."""
+    render_backup_sync(env_values, config_values)
+    st.divider()
+    render_history_maintenance(env_values, config_values)
 
 
 def _legacy_import_store(config_values: dict):

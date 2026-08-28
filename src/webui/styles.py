@@ -59,6 +59,35 @@ CUSTOM_CSS = """
     margin: 1rem 0;
 }
 
+/* Sidebar navigation: vertical tab-like buttons instead of radio controls. */
+[data-testid="stSidebar"] .sidebar-nav-group {
+    color: rgba(200,214,229,0.72) !important;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    margin: 1rem 0 0.25rem;
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button {
+    justify-content: flex-start;
+    min-height: 2.2rem;
+    border-radius: 8px;
+    border-color: rgba(255,255,255,0.10);
+    color: #eaf0f7;
+    font-size: 0.88rem;
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"] {
+    background: transparent;
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"]:hover {
+    background: rgba(255,255,255,0.10);
+    border-color: rgba(255,255,255,0.18);
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
+    background: linear-gradient(90deg, #667eea, #5a67d8);
+    border-color: transparent;
+    box-shadow: 0 4px 12px rgba(59, 73, 170, 0.28);
+}
+
 /* ==================== Form Elements ==================== */
 .stTextInput > div > div > input,
 .stNumberInput > div > div > input,

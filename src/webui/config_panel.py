@@ -32,7 +32,10 @@ from utils.config_io import (
 from webui.styles import CUSTOM_CSS
 from webui.tabs import llm, search, keywords, scoring, notifications, advanced, reports
 from webui.tabs import favorites, run_manager, trend_runner, data_management
-from webui.tabs.analytics import render as render_analytics
+from webui.tabs.analytics import (
+    render_content as render_analytics,
+    render_diagnostics,
+)
 from webui.auth import require_authentication, render_account_controls
 from webui.i18n import t
 from webui.secret_fields import clear_secret_field_state
@@ -52,6 +55,54 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # Initialize language (default: Chinese)
 if "lang" not in st.session_state:
     st.session_state["lang"] = "zh"
+
+
+# Streamlit does not provide a native vertical tab bar. Sidebar buttons give
+# the same single-page behavior as tabs, while keeping the selector compact,
+# keyboard accessible, and free of radio-button circles.
+_NAVIGATION_GROUPS = (
+    (
+        "nav_group_run",
+        (
+            ("daily_research", "nav_daily_research"),
+            ("past_daily", "nav_past_daily"),
+            ("trend_tasks", "nav_trend_tasks"),
+            ("queue", "nav_queue"),
+            ("logs", "nav_logs"),
+        ),
+    ),
+    (
+        "nav_group_content",
+        (
+            ("reports", "nav_reports"),
+            ("favorites", "nav_favorites"),
+            ("paper_search", "nav_paper_search"),
+            ("analytics", "nav_analytics"),
+        ),
+    ),
+    (
+        "nav_group_config",
+        (
+            ("keywords", "nav_keywords"),
+            ("data_sources", "nav_data_sources"),
+            ("scoring", "nav_scoring"),
+            ("api", "nav_api"),
+            ("notifications", "nav_notifications"),
+            ("advanced", "nav_advanced"),
+        ),
+    ),
+    (
+        "nav_group_system",
+        (
+            ("backup_sync", "nav_backup_sync"),
+            ("history_tasks", "nav_history_tasks"),
+            ("diagnostics", "nav_diagnostics"),
+        ),
+    ),
+)
+_NAVIGATION_PAGE_IDS = {
+    page_id for _group, items in _NAVIGATION_GROUPS for page_id, _label in items
+}
 
 
 # ==================== Data Loading ====================
@@ -140,9 +191,30 @@ def do_save():
 # ==================== Sidebar ====================
 
 
+if st.session_state.get("webui_active_page") not in _NAVIGATION_PAGE_IDS:
+    st.session_state["webui_active_page"] = "daily_research"
+
+
 with st.sidebar:
     st.markdown("### ArXiv Daily Researcher")
     st.caption(t("sidebar_caption"))
+
+    for group_key, items in _NAVIGATION_GROUPS:
+        st.markdown(
+            f'<p class="sidebar-nav-group">{t(group_key)}</p>',
+            unsafe_allow_html=True,
+        )
+        for page_id, label_key in items:
+            active = st.session_state.get("webui_active_page") == page_id
+            if st.button(
+                t(label_key),
+                key=f"nav_{page_id}",
+                type="primary" if active else "secondary",
+                width="stretch",
+            ):
+                st.session_state["webui_active_page"] = page_id
+                st.rerun()
+
     st.divider()
 
     if st.button(t("save_btn"), type="primary", width="stretch", key="save_btn"):
@@ -206,40 +278,29 @@ with st.sidebar:
 env_values = load_env()
 config_values = load_config()
 
-# Render tabs
-tab_labels = [
-    t("tab_run_manager"),  # 运行管理
-    t("tab_reports"),  # 报告查看
-    t("tab_favorites"),  # 收藏与检索
-    t("tab_trend_runner"),  # 趋势分析
-    t("tab_keywords"),  # 关键词
-    t("tab_search"),  # 数据源
-    t("tab_scoring"),  # 评分
-    t("tab_analytics"),  # 数据分析
-    t("tab_notifications"),  # 通知
-    t("tab_data_management"),  # 数据管理
-    t("tab_llm"),  # API
-    t("tab_advanced"),  # 高级设置
-]
+# Sidebar navigation renders one focused page at a time. Every collect()
+# function falls back to the persisted configuration for widgets that have not
+# been visited in this session, so Save remains safe with lazy page rendering.
+pages = {
+    "daily_research": run_manager.render_daily_research,
+    "past_daily": run_manager.render_past_daily_reports,
+    "trend_tasks": trend_runner.render,
+    "queue": run_manager.render_queue,
+    "logs": run_manager.render_logs,
+    "reports": reports.render,
+    "favorites": favorites.render_favorites,
+    "paper_search": favorites.render_search,
+    "analytics": render_analytics,
+    "keywords": keywords.render,
+    "data_sources": search.render,
+    "scoring": scoring.render,
+    "api": llm.render,
+    "notifications": notifications.render,
+    "advanced": advanced.render,
+    "backup_sync": data_management.render_backup_sync,
+    "history_tasks": data_management.render_history_maintenance,
+    "diagnostics": render_diagnostics,
+}
 
-pages = [
-    run_manager.render,
-    reports.render,
-    favorites.render,
-    trend_runner.render,
-    keywords.render,
-    search.render,
-    scoring.render,
-    render_analytics,
-    notifications.render,
-    data_management.render,
-    llm.render,
-    advanced.render,
-]
-
-# 顶部 Tab 导航：所有页面常驻渲染，collect() 始终能读到会话状态；
-# 未浏览页面的控件以磁盘现值初始化，保存不会改写它们。
-tab_objects = st.tabs(tab_labels)
-for tab_object, page in zip(tab_objects, pages):
-    with tab_object:
-        page(env_values, config_values)
+active_page = st.session_state.get("webui_active_page", "daily_research")
+pages.get(active_page, run_manager.render_daily_research)(env_values, config_values)

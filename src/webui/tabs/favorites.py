@@ -87,8 +87,8 @@ def _render_preference_stats(store: DailyResearchStore) -> None:
             st.caption(t("fav_keywords_empty"))
 
 
-def render(env_values: dict, config_values: dict) -> None:
-    """渲染收藏与检索 Tab：收藏列表 + 关键词统计 + 论文检索。"""
+def render_favorites(_env_values: dict, config_values: dict) -> None:
+    """Render the read-only paper-preference view and its profile summaries."""
     st.markdown(f'<p class="hint-text">{t("fav_hint")}</p>', unsafe_allow_html=True)
 
     store = paper_search._open_store(config_values)
@@ -120,9 +120,17 @@ def render(env_values: dict, config_values: dict) -> None:
         st.divider()
         _render_preference_stats(store)
 
-    # ── 论文检索 ────────────────────────────────────────────────────────
-    st.divider()
+
+def render_search(env_values: dict, config_values: dict) -> None:
+    """Render the full SQLite paper search independently from favorites."""
     paper_search.render(env_values, config_values)
+
+
+def render(env_values: dict, config_values: dict) -> None:
+    """Backward-compatible composite view for the former combined tab."""
+    render_favorites(env_values, config_values)
+    st.divider()
+    render_search(env_values, config_values)
 
 
 def collect(_env_values: dict, _config_values: dict) -> dict:

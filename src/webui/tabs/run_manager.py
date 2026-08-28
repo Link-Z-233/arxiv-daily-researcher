@@ -46,6 +46,7 @@ _LIVE_LOG_TAIL_LINES = 80
 _LIVE_LOG_TAIL_HEIGHT_PX = 360
 # 进度面板用的配置快照：fragment 无法接收参数，经 session_state 传递
 _PROGRESS_CONFIG_KEY = "rm_status_config_values"
+_PROGRESS_SHOW_QUEUE_KEY = "rm_status_show_queue"
 
 # 阶段心跳 → i18n key（交付提交后 run 即终态，无独立 deliver 阶段）
 _PHASE_LABEL_KEYS = {
@@ -548,7 +549,11 @@ if hasattr(st, "fragment"):
     @st.fragment(run_every="5s")
     def _live_status_fragment() -> None:
         config_values = st.session_state.get(_PROGRESS_CONFIG_KEY) or {}
-        _render_status_snapshot(config_values)
+        show_queue = bool(st.session_state.get(_PROGRESS_SHOW_QUEUE_KEY, True))
+        if show_queue:
+            _render_status_snapshot(config_values)
+        else:
+            _render_status_snapshot(config_values, show_queue=False)
         # ``run_every`` is fixed when a fragment starts.  Once the task has
         # finished (and no newly submitted request is waiting for the worker),
         # rerun the app scope so the parent stops mounting this fragment;
@@ -558,7 +563,11 @@ if hasattr(st, "fragment"):
 else:  # Streamlit < 1.37：退化为静态渲染，功能不缺失。
     def _live_status_fragment() -> None:
         config_values = st.session_state.get(_PROGRESS_CONFIG_KEY) or {}
-        _render_status_snapshot(config_values)
+        show_queue = bool(st.session_state.get(_PROGRESS_SHOW_QUEUE_KEY, True))
+        if show_queue:
+            _render_status_snapshot(config_values)
+        else:
+            _render_status_snapshot(config_values, show_queue=False)
 
 
 def _render_run_control() -> None:
@@ -609,7 +618,7 @@ def _render_run_control() -> None:
             except Exception:
                 st.error(t("rm_launch_failed"))
 
-def _render_backfill_control(config_values: dict) -> None:
+def _render_backfill_control(config_values: dict, *, show_queue: bool = True) -> None:
     """Render the historical daily-report range queue before run status."""
     active_locks = _get_all_running_locks()
     trigger_age, trigger_pending, trigger_stale = _trigger_queue_state(active_locks)
@@ -695,7 +704,8 @@ def _render_backfill_control(config_values: dict) -> None:
             except Exception:
                 st.error(t("rm_launch_failed"))
 
-    _render_backfill_queue_summary(config_values)
+    if show_queue:
+        _render_backfill_queue_summary(config_values)
 
 
 def _render_backfill_queue_summary(config_values: dict) -> None:
@@ -766,10 +776,11 @@ def _daily_db_path_from_config(config_values: dict) -> Path:
 # ─── 状态面板 ────────────────────────────────────────────────────────────────
 
 
-def _render_status_snapshot(config_values: dict) -> None:
+def _render_status_snapshot(config_values: dict, *, show_queue: bool = True) -> None:
     """Render the status-card contents that need periodic updates."""
     _render_live_status_body()
-    _render_queue_metrics(config_values)
+    if show_queue:
+        _render_queue_metrics(config_values)
 
 
 def _status_needs_polling(active_locks: Optional[list[tuple[Path, Optional[int]]]] = None) -> bool:
@@ -789,11 +800,12 @@ def _status_needs_polling(active_locks: Optional[list[tuple[Path, Optional[int]]
     return trigger_pending
 
 
-def _render_status_panel(config_values: dict) -> None:
+def _render_status_panel(config_values: dict, *, show_queue: bool = True) -> None:
     """运行状态 + 待处理队列；运行中（含刚提交的接手阶段）自动刷新。"""
     # 进度面板运行在自动刷新的 fragment 里，无法直接接收这里的参数；
     # 把配置快照放进 session_state 供 fragment 每次重绘时读取。
     st.session_state[_PROGRESS_CONFIG_KEY] = dict(config_values or {})
+    st.session_state[_PROGRESS_SHOW_QUEUE_KEY] = show_queue
     auto_refresh = st.toggle(
         t("rm_auto_refresh"),
         value=st.session_state.get("rm_auto_refresh_on", True),
@@ -805,7 +817,10 @@ def _render_status_panel(config_values: dict) -> None:
         if auto_refresh and should_poll:
             _live_status_fragment()
         else:
-            _render_status_snapshot(config_values)
+            if show_queue:
+                _render_status_snapshot(config_values)
+            else:
+                _render_status_snapshot(config_values, show_queue=False)
 
 
 # ─── 日志查看器 ──────────────────────────────────────────────────────────────
@@ -977,40 +992,8 @@ def _render_queue_metrics(config_values: dict) -> None:
         st.metric(t("rm_queue_failed"), f"{counts['failed_retry']:,}")
 
 
-def render(_env_values: dict, config_values: dict) -> None:
-    flat = config_values
-
-    st.markdown(
-        f'<p class="section-title">🚀 {t("run_now_section_title")}</p>',
-        unsafe_allow_html=True,
-    )
-    _render_run_control()
-
-    st.divider()
-
-    # ── 状态面板 ──────────────────────────────────────────────────────────
-    st.markdown(
-        f'<p class="section-title">📊 {t("rm_status_panel_title")}</p>',
-        unsafe_allow_html=True,
-    )
-    _render_status_panel(config_values)
-
-    st.divider()
-
-    # ── 过去日报 ──────────────────────────────────────────────────────────
-    st.markdown(
-        f'<p class="section-title">🗓 {t("rm_backfill_section_title")}</p>',
-        unsafe_allow_html=True,
-    )
-    _render_backfill_control(config_values)
-
-    st.divider()
-
-    # ── 每日研究设置 ──────────────────────────────────────────────────────
-    st.markdown(
-        f'<p class="section-title">⚙️ {t("daily_research_settings_title")}</p>',
-        unsafe_allow_html=True,
-    )
+def _render_daily_research_settings(flat: dict) -> None:
+    """Render the low-frequency daily-run settings without crowding the landing page."""
     col_ds1, col_ds2, col_ds3 = st.columns(3)
     with col_ds1:
         st.toggle(
@@ -1057,7 +1040,73 @@ def render(_env_values: dict, config_values: dict) -> None:
             help=t("daily_run_time_help"),
         )
 
+
+def render_daily_research(_env_values: dict, config_values: dict) -> None:
+    """Daily landing page: launch controls, current status, and compact settings."""
+    st.markdown(
+        f'<p class="section-title">🚀 {t("run_now_section_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    _render_run_control()
+
     st.divider()
+    st.markdown(
+        f'<p class="section-title">📊 {t("rm_status_panel_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    # Queues live on their own page so the daily landing page stays focused
+    # on the job currently being launched or monitored.
+    _render_status_panel(config_values, show_queue=False)
+
+    # Daily timing/output switches are useful but do not belong in the first
+    # screen of a run console. Keep them available without making that screen
+    # feel like a configuration page.
+    with st.expander(t("daily_research_settings_title"), expanded=False):
+        _render_daily_research_settings(config_values)
+
+
+def render_past_daily_reports(_env_values: dict, config_values: dict) -> None:
+    """Render the durable past-date daily-report queue launcher."""
+    st.markdown(
+        f'<p class="section-title">🗓 {t("rm_backfill_section_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    _render_backfill_control(config_values, show_queue=False)
+
+
+def render_queue(_env_values: dict, config_values: dict) -> None:
+    """Render paper and past-date queue summaries in one operational page."""
+    st.markdown(
+        f'<p class="section-title">📋 {t("rm_queue_page_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    _render_queue_metrics(config_values)
+    st.divider()
+    st.markdown(
+        f'<p class="section-title">🗓 {t("rm_backfill_queue_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    _render_backfill_queue_summary(config_values)
+
+
+def render_logs(_env_values: dict, _config_values: dict) -> None:
+    """Render the shared 800px native-scroll run-log viewer."""
+    st.markdown(
+        f'<p class="section-title">📋 {t("run_log_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    _render_log_section()
+
+
+def render(_env_values: dict, config_values: dict) -> None:
+    """Backward-compatible composite view for integrations using the old tab."""
+    render_daily_research(_env_values, config_values)
+    st.divider()
+    render_past_daily_reports(_env_values, config_values)
+    st.divider()
+    render_queue(_env_values, config_values)
+    st.divider()
+    render_logs(_env_values, config_values)
 
     st.markdown(
         f'<p class="section-title">📋 {t("run_log_title")}</p>',

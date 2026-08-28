@@ -21,7 +21,7 @@ from utils.scoring_evaluation import (
 )
 from utils.source_registry import source_display_names
 from webui.i18n import t
-from webui.tabs.run_manager import _daily_db_path_from_config
+from webui.tabs.run_manager import _daily_db_path_from_config, render_logs
 
 # GitHub 风格的五档绿色色阶；0 档为无数据灰。
 _HEAT_LEVEL_COLORS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]
@@ -740,8 +740,8 @@ def _render_diagnostics_section(config_values: dict) -> None:
 # ─── 主渲染 ───────────────────────────────────────────────────────────────────
 
 
-def render(env_values: dict, config_values: dict) -> None:
-    """渲染数据分析 Tab：用量统计 → LLM 健康 → 数据源健康 → 运行诊断。"""
+def render_content(env_values: dict, config_values: dict) -> None:
+    """Render usage and health analysis, with the shared run-log viewer last."""
     _render_usage_section(env_values, config_values)
 
     st.divider()
@@ -751,4 +751,18 @@ def render(env_values: dict, config_values: dict) -> None:
     _render_source_health_section(env_values, config_values)
 
     st.divider()
+    # Logs are operational evidence for every health/usage finding. Keeping
+    # the existing native 800px viewer here avoids a second, divergent log UI.
+    render_logs(env_values, config_values)
+
+
+def render_diagnostics(_env_values: dict, config_values: dict) -> None:
+    """Render the compact system diagnostic page on its own."""
     _render_diagnostics_section(config_values)
+
+
+def render(env_values: dict, config_values: dict) -> None:
+    """Backward-compatible composite view for callers of the former tab."""
+    render_content(env_values, config_values)
+    st.divider()
+    render_diagnostics(env_values, config_values)
