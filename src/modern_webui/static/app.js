@@ -981,8 +981,17 @@ async function renderApi(_token) {
   root.innerHTML = `${pageHeader()}${llmSection("cheap", "低成本 LLM", "💸")}${divider()}${llmSection("smart", "高性能 LLM", "🧠")}${mineruSection()}${thirdPartySection()}`;
   bindCommon(root);
   $$("[data-test-llm]", root).forEach((button) => button.addEventListener("click", () => testLlm(button.dataset.testLlm)));
-  $("[data-test-mineru]", root)?.addEventListener("click", () => testConnection("mineru", {}, "mineru-test-result"));
-  $$("[data-test-third]", root).forEach((button) => button.addEventListener("click", () => testConnection(button.dataset.testThird, {}, `${button.dataset.testThird}-test-result`)));
+  $("[data-test-mineru]", root)?.addEventListener("click", () => testConnection("mineru", {
+    api_key: state.draft.env.MINERU_API_KEY,
+  }, "mineru-test-result"));
+  const thirdPartyKeys = {
+    openalex: "OPENALEX_API_KEY",
+    semantic_scholar: "SEMANTIC_SCHOLAR_API_KEY",
+  };
+  $$("[data-test-third]", root).forEach((button) => button.addEventListener("click", () => {
+    const kind = button.dataset.testThird;
+    testConnection(kind, { api_key: state.draft.env[thirdPartyKeys[kind]] }, `${kind}-test-result`);
+  }));
   $("#openalex-enabled", root)?.addEventListener("change", (event) => { state.draft.env.ENABLE_OPENALEX = event.target.checked ? "true" : "false"; renderPage(); });
   $("#semantic-enabled", root)?.addEventListener("change", (event) => { state.draft.env.ENABLE_SEMANTIC_SCHOLAR_TLDR = event.target.checked ? "true" : "false"; renderPage(); });
   ["cheap", "smart"].forEach((role) => $("#" + role + "-provider", root)?.addEventListener("change", (event) => {
