@@ -33,7 +33,6 @@ class WebUINavigationTests(unittest.TestCase):
                 "past_daily",
                 "trend_tasks",
                 "queue",
-                "logs",
                 "reports",
                 "favorites",
                 "paper_search",
@@ -47,6 +46,7 @@ class WebUINavigationTests(unittest.TestCase):
                 "backup_sync",
                 "history_tasks",
                 "diagnostics",
+                "logs",
             ],
         )
 

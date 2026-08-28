@@ -20,7 +20,6 @@ NAVIGATION_GROUPS: Final[tuple[NavigationGroup, ...]] = (
             ("past_daily", "nav_past_daily"),
             ("trend_tasks", "nav_trend_tasks"),
             ("queue", "nav_queue"),
-            ("logs", "nav_logs"),
         ),
     ),
     (
@@ -52,6 +51,7 @@ NAVIGATION_GROUPS: Final[tuple[NavigationGroup, ...]] = (
             ("backup_sync", "nav_backup_sync"),
             ("history_tasks", "nav_history_tasks"),
             ("diagnostics", "nav_diagnostics"),
+            ("logs", "nav_logs"),
         ),
     ),
 )
@@ -59,4 +59,3 @@ NAVIGATION_GROUPS: Final[tuple[NavigationGroup, ...]] = (
 NAVIGATION_GROUP_IDS: Final[frozenset[str]] = frozenset(
     group_id for group_id, _label_key, _items in NAVIGATION_GROUPS
 )
-
