@@ -226,8 +226,16 @@ function divider() { return '<div class="section-divider"></div>'; }
 
 function field(options) {
   const {
-    label, key, type = "text", scope = "config", fallback = "", help = "", min, max, step, options: choices = [], placeholder = "", rows = 4, redraw = false, required = false,
+    label, key, type = "text", scope = "config", fallback = "", help = "", min, max, step,
+    // Page renderers historically use ``choices``.  Accept ``options`` as
+    // well so the shared control remains clear for future callers rather
+    // than silently rendering an empty select element.
+    choices: suppliedChoices, options: optionChoices,
+    placeholder = "", rows = 4, redraw = false, required = false,
   } = options;
+  const choices = Array.isArray(suppliedChoices)
+    ? suppliedChoices
+    : (Array.isArray(optionChoices) ? optionChoices : []);
   const value = scope === "env" ? envValue(key, fallback) : configValue(key, fallback);
   const data = `data-field="${escapeAttribute(key)}" data-scope="${scope}"${redraw ? ' data-redraw="1"' : ""}`;
   const hint = help ? `<span class="field-help">${escapeHtml(help)}</span>` : "";
