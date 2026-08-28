@@ -883,7 +883,7 @@ async function renderDataSources(_token) {
 async function renderScoring(token) {
   const strategy = configValue("score_strategy", "core_relevance_v2");
   const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}${section("评分策略", `${field({ label: "策略", key: "score_strategy", type: "select", choices: [{ value: "core_relevance_v2", label: "核心相关度 V2" }, { value: "legacy_weighted_keyword_v1", label: "加权关键词 V1（兼容）" }, { value: "learned_preference_v1", label: "学习偏好 V1" }], fallback: "core_relevance_v2", redraw: true })}${strategyDescription(strategy)}${strategyQualificationNotice(strategy)}${renderStrategyFields(strategy)}${legacyFormulaPreview(strategy)}`, { icon: "🧮" })}${divider()}${renderAuthorBonus()}`;
+  root.innerHTML = `${pageHeader()}${section("评价策略", `<p class="hint-text">选择论文如何获得资格，以及通过后如何排序。新配置建议使用核心相关性 V2。</p>${field({ label: "评分策略", key: "score_strategy", type: "select", choices: [{ value: "core_relevance_v2", label: "核心相关性 V2（推荐）" }, { value: "legacy_weighted_keyword_v1", label: "加权关键词 V1（兼容）" }, { value: "learned_preference_v1", label: "偏好学习 V1（个性化）" }], fallback: "core_relevance_v2", redraw: true })}${strategyDescription(strategy)}${strategyQualificationNotice(strategy)}${renderStrategyFields(strategy)}${legacyFormulaPreview(strategy)}`, { icon: "🧮" })}${divider()}${renderAuthorBonus()}`;
   bindCommon(root);
   bindLegacyFormulaPreview(root, strategy);
   if (strategy === "learned_preference_v1") {
@@ -891,7 +891,11 @@ async function renderScoring(token) {
       const learned = await api("/api/learned-preferences");
       if (token !== state.renderToken) return;
       const host = $("#learned-library");
-      if (host) host.innerHTML = `<div class="form-grid two">${pagedTable("learned-keywords", [{ label: "关键词", key: "term" }, { label: "权重", value: (row) => Number(row.weight).toFixed(2) }], learned.keywords || [], { empty: "暂无学习关键词" })}${pagedTable("learned-authors", [{ label: "作者", key: "term" }, { label: "权重", value: (row) => Number(row.weight).toFixed(2) }], learned.authors || [], { empty: "暂无学习作者" })}</div>`;
+      const signedWeight = (row) => {
+        const value = Number(row.weight);
+        return Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(2)}` : "—";
+      };
+      if (host) host.innerHTML = `<div class="form-grid two"><div><p class="hint-text">学习关键词</p>${pagedTable("learned-keywords", [{ label: "关键词", key: "term" }, { label: "权重", value: signedWeight }], learned.keywords || [], { empty: "暂无学习关键词" })}</div><div><p class="hint-text">学习作者</p>${pagedTable("learned-authors", [{ label: "作者", key: "term" }, { label: "权重", value: signedWeight }], learned.authors || [], { empty: "暂无学习作者" })}</div></div><p class="hint-text">偏好项来自已保存的喜欢/不喜欢和历史记录；仅展示当前 SQLite 历史库中的结果。</p>`;
       bindPagers(root);
     } catch (error) { /* preference library is optional */ }
   }
@@ -900,8 +904,8 @@ async function renderScoring(token) {
 function strategyDescription(strategy) {
   const descriptions = {
     core_relevance_v2: "V2 先检查主关键词的内容相关度：加权平均分达到阈值，且至少一个主关键词达到强匹配分。参考关键词和专家作者仅用于排序，不能让无关论文通过。",
-    legacy_weighted_keyword_v1: "兼容旧版加权关键词公式：主关键词数量与权重共同计算通过分数。适合希望延续旧阈值行为的配置。",
-    learned_preference_v1: "在加权关键词资格基础上，将 👍/👎 形成的关键词和作者偏好作为受限排序信号。偏好不会绕过基础资格条件。",
+    legacy_weighted_keyword_v1: "将主关键词和参考关键词的得分按权重累加，再叠加专家作者加分；总分达到“基础分 + 权重系数 × 全部关键词总权重”即通过。参考词和作者加分同时影响资格与排序，适合复现旧报告或临时回退。",
+    learned_preference_v1: "以加权关键词 V1 为基础，再加入从喜欢/不喜欢和历史通过记录学习到的关键词、作者偏好。每个学习项先限幅再衰减，且已直接配置的关键词不会重复计算；学习项会改变总分，也可能改变资格。",
   };
   return `<p class="info-box">${escapeHtml(descriptions[strategy] || descriptions.core_relevance_v2)}</p>`;
 }
@@ -912,12 +916,13 @@ function strategyQualificationNotice(strategy) {
   const hasPrimary = Array.isArray(primary) ? primary.some((item) => String(item || "").trim()) : Boolean(String(primary || "").trim());
   if (hasPrimary) return "";
   return configValue("enable_reference_extraction", false)
-    ? '<p class="info-box">当前未设置主关键词。参考文献关键词可以参与排序，但 V2 不会仅凭参考词让论文通过资格筛选；添加主关键词后才能产生合格论文。</p>'
-    : '<p class="issue-box">V2 需要至少一个主关键词。请先在“关键词”页配置主关键词，否则没有论文能够通过资格筛选。</p>';
+    ? '<p class="info-box">尚未配置主关键词。此次运行会先从参考文献 PDF 提取可用关键词，并临时作为核心集合；若没有可用 PDF 或提取结果为空，运行会给出明确提示。</p>'
+    : '<p class="issue-box">尚未配置主关键词，且参考文献关键词提取未启用。运行无法开始；请添加主关键词，或启用提取并提供参考 PDF。</p>';
 }
 
 function renderStrategyFields(strategy) {
-  if (strategy === "core_relevance_v2") return `<div class="form-grid three">${field({ label: "加权平均相关度阈值", key: "core_relevance_threshold", type: "number", min: 0, max: 100, step: 0.5, fallback: 6 })}${field({ label: "主关键词强匹配最低分", key: "core_keyword_min_score", type: "number", min: 0, max: 100, step: 0.5, fallback: 7 })}${field({ label: "参考词排序权重", key: "reference_ranking_weight", type: "number", min: 0, max: 5, step: 0.05, fallback: 0.25 })}</div>${field({ label: "单关键词最高分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}`;
+  const maxKeywordScore = Math.max(1, Number(configValue("max_score_per_keyword", 10)) || 10);
+  if (strategy === "core_relevance_v2") return `<div class="form-grid three">${field({ label: "核心相关性门槛", key: "core_relevance_threshold", type: "number", min: 0, max: maxKeywordScore, step: 0.5, fallback: 6 })}${field({ label: "核心词强匹配门槛", key: "core_keyword_min_score", type: "number", min: 0, max: maxKeywordScore, step: 0.5, fallback: 7 })}${field({ label: "参考词排序系数", key: "reference_ranking_weight", type: "number", min: 0, max: 5, step: 0.05, fallback: 0.25, help: "仅影响已合格论文的排序，不参与是否推荐。" })}</div>${field({ label: "每个关键词最高得分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}`;
   if (strategy === "learned_preference_v1") return `<div class="form-grid two">${field({ label: "学习权重衰减", key: "learned_weight_dampening", type: "number", min: 0, max: 1, step: 0.05, fallback: 0.5 })}${field({ label: "学习词权重上限", key: "learned_term_weight_cap", type: "number", min: 0.1, max: 10, step: 0.1, fallback: 2 })}</div>${legacyStrategyFields()}<div id="learned-library"><div class="loading">正在读取偏好词库…</div></div>`;
   return legacyStrategyFields();
 }
@@ -959,7 +964,7 @@ function bindLegacyFormulaPreview(root, strategy) {
 
 function renderAuthorBonus() {
   const enabled = Boolean(configValue("enable_author_bonus", false));
-  return section("作者偏好", `${field({ label: "启用专家作者排序加分", key: "enable_author_bonus", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "专家作者（每行一位）", key: "expert_authors", type: "lines", rows: 6, fallback: [] })}${field({ label: "加分", key: "author_bonus_points", type: "number", min: 0, max: 50, step: 0.5, fallback: 5 })}</div>` : '<p class="hint-text">作者偏好可帮助排序，不会令无关论文通过资格筛选。</p>'}`, { icon: "👤" });
+  return section("作者加分", `<p class="hint-text">给指定作者的论文额外加分。</p>${field({ label: "启用作者加分", key: "enable_author_bonus", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid author-bonus-grid">${field({ label: "专家作者（每行一位）", key: "expert_authors", type: "lines", rows: 6, fallback: [] })}${field({ label: "加分", key: "author_bonus_points", type: "number", min: 0, max: 50, step: 0.5, fallback: 5 })}</div>` : ""}`, { icon: "👤" });
 }
 
 function llmSection(role, title, icon) {
