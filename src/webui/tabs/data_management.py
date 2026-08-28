@@ -56,6 +56,12 @@ _HISTORY_RUN_KIND_BY_MODE = {
     "history_data_repair": "history_data_repair",
     "history_omission_scan": "history_omission_scan",
 }
+_HISTORY_TASK_LIVE_STATES = frozenset({"queued", "starting", "running"})
+_HISTORY_TASK_RETRY_STATES = frozenset(
+    {"failed", "rejected", "interrupted", "skipped_busy"}
+)
+_HISTORY_STATUS_CONFIG_KEY = "dm_history_status_config_values"
+_HISTORY_STATUS_AUTO_REFRESH_KEY = "dm_history_status_auto_refresh_on"
 
 
 def render_backup_sync(env_values: dict, config_values: dict) -> None:
@@ -345,10 +351,14 @@ def render_backup_sync(env_values: dict, config_values: dict) -> None:
 
 
 def render_history_maintenance(_env_values: dict, config_values: dict) -> None:
-    """Render the legacy-import launch point before its task/status audit."""
+    """Render legacy-import controls followed by the focused status panel."""
     _render_legacy_import_section(config_values)
     st.divider()
-    _render_history_task_list(config_values)
+    st.markdown(
+        f'<p class="section-title">📊 {t("dm_history_status_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    _render_history_status_panel(config_values)
 
 
 def render(env_values: dict, config_values: dict) -> None:
@@ -568,36 +578,156 @@ def _read_history_task_records(
         row["progress"] = _history_task_phase_text(
             str(row["mode"]), str(row["state"]), live_store
         )
-        row["retryable"] = row["state"] in {
-            "failed", "rejected", "interrupted", "skipped_busy"
-        }
+        row["retryable"] = row["state"] in _HISTORY_TASK_RETRY_STATES
     return rows[: max(1, limit)]
 
 
-def _render_history_task_list(config_values: dict) -> None:
-    """Render a compact, retryable audit of WebUI history-maintenance tasks."""
-    st.markdown(
-        f'<p class="section-title">🗂 {t("dm_history_task_list_title")}</p>',
-        unsafe_allow_html=True,
+def _history_task_state_label(task: dict) -> str:
+    """Translate a stored trigger state without making unknown states opaque."""
+    state = str(task.get("state") or "unknown")
+    key = f"dm_task_state_{state}"
+    return t(key) if key in _KNOWN_I18N_TASK_STATE_KEYS else state
+
+
+def _unfinished_history_tasks(config_values: dict, *, store=None) -> list[dict]:
+    """Return only live or actionable history jobs, never the completed audit."""
+    return [
+        task
+        for task in _read_history_task_records(config_values, store=store)
+        if str(task.get("state") or "") != "succeeded"
+    ]
+
+
+def _history_status_needs_polling(tasks: list[dict]) -> bool:
+    """Keep the history panel live while the worker owns or awaits a task."""
+    return any(
+        str(task.get("state") or "") in _HISTORY_TASK_LIVE_STATES
+        for task in tasks
     )
-    st.markdown(
-        f'<p class="hint-text">{t("dm_history_task_list_hint")}</p>',
-        unsafe_allow_html=True,
+
+
+def _read_legacy_import_summary(store) -> dict | None:
+    """Read the compact durable import result without exposing raw history data."""
+    if store is None:
+        return None
+    try:
+        raw = store.get_app_state(LEGACY_IMPORT_STATE_KEY)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        summary = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return summary if isinstance(summary, dict) else None
+
+
+def _summary_count(summary: dict, key: str, fallback: int = 0) -> int:
+    """Format persisted counters defensively for the status-card metrics."""
+    value = summary.get(key, fallback)
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, int(fallback))
+
+
+def _render_last_import_result(store) -> None:
+    """Render the latest durable legacy-import result as a compact status card."""
+    summary = _read_legacy_import_summary(store)
+    if summary is None:
+        st.caption(t("dm_legacy_none"))
+        return
+
+    finished = _format_history_task_time(summary.get("finished_at"))
+    mode = t(
+        "dm_legacy_mode_full"
+        if summary.get("full_repair_enabled")
+        else "dm_legacy_mode_light"
     )
-    tasks = _read_history_task_records(config_values)
+    st.markdown(f"**{t('dm_legacy_summary_title')}**")
+    st.caption(t("dm_history_summary_meta").format(finished=finished, mode=mode))
+
+    reports_col, cards_col, delivered_col, backlog_col = st.columns(4)
+    with reports_col:
+        st.metric(t("dm_history_summary_reports"), _summary_count(summary, "reports_scanned"))
+    with cards_col:
+        st.metric(
+            t("dm_history_summary_cards"),
+            _summary_count(
+                summary,
+                "cards_selected",
+                _summary_count(summary, "cards_found"),
+            ),
+        )
+    with delivered_col:
+        st.metric(
+            t("dm_history_summary_delivered"),
+            _summary_count(summary, "delivered_ledger_rows"),
+        )
+    with backlog_col:
+        st.metric(t("dm_history_summary_backlog"), _summary_count(summary, "backlog_queued"))
+
+    missing_cards = _summary_count(summary, "missing_cards")
+    missing_tldr = _summary_count(summary, "missing_tldr")
+    missing_translation = _summary_count(summary, "missing_translation")
+    missing_analysis = _summary_count(summary, "missing_analysis")
+    if any((missing_cards, missing_tldr, missing_translation, missing_analysis)):
+        st.caption(
+            t("dm_history_summary_missing").format(
+                cards=missing_cards,
+                tldr=missing_tldr,
+                translation=missing_translation,
+                analysis=missing_analysis,
+            )
+        )
+
+    source_breakdown = summary.get("source_breakdown")
+    if isinstance(source_breakdown, dict) and source_breakdown:
+        source_text = " · ".join(
+            f"{source}: {count}"
+            for source, count in sorted(source_breakdown.items())
+            if isinstance(source, str)
+        )
+        if source_text:
+            st.caption(t("dm_legacy_source_breakdown").format(sources=source_text))
+
+
+def _render_history_live_state(tasks: list[dict]) -> bool:
+    """Render the active history workflow first; return whether one is live."""
+    live = [
+        task
+        for task in tasks
+        if str(task.get("state") or "") in _HISTORY_TASK_LIVE_STATES
+    ]
+    if not live:
+        return False
+
+    rank = {"running": 0, "starting": 1, "queued": 2}
+    task = min(live, key=lambda item: rank.get(str(item.get("state") or ""), 3))
+    state = str(task.get("state") or "")
+    marker = "🟢" if state == "running" else "🟡"
+    st.markdown(f"**{marker} {_history_task_state_label(task)}** · {task['label']}")
+    st.caption(task.get("progress") or t("dm_task_progress_running"))
+    started = _format_history_task_time(task.get("started_at"))
+    if started != "—":
+        st.caption(t("dm_history_status_started").format(started=started))
+    return True
+
+
+def _render_history_pending_tasks(tasks: list[dict], config_values: dict) -> None:
+    """Show only unfinished work and keep retry actions next to the problem."""
+    st.caption(f"📋 **{t('dm_history_pending_title')}**")
     if not tasks:
-        st.caption(t("dm_history_task_list_empty"))
+        st.caption(t("dm_history_pending_empty"))
         return
 
     rows = [
         {
             t("dm_task_col_name"): task["label"],
-            t("dm_task_col_state"): t(f"dm_task_state_{task['state']}")
-            if f"dm_task_state_{task['state']}" in _KNOWN_I18N_TASK_STATE_KEYS
-            else str(task["state"]),
+            t("dm_task_col_state"): _history_task_state_label(task),
             t("dm_task_col_progress"): task["progress"],
             t("dm_task_col_started"): _format_history_task_time(task["started_at"]),
-            t("dm_task_col_completed"): _format_history_task_time(task["completed_at"]),
             t("dm_task_col_issue"): task["issue"] or "—",
         }
         for task in tasks
@@ -623,6 +753,52 @@ def _render_history_task_list(config_values: dict) -> None:
             width="stretch",
         ):
             _retry_history_task(task, config_values)
+
+
+def _render_history_status_body(config_values: dict) -> list[dict]:
+    """Render one immutable snapshot of history maintenance state and work."""
+    store = _legacy_import_store(config_values)
+    tasks = _unfinished_history_tasks(config_values, store=store)
+    if not _render_history_live_state(tasks):
+        retry_count = sum(1 for task in tasks if task.get("retryable"))
+        if retry_count:
+            st.warning(t("dm_history_status_attention").format(count=retry_count))
+        else:
+            st.success(t("dm_history_status_idle"))
+        _render_last_import_result(store)
+    st.divider()
+    _render_history_pending_tasks(tasks, config_values)
+    return tasks
+
+
+def _render_history_status_panel(config_values: dict) -> None:
+    """Render a daily-style status card with short-lived automatic refresh."""
+    st.session_state[_HISTORY_STATUS_CONFIG_KEY] = dict(config_values or {})
+    auto_refresh = st.toggle(
+        t("rm_auto_refresh"),
+        value=st.session_state.get(_HISTORY_STATUS_AUTO_REFRESH_KEY, True),
+        key=_HISTORY_STATUS_AUTO_REFRESH_KEY,
+        help=t("dm_history_auto_refresh_help"),
+    )
+    tasks = _unfinished_history_tasks(config_values)
+    with st.container(border=True):
+        if auto_refresh and _history_status_needs_polling(tasks):
+            _live_history_status_fragment()
+        else:
+            _render_history_status_body(config_values)
+
+
+if hasattr(st, "fragment"):
+    @st.fragment(run_every="5s")
+    def _live_history_status_fragment() -> None:
+        config_values = st.session_state.get(_HISTORY_STATUS_CONFIG_KEY) or {}
+        tasks = _render_history_status_body(config_values)
+        if not _history_status_needs_polling(tasks):
+            st.rerun()
+else:  # Streamlit < 1.37 keeps a static but complete status card.
+    def _live_history_status_fragment() -> None:
+        config_values = st.session_state.get(_HISTORY_STATUS_CONFIG_KEY) or {}
+        _render_history_status_body(config_values)
 
 
 def _retry_history_task(task: dict, config_values: dict) -> None:
@@ -667,8 +843,6 @@ _KNOWN_I18N_TASK_STATE_KEYS = frozenset(
 
 def _render_legacy_import_section(config_values: dict) -> None:
     """v3.2 importer plus independent SQLite repair/omission workflows."""
-    import json as json_module
-
     # ==================== 旧版本历史导入 ====================
     st.markdown(
         f'<p class="section-title">📜 {t("dm_legacy_title")}</p>',
@@ -706,9 +880,6 @@ def _render_legacy_import_section(config_values: dict) -> None:
     ):
         _enqueue_legacy_import(full_repair_enabled)
 
-    if legacy_pending:
-        st.info(t("dm_legacy_running_hint"))
-
     st.caption(f"**{t('dm_history_maintenance_title')}**")
     repair_pending = _history_task_already_queued(queue_dir, "history_data_repair")
     omission_pending = _history_task_already_queued(queue_dir, "history_omission_scan")
@@ -729,146 +900,6 @@ def _render_legacy_import_section(config_values: dict) -> None:
             disabled=omission_pending,
         ):
             _enqueue_history_task("history_omission_scan", "dm_history_omission_queued")
-    if repair_pending or omission_pending:
-        active = []
-        if repair_pending:
-            active.append(t("dm_history_repair_short"))
-        if omission_pending:
-            active.append(t("dm_history_omission_short"))
-        st.info(t("dm_history_task_running_hint").format(tasks="、".join(active)))
-
-    store = _legacy_import_store(config_values)
-    if store is None:
-        return
-
-    try:
-        summary_raw = store.get_app_state(LEGACY_IMPORT_STATE_KEY)
-    except Exception:
-        summary_raw = None
-    if summary_raw:
-        try:
-            summary = json_module.loads(summary_raw)
-        except ValueError:
-            summary = None
-        if isinstance(summary, dict):
-            st.caption(f"**{t('dm_legacy_summary_title')}**")
-            finished = str(summary.get("finished_at") or "")[:19].replace("T", " ")
-            mode_label = t(
-                "dm_legacy_mode_full"
-                if summary.get("full_repair_enabled")
-                else "dm_legacy_mode_light"
-            )
-            st.caption(
-                t("dm_legacy_summary_line").format(
-                    finished=finished or "—",
-                    mode=mode_label,
-                    reports=summary.get("reports_scanned", 0),
-                    cards=summary.get("cards_selected", summary.get("cards_found", 0)),
-                    delivered=summary.get("delivered_ledger_rows", 0),
-                    missing_cards=summary.get("missing_cards", 0),
-                    missing_tldr=summary.get("missing_tldr", 0),
-                    missing_translation=summary.get("missing_translation", 0),
-                    missing_analysis=summary.get("missing_analysis", 0),
-                    backlog=summary.get("backlog_queued", 0),
-                )
-            )
-            source_breakdown = summary.get("source_breakdown")
-            if isinstance(source_breakdown, dict) and source_breakdown:
-                source_text = " · ".join(
-                    f"{source}: {count}"
-                    for source, count in sorted(source_breakdown.items())
-                    if isinstance(source, str)
-                )
-                if source_text:
-                    st.caption(
-                        t("dm_legacy_source_breakdown").format(sources=source_text)
-                    )
-            repair = summary.get("history_repair")
-            if isinstance(repair, dict):
-                st.caption(
-                    t("dm_history_repair_line").format(
-                        state=repair.get("state", "—"),
-                        candidates=repair.get("candidates", 0),
-                        tldr=(repair.get("repaired") or {}).get("tldr", 0),
-                        translation=(repair.get("repaired") or {}).get("translation", 0),
-                        analysis=(repair.get("repaired") or {}).get("analysis", 0),
-                        pending=repair.get("pending_after", 0),
-                    )
-                )
-            supplement = summary.get("supplement")
-            if isinstance(supplement, dict):
-                st.caption(
-                    t("dm_legacy_supplement_line").format(
-                        state=supplement.get("state", "—"),
-                        processed=supplement.get("processed", 0),
-                        pending=supplement.get(
-                            "pending_after", supplement.get("pending_before", 0)
-                        ),
-                    )
-                )
-            omission = summary.get("omission_scan")
-            if isinstance(omission, dict):
-                scan = omission.get("scan") if isinstance(omission.get("scan"), dict) else {}
-                st.caption(
-                    t("dm_history_omission_line").format(
-                        state=omission.get("state", "—"),
-                        found=scan.get("missed_found", 0),
-                        weeks=len(omission.get("weeks") or []),
-                        pending=omission.get("pending_after", 0),
-                    )
-                )
-            report_keywords = summary.get("report_keywords")
-            if isinstance(report_keywords, dict):
-                state = str(report_keywords.get("state") or "html_only")
-                state_key = {
-                    "html_only": "dm_report_keywords_state_html_only",
-                    "not_needed": "dm_report_keywords_state_not_needed",
-                    "supplemented": "dm_report_keywords_state_supplemented",
-                    "no_matching_records": "dm_report_keywords_state_no_matching",
-                    "not_found": "dm_report_keywords_state_not_found",
-                    "not_configured": "dm_report_keywords_state_not_configured",
-                    "unreadable": "dm_report_keywords_state_unreadable",
-                    "unsupported_schema": "dm_report_keywords_state_unsupported",
-                }.get(state)
-                state_label = t(state_key) if state_key else state
-                st.caption(
-                    t("dm_report_keywords_line").format(
-                        state=state_label,
-                        html_papers=report_keywords.get("html_papers", 0),
-                        html_terms=report_keywords.get("html_terms", 0),
-                        fallback_papers=report_keywords.get("fallback_papers", 0),
-                        fallback_terms=report_keywords.get("fallback_terms", 0),
-                    )
-                )
-            elif isinstance(summary.get("legacy_keywords"), dict):
-                # v4.0 summaries remain readable after upgrade. A new import
-                # replaces this with the report-scoped v4.1 keyword summary.
-                st.caption(t("dm_report_keywords_legacy_summary"))
-    else:
-        st.caption(t("dm_legacy_none"))
-
-    try:
-        backlog = store.supplement_backlog_summary()
-    except Exception:
-        backlog = None
-    if backlog and backlog.get("pending"):
-        breakdown = backlog.get("breakdown", {})
-        missing = sum(
-            counts.get("pending", 0) + counts.get("failed", 0)
-            for reason, counts in breakdown.items()
-            if reason != "missed_scan"
-        )
-        missed = sum(
-            counts.get("pending", 0) + counts.get("failed", 0)
-            for reason, counts in breakdown.items()
-            if reason == "missed_scan"
-        )
-        st.caption(f"**{t('dm_legacy_backlog_title')}**")
-        st.caption(
-            t("dm_legacy_backlog_line").format(
-                pending=backlog.get("pending", 0), missing=missing, missed=missed
-            )
-        )
 
 
 def _enqueue_legacy_import(full_repair: bool) -> None:

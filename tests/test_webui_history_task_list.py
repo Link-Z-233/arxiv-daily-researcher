@@ -22,6 +22,23 @@ class _ProgressStore:
 
 
 class HistoryTaskListTests(unittest.TestCase):
+    def test_unfinished_view_hides_completed_receipts_but_keeps_retryable_work(self):
+        records = [
+            {"state": "succeeded", "request_id": "done"},
+            {"state": "queued", "request_id": "waiting"},
+            {"state": "failed", "request_id": "retry"},
+        ]
+        with patch.object(data_management, "_read_history_task_records", return_value=records):
+            visible = data_management._unfinished_history_tasks({})
+
+        self.assertEqual([item["request_id"] for item in visible], ["waiting", "retry"])
+        self.assertTrue(data_management._history_status_needs_polling(visible))
+        self.assertFalse(
+            data_management._history_status_needs_polling(
+                [{"state": "failed", "request_id": "retry"}]
+            )
+        )
+
     def test_task_list_reads_queued_and_failed_receipts_with_sanitized_issue(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"

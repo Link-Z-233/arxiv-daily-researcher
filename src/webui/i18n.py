@@ -1513,7 +1513,38 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "zh": "尚未导入过旧历史。",
         "en": "Legacy history has not been imported yet.",
     },
+    "dm_history_status_title": {"zh": "状态面板", "en": "Status Panel"},
+    "dm_history_auto_refresh_help": {
+        "zh": "开启后，仅在历史导入、数据补全或遗漏扫描排队、启动和运行期间每 5 秒刷新；任务结束后自动停止刷新。",
+        "en": "When enabled, this panel refreshes every 5 seconds only while a history import, repair, or omission scan is queued, starting, or running. It stops automatically after work finishes.",
+    },
+    "dm_history_status_idle": {
+        "zh": "当前没有进行中的历史维护任务。",
+        "en": "No history-maintenance task is currently running.",
+    },
+    "dm_history_status_attention": {
+        "zh": "有 {count} 个历史维护任务需要处理或重试。",
+        "en": "{count} history-maintenance task(s) need attention or retry.",
+    },
+    "dm_history_status_started": {"zh": "开始时间：{started}", "en": "Started: {started}"},
+    "dm_history_pending_title": {"zh": "未完成任务", "en": "Unfinished Tasks"},
+    "dm_history_pending_empty": {
+        "zh": "当前没有未完成的历史维护任务。",
+        "en": "There are no unfinished history-maintenance tasks.",
+    },
     "dm_legacy_summary_title": {"zh": "最近一次导入结果", "en": "Last import result"},
+    "dm_history_summary_meta": {
+        "zh": "完成时间：{finished} · 模式：{mode}",
+        "en": "Finished: {finished} · mode: {mode}",
+    },
+    "dm_history_summary_reports": {"zh": "报告", "en": "Reports"},
+    "dm_history_summary_cards": {"zh": "论文卡片", "en": "Paper cards"},
+    "dm_history_summary_delivered": {"zh": "交付记录", "en": "Deliveries"},
+    "dm_history_summary_backlog": {"zh": "待补充", "en": "Backlog"},
+    "dm_history_summary_missing": {
+        "zh": "发现缺失：卡片 {cards} · TL;DR {tldr} · 翻译 {translation} · 分析 {analysis}",
+        "en": "Missing data: cards {cards} · TL;DR {tldr} · translations {translation} · analyses {analysis}",
+    },
     "dm_legacy_summary_line": {
         "zh": "{finished} · {mode} · 报告 {reports} 份 · 卡片 {cards} 张 · 交付账本 {delivered} 条 · 缺卡片 {missing_cards} · 缺 TL;DR {missing_tldr} · 缺翻译 {missing_translation} · 缺分析 {missing_analysis} · 积压 {backlog} 条",
         "en": "{finished} · {mode} · {reports} reports · {cards} cards · {delivered} deliveries · missing cards {missing_cards} · missing TL;DR {missing_tldr} · missing translations {missing_translation} · missing analyses {missing_analysis} · backlog {backlog}",
