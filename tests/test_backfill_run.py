@@ -161,6 +161,10 @@ class BackfillPipelineTests(unittest.TestCase):
                 "TOKEN_TRACKING_ENABLED": False,
                 "DAILY_RESEARCH_DB_PATH": db_path,
                 "ENABLE_NOTIFICATIONS": False,
+                # A pipeline regression test owns only its temporary SQLite
+                # database and report folder; it must not create snapshots
+                # under a developer's configured data directory.
+                "BACKUP_ENABLED": False,
                 "ENABLED_SOURCES": ["arxiv", "prl"],
                 "TARGET_DOMAINS": ["quant-ph"],
                 "TARGET_JOURNALS": [],
