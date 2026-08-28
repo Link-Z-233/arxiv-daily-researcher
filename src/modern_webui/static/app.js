@@ -44,10 +44,10 @@ function showAuth(status) {
   $("#auth").hidden = false;
   const hint = $("#auth-hint");
   if (!status.configured) {
-    hint.textContent = "请先在现有 Streamlit 面板完成管理员账户初始化，再使用此预览界面登录。";
+    hint.textContent = "请先在现有 Streamlit 面板完成账户初始化，再使用此预览界面登录。";
     $("#login-form").hidden = true;
   } else {
-    hint.textContent = "使用与 Streamlit 面板相同的管理员账户。";
+    hint.textContent = "使用与 Streamlit 面板相同的账户登录。";
     $("#login-form").hidden = false;
   }
 }

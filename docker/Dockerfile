@@ -139,14 +139,37 @@ ENTRYPOINT ["/webui-entrypoint.sh"]
 CMD ["streamlit", "run", "src/webui/config_panel.py", "--server.port=8501"]
 
 # ==================== Modern WebUI preview (parallel to Streamlit) ==========
-# This target builds from the same dependency-complete webui stage. Starlette
-# and Uvicorn are already installed transitively by the WebUI stack, so the
-# optional preview adds no separate Python package-resolution point.
-FROM webui AS modern-webui
+# This target intentionally starts from ``common`` rather than ``webui``.
+# The static frontend and small ASGI backend do not need Streamlit's data and
+# visualization stack (notably pandas/pyarrow), so keeping dependencies
+# separate turns the preview into a genuinely lightweight alternative.
+FROM common AS modern-webui-deps
+
+COPY requirements-modern-webui.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+      -r requirements-modern-webui.txt && \
+    find /usr/local/lib/python3.12 -name '__pycache__' -type d -prune -exec rm -rf {} +
+
+FROM modern-webui-deps AS modern-webui
 
 LABEL description="ArXiv Daily Researcher - Parallel modern daily-research WebUI preview"
 
+COPY src/utils/config_io.py ./src/utils/
+COPY src/utils/backup.py ./src/utils/
+COPY src/utils/daily_research_store.py ./src/utils/
+COPY src/utils/run_lock.py ./src/utils/
+COPY src/utils/safe_url.py ./src/utils/
+COPY src/utils/source_registry.py ./src/utils/
+COPY src/utils/webdav_sync.py ./src/utils/
+COPY src/utils/webui_trigger.py ./src/utils/
+COPY src/utils/container_health.py ./src/utils/
 COPY src/modern_webui/ ./src/modern_webui/
+COPY VERSION* ./
+COPY .env.example ./
+COPY configs/ ./configs/
+
+RUN touch ./src/__init__.py ./src/utils/__init__.py
 
 RUN mkdir -p /app/data /app/logs /app/.modern-webui && \
     chown -R adr:adr /app/data /app/logs /app/.modern-webui

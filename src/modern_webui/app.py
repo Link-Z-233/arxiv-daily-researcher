@@ -7,8 +7,6 @@ over the same operational backend rather than a second scheduler.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import re
 import sys
@@ -47,12 +45,15 @@ from utils.webui_trigger import (  # noqa: E402
     trigger_directory,
     trigger_status_directory,
 )
-from webui.auth import (  # noqa: E402
+from modern_webui.auth import (  # noqa: E402
     _clear_attempts,
     _configured,
     _record_failed_attempt,
     _remaining_retry_seconds,
+    account_session_marker,
+    find_account,
     read_auth_config,
+    session_secret,
     verify_password_hash,
 )
 
@@ -81,14 +82,8 @@ _PID_RE = re.compile(r"(?:^|\b)PID=(\d+)(?:\b|,)")
 
 
 def _session_secret() -> str:
-    """Derive a stable signing key from the existing administrator hash.
-
-    Password rotation changes the key after a service restart, invalidating
-    older modern-UI cookies without introducing a second secret to manage.
-    """
-    config = read_auth_config(read_env())
-    material = f"adr-modern-ui:v1:{config.password_hash}".encode("utf-8")
-    return hashlib.sha256(material).hexdigest()
+    """Read the lightweight auth module's stable cookie signing secret."""
+    return session_secret(read_auth_config(read_env()))
 
 
 def _auth_config():
@@ -109,7 +104,12 @@ def _modern_session_authenticated(request: Request) -> bool:
     if time.time() - last_activity > config.session_timeout_minutes * 60:
         request.session.clear()
         return False
-    if not isinstance(username, str) or not hmac.compare_digest(username, config.username):
+    account = find_account(config, username)
+    if account is None:
+        request.session.clear()
+        return False
+    marker = request.session.get("account_marker")
+    if not isinstance(marker, str) or marker != account_session_marker(account):
         request.session.clear()
         return False
     request.session["last_activity"] = time.time()
@@ -377,20 +377,26 @@ async def login(request: Request) -> JSONResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="管理员账户尚未初始化，请先使用 Streamlit 面板创建账户。",
         )
-    remaining = _remaining_retry_seconds(config.username)
+    normalized_username = username.strip()
+    remaining = _remaining_retry_seconds(normalized_username or config.username)
     if remaining:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"登录尝试过于频繁，请在 {remaining} 秒后重试。",
         )
-    username_ok = hmac.compare_digest(username.strip(), config.username)
-    password_ok = verify_password_hash(config.password_hash, password)
-    if not username_ok or password_ok is not True:
-        _record_failed_attempt(config.username)
+    account = find_account(config, normalized_username)
+    password_ok = (
+        verify_password_hash(account.password_hash, password)
+        if account is not None
+        else False
+    )
+    if account is None or password_ok is not True:
+        _record_failed_attempt(normalized_username or config.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误。")
-    _clear_attempts(config.username)
+    _clear_attempts(account.username)
     request.session.clear()
-    request.session["username"] = config.username
+    request.session["username"] = account.username
+    request.session["account_marker"] = account_session_marker(account)
     request.session["last_activity"] = time.time()
     return JSONResponse({"ok": True})
 
@@ -457,6 +463,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=_session_secret(),
     session_cookie="adr_modern_session",
-    same_site="lax",
+    max_age=7 * 24 * 60 * 60,
+    same_site="strict",
     https_only=False,
 )

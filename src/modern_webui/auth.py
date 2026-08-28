@@ -1,0 +1,218 @@
+"""Small authentication core for the standalone modern WebUI preview.
+
+It reads the same legacy owner credentials and managed-account registry as the
+Streamlit panel, without importing Streamlit or its dependencies.  Account
+creation and password changes remain centralized in the mature Streamlit
+configuration page while the preview is developed incrementally.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import hmac
+import json
+import re
+import threading
+import time
+from dataclasses import dataclass
+from typing import Mapping, Optional
+
+
+_HASH_SCHEME = "pbkdf2_sha256"
+_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$")
+_ACCOUNTS_ENV_KEY = "WEBUI_ACCOUNTS"
+_MAX_MANAGED_ACCOUNTS = 20
+_ATTEMPT_WINDOW_SECONDS = 15 * 60
+_attempt_lock = threading.Lock()
+_attempt_state: dict[str, tuple[int, float, float]] = {}
+
+
+@dataclass(frozen=True)
+class Account:
+    username: str
+    password_hash: str
+    is_owner: bool = False
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    enabled: bool
+    username: str
+    password_hash: str
+    session_timeout_minutes: int
+    accounts: tuple[Account, ...] = ()
+
+
+def _as_bool(value: object, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _bounded_int(value: object, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return parsed if minimum <= parsed <= maximum else default
+
+
+def _urlsafe_b64decode(value: str) -> Optional[bytes]:
+    try:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (TypeError, ValueError, binascii.Error):
+        return None
+
+
+def verify_password_hash(password_hash: str, password: str) -> Optional[bool]:
+    """Verify the PBKDF2 record written by the Streamlit account manager."""
+    try:
+        scheme, raw_iterations, encoded_salt, encoded_digest = password_hash.split(":", 3)
+        iterations = int(raw_iterations)
+        if scheme != _HASH_SCHEME or not 100_000 <= iterations <= 1_000_000:
+            return None
+        salt = base64.urlsafe_b64decode(encoded_salt.encode("ascii"))
+        expected_digest = base64.urlsafe_b64decode(encoded_digest.encode("ascii"))
+        if len(salt) < 16 or len(expected_digest) != 32:
+            return None
+    except (AttributeError, ValueError, UnicodeEncodeError, binascii.Error):
+        return None
+    actual_digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, iterations
+    )
+    return hmac.compare_digest(actual_digest, expected_digest)
+
+
+def _read_accounts(raw_value: object) -> tuple[Account, ...]:
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        return ()
+    encoded = raw_value.strip()
+    if len(encoded) > 32_768:
+        return ()
+    decoded = _urlsafe_b64decode(encoded)
+    if decoded is None:
+        return ()
+    try:
+        payload = json.loads(decoded.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return ()
+    if not isinstance(payload, dict) or payload.get("v") != 1:
+        return ()
+    raw_accounts = payload.get("accounts")
+    if not isinstance(raw_accounts, list) or not raw_accounts:
+        return ()
+
+    accounts: list[Account] = []
+    usernames: set[str] = set()
+    owner_seen = False
+    for item in raw_accounts[:_MAX_MANAGED_ACCOUNTS]:
+        if not isinstance(item, dict):
+            return ()
+        username = str(item.get("u") or "").strip()
+        password_hash = str(item.get("p") or "").strip()
+        if (
+            not _USERNAME_PATTERN.fullmatch(username)
+            or username in usernames
+            or verify_password_hash(password_hash, "") is None
+        ):
+            return ()
+        is_owner = bool(item.get("o")) and not owner_seen
+        owner_seen = owner_seen or is_owner
+        accounts.append(Account(username, password_hash, is_owner=is_owner))
+        usernames.add(username)
+    if not accounts:
+        return ()
+    if not owner_seen:
+        first = accounts[0]
+        accounts[0] = Account(first.username, first.password_hash, is_owner=True)
+    return tuple(accounts)
+
+
+def read_auth_config(env_values: Mapping[str, object]) -> AuthConfig:
+    accounts = _read_accounts(env_values.get(_ACCOUNTS_ENV_KEY))
+    if accounts:
+        owner = next((account for account in accounts if account.is_owner), accounts[0])
+        username, password_hash = owner.username, owner.password_hash
+    else:
+        username = str(env_values.get("WEBUI_ADMIN_USERNAME", "")).strip()
+        password_hash = str(env_values.get("WEBUI_ADMIN_PASSWORD_HASH", "")).strip()
+        if _USERNAME_PATTERN.fullmatch(username) and password_hash:
+            accounts = (Account(username, password_hash, is_owner=True),)
+    return AuthConfig(
+        enabled=_as_bool(env_values.get("WEBUI_AUTH_ENABLED"), True),
+        username=username,
+        password_hash=password_hash,
+        session_timeout_minutes=_bounded_int(
+            env_values.get("WEBUI_SESSION_TIMEOUT_MINUTES"),
+            10_080,
+            minimum=5,
+            maximum=10_080,
+        ),
+        accounts=accounts,
+    )
+
+
+def _configured(config: AuthConfig) -> bool:
+    return bool(config.accounts)
+
+
+def find_account(config: AuthConfig, username: object) -> Optional[Account]:
+    candidate = str(username or "").strip()
+    for account in config.accounts:
+        if hmac.compare_digest(account.username, candidate):
+            return account
+    return None
+
+
+def account_session_marker(account: Account) -> str:
+    """Bind an ASGI session to the exact account password record."""
+    return hashlib.sha256(
+        f"adr-modern-account:v1:{account.password_hash}".encode("utf-8")
+    ).hexdigest()
+
+
+def session_secret(config: AuthConfig) -> str:
+    """Provide a stable cookie signer while per-account markers revoke sessions."""
+    material = config.password_hash or "unconfigured"
+    return hashlib.sha256(f"adr-modern-ui:v2:{material}".encode("utf-8")).hexdigest()
+
+
+def _retry_delay_seconds(failures: int) -> int:
+    if failures < 5:
+        return 0
+    return min(60, 2 ** min(6, failures - 5))
+
+
+def _remaining_retry_seconds(username: str) -> int:
+    now = time.time()
+    with _attempt_lock:
+        state = _attempt_state.get(username)
+        if state is None:
+            return 0
+        _failures, last_failure, retry_after = state
+        if now - last_failure > _ATTEMPT_WINDOW_SECONDS:
+            _attempt_state.pop(username, None)
+            return 0
+        return max(0, int(retry_after - now))
+
+
+def _record_failed_attempt(username: str) -> None:
+    now = time.time()
+    with _attempt_lock:
+        failures, last_failure, _retry_after = _attempt_state.get(
+            username, (0, 0.0, 0.0)
+        )
+        if now - last_failure > _ATTEMPT_WINDOW_SECONDS:
+            failures = 0
+        failures += 1
+        delay = _retry_delay_seconds(failures)
+        _attempt_state[username] = (failures, now, now + delay if delay else 0.0)
+
+
+def _clear_attempts(username: str) -> None:
+    with _attempt_lock:
+        _attempt_state.pop(username, None)

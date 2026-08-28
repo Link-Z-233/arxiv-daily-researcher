@@ -1,0 +1,9 @@
+# Standalone dependencies for the parallel modern WebUI preview.
+# Keep this list intentionally separate from Streamlit so the preview image
+# does not pull in pandas, pyarrow, numpy, or the Streamlit runtime.
+json5==0.13.0
+requests==2.32.5
+webdavclient3>=3.14.0
+starlette==1.6.0
+uvicorn==0.52.4
+itsdangerous==2.2.0
