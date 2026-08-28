@@ -355,12 +355,23 @@ def _read_lock_pid(path: Path) -> int | None:
 
 
 def active_locks(flat: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Return every currently held worker lock from both supported data roots.
+
+    Most modes use a fixed name, while trend research deliberately derives a
+    parameter-specific ``trend_research_<hash>.lock``.  Enumerating only a
+    small static list made an active trend task invisible to the modern panel
+    and could offer a conflicting launch button.  The Streamlit panel scans
+    the run directory, so keep the same behaviour here.
+    """
     data_dir = configured_data_dir(flat)
     results: list[dict[str, Any]] = []
     seen: set[Path] = set()
     for directory in (data_dir / "run", DEFAULT_DATA_DIR / "run"):
-        for name in LOCK_NAMES:
-            path = directory / name
+        try:
+            paths = sorted(directory.glob("*.lock"), key=lambda item: item.name)
+        except OSError:
+            continue
+        for path in paths:
             if path in seen:
                 continue
             seen.add(path)
@@ -369,7 +380,7 @@ def active_locks(flat: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
             except OSError:
                 held = path.exists()
             if held:
-                results.append({"name": name, "pid": _read_lock_pid(path)})
+                results.append({"name": path.name, "pid": _read_lock_pid(path)})
     return results
 
 

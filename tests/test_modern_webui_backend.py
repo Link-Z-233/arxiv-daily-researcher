@@ -46,6 +46,20 @@ class ModernBackendTests(unittest.TestCase):
         self.assertEqual(rows[0]["state"], "queued")
         self.assertFalse(rows[0]["args"]["full_repair"])
 
+    def test_active_locks_includes_parameterized_trend_locks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            run_dir = data_dir / "run"
+            run_dir.mkdir()
+            trend_lock = run_dir / "trend_research_a1b2c3d4.lock"
+            trend_lock.write_text("PID=42\n", encoding="utf-8")
+            with patch.object(backend, "DEFAULT_DATA_DIR", data_dir), patch.object(
+                backend, "configured_data_dir", return_value=data_dir
+            ), patch.object(backend, "is_lock_held", return_value=True):
+                locks = backend.active_locks()
+
+        self.assertEqual(locks, [{"name": trend_lock.name, "pid": 42}])
+
     def test_report_tokens_are_bound_to_the_report_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
