@@ -37,10 +37,10 @@ class WebUIAuthTests(unittest.TestCase):
     def test_defaults_enable_auth_and_bound_session_timeout(self):
         default = read_auth_config({})
         self.assertTrue(default.enabled)
-        self.assertEqual(default.session_timeout_minutes, 480)
+        self.assertEqual(default.session_timeout_minutes, 10_080)
 
         invalid_timeout = read_auth_config({"WEBUI_SESSION_TIMEOUT_MINUTES": "0"})
-        self.assertEqual(invalid_timeout.session_timeout_minutes, 480)
+        self.assertEqual(invalid_timeout.session_timeout_minutes, 10_080)
 
     def test_trusted_lan_skip_disables_auth_and_clears_admin_record(self):
         values = _disabled_auth_values(

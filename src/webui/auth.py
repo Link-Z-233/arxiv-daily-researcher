@@ -81,7 +81,7 @@ def read_auth_config(env_values: Mapping[str, object]) -> WebUIAuthConfig:
         password_hash=password_hash,
         session_timeout_minutes=_bounded_int(
             env_values.get("WEBUI_SESSION_TIMEOUT_MINUTES"),
-            480,
+            10_080,
             minimum=5,
             maximum=10_080,
         ),
