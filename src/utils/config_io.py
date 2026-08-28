@@ -25,6 +25,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "config.json"
 ENV_EXAMPLE_PATH = PROJECT_ROOT / ".env.example"
+# A single-file ``.env`` bind mount is writable even when its container parent
+# directory is not.  In that layout a sibling ``/app/.env.bak`` cannot be
+# created by the mapped NAS user, so retain the backup in an application-owned
+# writable volume instead.
+DEFAULT_ENV_BACKUP_DIR = PROJECT_ROOT / "data" / "config_backups"
 
 # These are the only file-location fields accepted from portable config.json
 # exports.  Keeping the rule here as well as in config.Settings means WebUI
@@ -261,6 +266,54 @@ def _restore_owner(path: Path, stat_result) -> None:
         pass
 
 
+def _is_permission_or_readonly_error(exc: OSError) -> bool:
+    """Whether an I/O failure is caused by an unwritable bind-mount parent."""
+    return isinstance(exc, PermissionError) or exc.errno in {
+        errno.EACCES,
+        errno.EPERM,
+        errno.EROFS,
+    }
+
+
+def _rewrite_file_in_place(path: Path, content: str) -> None:
+    """Safely flush a replacement when a single-file bind mount blocks rename."""
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _backup_env_file(path: Path) -> None:
+    """Create an env backup without requiring its bind-mount parent to be writable.
+
+    Docker commonly mounts only ``.env`` at ``/app/.env``.  The mapped runtime
+    user can update that file, but cannot create its traditional sibling
+    ``/app/.env.bak`` because ``/app`` belongs to the image.  The normal
+    sibling location remains preferred; only the default project env path gets
+    a durable fallback under ``data/config_backups``.
+    """
+    source_stat = path.stat()
+    candidates = [path.parent / ".env.bak"]
+    if path == DEFAULT_ENV_PATH:
+        candidates.append(DEFAULT_ENV_BACKUP_DIR / ".env.bak")
+
+    for backup_path in candidates:
+        try:
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup_path)
+            _restore_owner(backup_path, source_stat)
+            os.chmod(backup_path, 0o600)
+            return
+        except OSError as exc:
+            if not _is_permission_or_readonly_error(exc):
+                raise
+
+    # The configuration target itself may still be a writable single-file
+    # bind mount.  Do not make first-time setup impossible merely because a
+    # backup directory is unavailable; the complete replacement is held in
+    # memory and written with fsync below.
+
+
 def _atomic_write_text(
     path: Path,
     content: str,
@@ -292,20 +345,30 @@ def _atomic_write_text(
     )
     temporary_path = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary_path = Path(handle.name)
-            os.chmod(temporary_path, desired_mode)
-            _restore_owner(temporary_path, owner_stat)
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                os.chmod(temporary_path, desired_mode)
+                _restore_owner(temporary_path, owner_stat)
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            # A writable single-file bind mount has no writable parent in the
+            # container.  It cannot support an adjacent atomic temp file, but
+            # it can still be updated safely enough with a flushed in-place
+            # write.  New files retain the normal atomic requirement.
+            if existing_stat is None or not _is_permission_or_readonly_error(exc):
+                raise
+            _rewrite_file_in_place(path, content)
+            return
         try:
             os.replace(temporary_path, path)
         except OSError as exc:
@@ -315,10 +378,7 @@ def _atomic_write_text(
             # reject rename() onto the mount point with EBUSY.  Rewrite the
             # mounted file in place instead; the inode survives, so the host
             # ownership and mode stay untouched.
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
+            _rewrite_file_in_place(path, content)
         else:
             temporary_path = None
             os.chmod(path, desired_mode)
@@ -360,7 +420,9 @@ def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
     Write .env file using .env.example as structural template.
 
     Active keys are written uncommented, empty keys stay commented.
-    Creates .env.bak backup before writing.
+    Creates a ``.env.bak`` backup before writing. For a single-file Docker
+    bind mount whose parent is read-only to the runtime user, the backup is
+    retained under ``data/config_backups/.env.bak`` instead.
     """
     if path is None:
         path = DEFAULT_ENV_PATH
@@ -372,11 +434,7 @@ def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
 
     # Backup existing
     if path.exists():
-        backup_path = path.parent / ".env.bak"
-        source_stat = path.stat()
-        shutil.copy2(path, backup_path)
-        _restore_owner(backup_path, source_stat)
-        os.chmod(backup_path, 0o600)
+        _backup_env_file(path)
 
     # If .env.example exists, use it as template
     if ENV_EXAMPLE_PATH.exists():

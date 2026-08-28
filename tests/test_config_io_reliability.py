@@ -1,6 +1,7 @@
 import json
 import errno
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -172,6 +173,49 @@ class ConfigIOReliabilityTests(unittest.TestCase):
             self.assertEqual(path.stat().st_ino, inode_before)
             self.assertEqual(oct(path.stat().st_mode & 0o777), "0o600")
             self.assertEqual(list(Path(temp_dir).glob(".*.tmp")), [])
+
+    def test_env_write_handles_writable_single_file_bind_mount(self):
+        """A Docker-mounted .env may be writable while /app itself is not."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            template = root / ".env.example"
+            template.write_text("SECRET=\nWEBUI_AUTH_ENABLED=true\n", encoding="utf-8")
+            env_path = root / ".env"
+            env_path.write_text("SECRET=old-value\n", encoding="utf-8")
+            fallback_backup_dir = root / "data" / "config_backups"
+            original_copy2 = shutil.copy2
+
+            def reject_sibling_backup(source, destination, *args, **kwargs):
+                if Path(destination).parent == root:
+                    raise PermissionError(errno.EACCES, "read-only bind parent")
+                return original_copy2(source, destination, *args, **kwargs)
+
+            with (
+                patch("utils.config_io.ENV_EXAMPLE_PATH", template),
+                patch("utils.config_io.DEFAULT_ENV_PATH", env_path),
+                patch("utils.config_io.DEFAULT_ENV_BACKUP_DIR", fallback_backup_dir),
+                patch(
+                    "utils.config_io.shutil.copy2",
+                    side_effect=reject_sibling_backup,
+                ),
+                patch(
+                    "utils.config_io.tempfile.NamedTemporaryFile",
+                    side_effect=PermissionError(errno.EACCES, "read-only bind parent"),
+                ),
+            ):
+                write_env(
+                    {"SECRET": "new-value", "WEBUI_AUTH_ENABLED": "false"},
+                    env_path,
+                )
+
+            self.assertIn("SECRET=new-value", env_path.read_text(encoding="utf-8"))
+            self.assertIn(
+                "WEBUI_AUTH_ENABLED=false", env_path.read_text(encoding="utf-8")
+            )
+            self.assertFalse((root / ".env.bak").exists())
+            fallback = fallback_backup_dir / ".env.bak"
+            self.assertEqual(fallback.read_text(encoding="utf-8"), "SECRET=old-value\n")
+            self.assertEqual(oct(fallback.stat().st_mode & 0o777), "0o600")
 
     def test_env_write_removes_the_obsolete_openalex_mailto_setting(self):
         with tempfile.TemporaryDirectory() as temp_dir:
