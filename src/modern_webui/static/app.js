@@ -1188,10 +1188,11 @@ async function renderLogs(token) {
     try {
       const log = await api(`/api/logs/${encodeURIComponent(selected)}`); if (token !== state.renderToken) return;
       const selectedItem = items.find((item) => item.id === selected);
-      $("#log-content", root)?.replaceWith(`<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · 修改时间：${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? " · 仅显示最后 300 行" : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`);
+      const logHost = $("#log-content", root);
+      if (logHost) logHost.outerHTML = `<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · 修改时间：${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? " · 仅显示最后 300 行" : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`;
       $("#log-refresh-latest", root)?.addEventListener("click", () => { state.pageData.selectedLog = runLogs[0]?.id || otherLogs[0]?.id || ""; state.pageData.logClosed = false; renderPage(); });
       $("#log-close", root)?.addEventListener("click", () => { state.pageData.logClosed = true; renderPage(); });
-    } catch (error) { $("#log-content", root)?.replaceWith(`<p class="error-message">${escapeHtml(error.message)}</p>`); }
+    } catch (error) { const logHost = $("#log-content", root); if (logHost) logHost.outerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
   }
 }
 
