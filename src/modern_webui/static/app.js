@@ -1038,9 +1038,15 @@ async function renderNotificationsPage(_token) {
   $("#smtp-test", root)?.addEventListener("click", () => testConnection("smtp", { host: envValue("SMTP_HOST"), port: envValue("SMTP_PORT", "587"), user: envValue("SMTP_USER"), password: state.draft.env.SMTP_PASSWORD, use_tls: envValue("SMTP_USE_TLS", "true") }, "smtp-test-result"));
 }
 
+function proxyNoProxyEditor() {
+  const stored = String(configValue("proxy_no_proxy", "localhost,127.0.0.1") || "");
+  const display = String(configValue("proxy_no_proxy_ui", stored)).replaceAll(",", "\n");
+  return `<label class="form-field"><span>不使用代理的地址（每行一项）<span class="field-help">例如 localhost、127.0.0.1 或内网网段。</span></span><textarea data-field="proxy_no_proxy_ui" data-scope="config" rows="4" placeholder="localhost&#10;127.0.0.1&#10;192.168.1.0/24">${escapeHtml(display)}</textarea></label>`;
+}
+
 function renderProxySettings() {
   const enabled = Boolean(configValue("proxy_enabled", false));
-  return section("网络代理", `${field({ label: "启用网络代理", key: "proxy_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `${field({ label: "代理地址", key: "proxy_url", fallback: "", placeholder: "http://127.0.0.1:7890" })}${field({ label: "不使用代理的地址（每行一项）", key: "proxy_no_proxy", type: "textarea", rows: 4, fallback: "localhost,127.0.0.1" })}${divider()}<p class="hint-text">选择需要经由代理访问的服务。</p><div class="form-grid two">${field({ label: "arXiv", key: "proxy_arxiv", type: "checkbox", fallback: true })}${field({ label: "OpenAlex", key: "proxy_openalex", type: "checkbox", fallback: false })}${field({ label: "Hugging Face Papers", key: "proxy_huggingface_papers", type: "checkbox", fallback: false })}${field({ label: "Semantic Scholar", key: "proxy_semantic_scholar", type: "checkbox", fallback: false })}${field({ label: "LLM API", key: "proxy_llm_api", type: "checkbox", fallback: false })}${field({ label: "通知", key: "proxy_notifications", type: "checkbox", fallback: false })}${field({ label: "WebDAV", key: "proxy_webdav", type: "checkbox", fallback: true })}${field({ label: "检查更新", key: "proxy_update_check", type: "checkbox", fallback: false })}</div>` : '<p class="hint-text">关闭时保留既有代理设置，重新启用后会恢复。</p>'}`, { icon: "🌐" });
+  return section("网络代理", `${field({ label: "启用网络代理", key: "proxy_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `${field({ label: "代理地址", key: "proxy_url", fallback: "", placeholder: "http://127.0.0.1:7890" })}${proxyNoProxyEditor()}${divider()}<h3>🎯 代理范围</h3><p class="hint-text">选择需要经由代理访问的服务。</p><div class="form-grid two">${field({ label: "arXiv", key: "proxy_arxiv", type: "checkbox", fallback: true })}${field({ label: "OpenAlex", key: "proxy_openalex", type: "checkbox", fallback: false })}${field({ label: "Hugging Face Papers", key: "proxy_huggingface_papers", type: "checkbox", fallback: false })}${field({ label: "Semantic Scholar", key: "proxy_semantic_scholar", type: "checkbox", fallback: false })}${field({ label: "LLM API", key: "proxy_llm_api", type: "checkbox", fallback: false })}${field({ label: "通知", key: "proxy_notifications", type: "checkbox", fallback: false })}${field({ label: "WebDAV", key: "proxy_webdav", type: "checkbox", fallback: true })}${field({ label: "检查更新", key: "proxy_update_check", type: "checkbox", fallback: false })}</div>` : '<p class="hint-text">关闭时保留既有代理设置，重新启用后会恢复。</p>'}`, { icon: "🌐" });
 }
 
 function renderAdvanced() {
@@ -1324,6 +1330,14 @@ function bindAccountForm(selector, endpoint, onSuccess) {
 
 function normalizeForSave() {
   const config = { ...(state.settings?.config || {}), ...state.draft.config };
+  if (Object.prototype.hasOwnProperty.call(config, "proxy_no_proxy_ui")) {
+    config.proxy_no_proxy = String(config.proxy_no_proxy_ui || "")
+      .split(/[\r\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join(",");
+    delete config.proxy_no_proxy_ui;
+  }
   // UI-only helpers map back to the stable config.json contract.
   if (Object.prototype.hasOwnProperty.call(config, "pdf_download_max_mb_ui")) {
     config.pdf_download_max_bytes = Math.max(1, Number(config.pdf_download_max_mb_ui) || 50) * 1024 * 1024;
