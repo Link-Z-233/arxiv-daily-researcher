@@ -111,6 +111,12 @@ h3 { margin: 0 0 10px; font-size: .94rem; }
 .mini-card, .subsection, .channel-card, .compact-form { padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
 .mini-card .form-field + .form-field { margin-top: 10px; }
 .subsection + .subsection, .channel-card + .channel-card { margin-top: 12px; }
+.native-scroll-list { overflow-y: auto; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); scrollbar-gutter: stable; }
+.native-scroll-list .hint-text { margin-bottom: 7px; }
+.native-scroll-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid #edf0f4; font-size: .84rem; line-height: 1.55; }
+.native-scroll-row:last-child { border-bottom: 0; }
+.native-scroll-row span { min-width: 0; overflow-wrap: anywhere; }
+.native-scroll-row small { flex: 0 0 auto; color: var(--muted); font-size: .78rem; white-space: nowrap; }
 .channel-card > summary { cursor: pointer; color: #344054; font-weight: 700; }
 .channel-card > .toggle-field, .channel-card > .form-field, .channel-card > .form-grid, .channel-card > .action-row { margin-top: 13px; }
 .stack-form { display: grid; gap: 13px; }

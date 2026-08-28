@@ -799,9 +799,18 @@ async function renderKeywords(token) {
     const result = await api("/api/extracted-keywords");
     if (token !== state.renderToken || !configValue("enable_reference_extraction", false)) return;
     const host = $("#extracted-keywords");
-    if (host) host.innerHTML = result.items?.length ? pagedTable("extracted-keywords", [{ label: "关键词", key: "keyword" }, { label: "权重", value: (row) => Number(row.weight).toFixed(2) }], result.items, { empty: "尚未提取关键词" }) : '<p class="empty-state">尚未提取关键词。</p>';
-    bindPagers(root);
+    if (host) host.innerHTML = extractedKeywordList(result.items || []);
   } catch (error) { /* cache visibility should not prevent configuration */ }
+}
+
+function extractedKeywordList(items) {
+  if (!items.length) return '<p class="empty-state">尚未提取关键词。</p>';
+  // This is intentionally a native scroll container instead of a paged
+  // table.  The compatibility panel keeps the full extracted-keyword cache
+  // in one compact, fixed-height box so users can scan its ordering without
+  // growing the entire configuration page.
+  const height = Math.min(320, Math.max(100, 64 + items.length * 27));
+  return `<div class="native-scroll-list" style="height:${height}px"><p class="hint-text">已提取 ${formatNumber(items.length)} 个关键词</p>${items.map((item) => `<div class="native-scroll-row"><span>${escapeHtml(item.keyword)}</span><small>${escapeHtml(Number(item.weight).toFixed(2))}</small></div>`).join("")}</div>`;
 }
 
 function renderReferenceExtraction() {
