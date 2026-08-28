@@ -19,7 +19,6 @@ NAVIGATION_GROUPS: Final[tuple[NavigationGroup, ...]] = (
             ("daily_research", "nav_daily_research"),
             ("past_daily", "nav_past_daily"),
             ("trend_tasks", "nav_trend_tasks"),
-            ("queue", "nav_queue"),
         ),
     ),
     (

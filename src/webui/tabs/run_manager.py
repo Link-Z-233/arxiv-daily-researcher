@@ -800,32 +800,40 @@ def _render_backfill_control(config_values: dict, *, show_queue: bool = True) ->
 
 
 def _render_backfill_queue_summary(config_values: dict) -> None:
-    """Show the durable historical-day queue without exposing run errors."""
+    """Show the durable past-date queue beside its range launcher."""
     db_path = _daily_db_path_from_config(config_values or {})
     if not db_path.exists():
+        st.caption(t("rm_backfill_queue_empty"))
         return
     try:
         from utils.daily_research_store import DailyResearchStore
 
         summary = DailyResearchStore(db_path).backfill_queue_summary()
     except Exception:
+        st.caption(t("rm_backfill_queue_empty"))
         return
     if not any(summary.get(key, 0) for key in ("pending", "running", "completed", "failed")):
+        st.caption(t("rm_backfill_queue_empty"))
         return
-    active = ""
+
+    pending_col, running_col, completed_col, failed_col = st.columns(4)
+    with pending_col:
+        st.metric(t("rm_queue_pending"), f"{summary.get('pending', 0):,}")
+    with running_col:
+        st.metric(t("rm_status_running"), f"{summary.get('running', 0):,}")
+    with completed_col:
+        st.metric(t("rm_backfill_queue_completed"), f"{summary.get('completed', 0):,}")
+    with failed_col:
+        st.metric(t("rm_queue_failed"), f"{summary.get('failed', 0):,}")
+
     if summary.get("active_date"):
-        active = t("rm_backfill_queue_active").format(
-            date=summary["active_date"]
+        st.caption(
+            t("rm_backfill_queue_active").format(date=summary["active_date"])
         )
-    st.caption(
-        t("rm_backfill_queue_line").format(
-            pending=summary.get("pending", 0),
-            running=summary.get("running", 0),
-            completed=summary.get("completed", 0),
-            failed=summary.get("failed", 0),
-            active=active,
+    elif summary.get("next_date"):
+        st.caption(
+            t("rm_backfill_queue_next").format(date=summary["next_date"])
         )
-    )
 
 def _show_last_run_hint() -> None:
     log_groups  = _scan_all_logs()
@@ -876,6 +884,8 @@ def _render_status_snapshot(
     """Render the status-card contents that need periodic updates."""
     _render_live_status_body(exclude_history_tasks=exclude_history_tasks)
     if show_queue:
+        st.divider()
+        st.caption(f"📋 **{t('rm_daily_queue_title')}**")
         _render_queue_metrics(config_values)
 
 
@@ -1175,10 +1185,11 @@ def render_daily_research(_env_values: dict, config_values: dict) -> None:
         f'<p class="section-title">📊 {t("rm_status_panel_title")}</p>',
         unsafe_allow_html=True,
     )
-    # Queues live on their own page so the daily landing page stays focused
-    # on the job currently being launched or monitored.
+    # Keep the ordinary paper queue beside its launch/status controls. It is
+    # the only queue relevant to a regular daily run; history maintenance and
+    # past-date work deliberately stay on their own pages.
     _render_status_panel(
-        config_values, show_queue=False, exclude_history_tasks=True
+        config_values, show_queue=True, exclude_history_tasks=True
     )
 
     # Daily timing/output switches are useful but do not belong in the first
@@ -1195,6 +1206,13 @@ def render_past_daily_reports(_env_values: dict, config_values: dict) -> None:
         unsafe_allow_html=True,
     )
     _render_backfill_control(config_values, show_queue=False)
+    st.divider()
+    st.markdown(
+        f'<p class="section-title">📋 {t("rm_backfill_queue_title")}</p>',
+        unsafe_allow_html=True,
+    )
+    with st.container(border=True):
+        _render_backfill_queue_summary(config_values)
 
 
 def render_queue(_env_values: dict, config_values: dict) -> None:

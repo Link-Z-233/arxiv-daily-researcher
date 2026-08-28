@@ -179,8 +179,14 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "rm_queue_pending": {"zh": "待处理队列", "en": "Pending queue"},
     "rm_queue_failed": {"zh": "失败待重试", "en": "Awaiting retry"},
+    "rm_daily_queue_title": {"zh": "每日研究队列", "en": "Daily Research Queue"},
     "rm_queue_page_title": {"zh": "任务队列", "en": "Task Queues"},
     "rm_backfill_queue_title": {"zh": "过去日报队列", "en": "Past Daily Queue"},
+    "rm_backfill_queue_empty": {
+        "zh": "当前没有过去日报任务。",
+        "en": "There are no past daily-report tasks.",
+    },
+    "rm_backfill_queue_completed": {"zh": "已完成", "en": "Completed"},
     "rm_stop_btn": {"zh": "停止运行", "en": "Stop run"},
     "rm_trigger_state_failed": {
         "zh": "上次请求 {state}{suffix}；详情见运行日志。",
@@ -1197,8 +1203,12 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Queue: pending {pending} · running {running} · completed {completed} · failed {failed}{active}",
     },
     "rm_backfill_queue_active": {
-        "zh": " · 当前日期 {date}",
-        "en": " · current date {date}",
+        "zh": "当前正在处理：{date}",
+        "en": "Currently processing: {date}",
+    },
+    "rm_backfill_queue_next": {
+        "zh": "下一待处理日期：{date}",
+        "en": "Next pending date: {date}",
     },
     "rm_last_run_at": {"zh": "上次运行完成", "en": "Last run completed"},
     "rm_clean_lock_btn": {"zh": "清理", "en": "Clean"},

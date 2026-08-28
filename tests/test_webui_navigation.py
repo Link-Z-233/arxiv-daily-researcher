@@ -32,7 +32,6 @@ class WebUINavigationTests(unittest.TestCase):
                 "daily_research",
                 "past_daily",
                 "trend_tasks",
-                "queue",
                 "reports",
                 "favorites",
                 "paper_search",

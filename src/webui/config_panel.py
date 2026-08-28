@@ -234,7 +234,6 @@ pages = {
     "daily_research": run_manager.render_daily_research,
     "past_daily": run_manager.render_past_daily_reports,
     "trend_tasks": trend_runner.render,
-    "queue": run_manager.render_queue,
     "logs": run_manager.render_logs,
     "reports": reports.render,
     "favorites": favorites.render_favorites,
