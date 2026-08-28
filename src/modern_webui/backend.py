@@ -45,7 +45,12 @@ from utils.config_io import (
 )
 from utils.daily_research_store import DailyResearchStore
 from utils.run_lock import is_lock_held
-from utils.source_registry import source_display_names
+from utils.source_registry import (
+    OPENALEX_JOURNAL_CATALOG,
+    OPENALEX_JOURNAL_TYPE,
+    builtin_extra_source_definitions,
+    source_display_names,
+)
 from utils.webdav_sync import create_sync_client
 from utils.webui_trigger import (
     SUPPORTED_MODES,
@@ -241,6 +246,16 @@ def public_settings() -> dict[str, Any]:
         "config": flat_config(),
         "env": {key: str(env.get(key) or "") for key in PUBLIC_ENV_FIELDS},
         "secrets": {key: bool(str(env.get(key) or "").strip()) for key in SECRET_ENV_FIELDS},
+        "builtin_sources": [
+            {
+                "type": OPENALEX_JOURNAL_TYPE,
+                "code": "prl",
+                "display_name": OPENALEX_JOURNAL_CATALOG["prl"]["display_name"],
+                "full_name": OPENALEX_JOURNAL_CATALOG["prl"]["full_name"],
+                "issn": list(OPENALEX_JOURNAL_CATALOG["prl"]["issn"]),
+            },
+            *builtin_extra_source_definitions(),
+        ],
     }
 
 
@@ -819,6 +834,25 @@ def _report_row(path: Path, root: Path, report_type: str, source: str) -> dict[s
     }
 
 
+def _daily_report_source(path: Path, root: Path) -> str:
+    """Recover the source used by a daily-report card.
+
+    New reports may be nested below a source directory while v3/v4 arXiv
+    reports sit directly in ``daily_research/html``.  Preference records must
+    use the same source key as the SQLite delivery ledger, rather than the
+    literal ``html`` directory name of an older report.
+    """
+    daily_root = root / "daily_research" / "html"
+    try:
+        relative = path.resolve().relative_to(daily_root.resolve())
+    except ValueError:
+        return "arxiv"
+    if len(relative.parts) > 1:
+        return relative.parts[0].strip().lower() or "arxiv"
+    match = re.match(r"(.+?)_Report_", path.stem, re.IGNORECASE)
+    return (match.group(1).strip().lower() if match else "arxiv") or "arxiv"
+
+
 def report_file(token: str) -> tuple[Path, str]:
     root = configured_reports_dir()
     path = _report_path(token, root)
@@ -828,7 +862,7 @@ def report_file(token: str) -> tuple[Path, str]:
 def report_papers(token: str) -> list[dict[str, Any]]:
     """Expose card identities for preference controls below an HTML preview."""
     path, _ = report_file(token)
-    source = path.parent.name.lower()
+    source = _daily_report_source(path, configured_reports_dir())
     try:
         from utils.legacy_history import parse_legacy_report_file
 

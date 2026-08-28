@@ -53,6 +53,20 @@ class ModernBackendTests(unittest.TestCase):
             with self.assertRaises(backend.ModernWebUIError):
                 backend._report_path("Li4vZXRjL3Bhc3N3ZA", root)
 
+    def test_daily_report_source_preserves_legacy_and_nested_source_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            daily_root = root / "daily_research" / "html"
+            legacy = daily_root / "arxiv_Report_2026-08-01_12-00-00.html"
+            nested = daily_root / "openalex" / "OpenAlex_Report_2026-08-02_12-00-00.html"
+            nested.parent.mkdir(parents=True)
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.touch()
+            nested.touch()
+
+            self.assertEqual(backend._daily_report_source(legacy, root), "arxiv")
+            self.assertEqual(backend._daily_report_source(nested, root), "openalex")
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
