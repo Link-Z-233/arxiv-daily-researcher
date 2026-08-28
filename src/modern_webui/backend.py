@@ -81,6 +81,27 @@ LOCK_NAMES = (
     "supplement_run.lock",
     "backfill_run.lock",
 )
+# Lock names are also used for status presentation.  Trend jobs intentionally
+# use parameterized filenames (``trend_research_<hash>.lock``), which are
+# matched by prefix rather than appearing in the fixed compatibility tuple.
+_LOCK_KIND_PREFIXES = {
+    "daily": ("daily_research.lock", "supplement_run.lock"),
+    "past": ("backfill_run.lock",),
+    "trend": ("trend_research_",),
+    "history": (
+        "legacy_import.lock",
+        "history_data_repair.lock",
+        "history_omission_scan.lock",
+    ),
+}
+_LIVE_LOG_PREFIXES = {
+    "daily_research.lock": ("daily_", "cron_", "startup_"),
+    "legacy_import.lock": ("legacy_import_",),
+    "history_data_repair.lock": ("history_data_repair_",),
+    "history_omission_scan.lock": ("history_omission_scan_",),
+    "supplement_run.lock": ("supplement_run_", "supplement_"),
+    "backfill_run.lock": ("backfill_run_", "backfill_"),
+}
 MODE_LABELS = {
     "daily_research": "每日研究",
     "backfill_run": "过去日报",
@@ -384,6 +405,77 @@ def active_locks(flat: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     return results
 
 
+def _locks_for_kind(locks: Iterable[Mapping[str, Any]], kind: str) -> list[dict[str, Any]]:
+    """Filter active lock metadata for one operation page."""
+    prefixes = _LOCK_KIND_PREFIXES.get(kind, ())
+    rows: list[dict[str, Any]] = []
+    for lock in locks:
+        name = str(lock.get("name") or "")
+        if any(name == prefix or name.startswith(prefix) for prefix in prefixes):
+            rows.append(dict(lock))
+    return rows
+
+
+def _label_for_lock(name: str) -> str:
+    if name.startswith("trend_research_"):
+        return MODE_LABELS["trend_research"]
+    mapping = {
+        "daily_research.lock": "daily_research",
+        "supplement_run.lock": "supplement_run",
+        "backfill_run.lock": "backfill_run",
+        "legacy_import.lock": "legacy_import",
+        "history_data_repair.lock": "history_data_repair",
+        "history_omission_scan.lock": "history_omission_scan",
+    }
+    return MODE_LABELS.get(mapping.get(name, ""), "正在运行")
+
+
+def _newest_log_with_prefixes(prefixes: tuple[str, ...]) -> Path | None:
+    """Return the newest matching local run log without exposing a path."""
+    if not LOGS_DIR.is_dir():
+        return None
+    try:
+        matches = [
+            path
+            for path in LOGS_DIR.rglob("*.log")
+            if path.is_file() and path.name.lower().startswith(prefixes)
+        ]
+        return max(matches, key=lambda path: path.stat().st_mtime) if matches else None
+    except OSError:
+        return None
+
+
+def _live_log_tail(locks: Iterable[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Build the bounded live-log payload used by a running status card."""
+    selected: Path | None = None
+    for lock in locks:
+        name = str(lock.get("name") or "")
+        prefixes = _LIVE_LOG_PREFIXES.get(name)
+        if prefixes is None and name.startswith("trend_research_"):
+            prefixes = ("trend_",)
+        if prefixes:
+            selected = _newest_log_with_prefixes(prefixes)
+            if selected is not None:
+                break
+    if selected is None:
+        return None
+    try:
+        relative = selected.relative_to(LOGS_DIR).as_posix()
+        lines = selected.read_text(encoding="utf-8", errors="replace").splitlines()
+    except (OSError, ValueError):
+        return None
+    max_lines = 80
+    skipped = max(0, len(lines) - max_lines)
+    visible = lines[-max_lines:]
+    if skipped:
+        visible.insert(0, f"… 已隐藏较早的 {skipped} 行 …")
+    return {
+        "name": relative,
+        "content": "\n".join(visible),
+        "truncated": bool(skipped),
+    }
+
+
 def _read_status_file(path: Path) -> dict[str, Any] | None:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -479,6 +571,16 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
     wanted = mode_map.get(kind, mode_map["daily"])
     records = task_records(wanted)
     live_records = [row for row in records if row["state"] in {"queued", "starting", "running"}]
+    # The watcher accepts one trigger at a time.  Daily and trend launchers
+    # therefore follow the Streamlit guard and wait until any just-submitted
+    # request is handed to a worker; past-date jobs remain queueable behind a
+    # running job by design.
+    all_live_records = [
+        row
+        for row in task_records(SUPPORTED_MODES)
+        if row["state"] in {"queued", "starting", "running"}
+    ]
+    relevant_locks = _locks_for_kind(locks, kind)
     store = open_store(flat)
     progress = None
     queue: dict[str, Any] = {}
@@ -510,6 +612,13 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
             "current": progress.get("current"),
             "total": progress.get("total"),
             "started_at": progress.get("started_at"),
+            "counters": {
+                "registered": int(progress.get("registered") or 0),
+                "scored": int(progress.get("scored") or 0),
+                "analyzed": int(progress.get("analyzed") or 0),
+                "completed": int(progress.get("completed") or 0),
+                "failed": int(progress.get("failed") or 0),
+            },
         }
     elif live_records:
         latest = live_records[0]
@@ -521,6 +630,17 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
             "current": None,
             "total": None,
             "started_at": latest.get("created_at") or "",
+        }
+    elif relevant_locks:
+        primary = relevant_locks[0]
+        task = {
+            "state": "running",
+            "label": _label_for_lock(str(primary.get("name") or "")),
+            "phase": "正在运行，等待进度写入",
+            "detail": "",
+            "current": None,
+            "total": None,
+            "started_at": "",
         }
     else:
         latest = _latest_record(wanted)
@@ -544,11 +664,20 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
                 "total": None,
                 "started_at": "",
             }
-    relevant_lock = bool(locks) and (bool(live_records) or progress_matches)
+    active = bool(live_records or progress_matches or relevant_locks)
+    if kind == "past":
+        can_start = not bool(all_live_records)
+    elif kind in {"daily", "trend"}:
+        can_start = not bool(locks or all_live_records)
+    else:
+        # History maintenance is intentionally allowed to enter the durable
+        # idle-time queue behind normal research, but duplicate history work
+        # remains disabled until its preceding request has finished.
+        can_start = not bool(live_records)
     return {
         "task": task,
-        "is_active": bool(live_records or progress_matches),
-        "can_start": not bool(live_records),
+        "is_active": active,
+        "can_start": can_start,
         "queue": {
             "pending": int(queue.get("total") or 0),
             "retry": int(queue.get("failed_retry") or 0),
@@ -556,7 +685,9 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         "backfill": backfill,
         "last_run": last_run,
         "active_locks": locks,
-        "has_relevant_lock": relevant_lock,
+        "relevant_locks": relevant_locks,
+        "has_relevant_lock": bool(relevant_locks),
+        "live_log": _live_log_tail(relevant_locks) if active else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 

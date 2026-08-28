@@ -307,8 +307,22 @@ function statusCard(status, options = {}) {
   const total = Number(task.total);
   const current = Number(task.current);
   const progress = Number.isFinite(total) && total > 0 && Number.isFinite(current) ? `<div class="progress"><div><i style="width:${Math.max(3, Math.min(100, current / total * 100))}%"></i></div><span>当前进度 ${current} / ${total}</span></div>` : "";
+  const counters = task.counters && typeof task.counters === "object" ? task.counters : null;
+  const counterText = counters ? [
+    `登记 ${formatNumber(counters.registered)}`,
+    `评分 ${formatNumber(counters.scored)}`,
+    `分析 ${formatNumber(counters.analyzed)}`,
+    `完成 ${formatNumber(counters.completed)}`,
+    `失败 ${formatNumber(counters.failed)}`,
+  ].join(" · ") : "";
+  const relevantLocks = Array.isArray(status.relevant_locks) ? status.relevant_locks : [];
+  const relevantNames = new Set(relevantLocks.map((lock) => String(lock.name || "")));
+  const lockLine = relevantLocks.length ? `<p class="status-locks">运行锁：${relevantLocks.map((lock) => `${escapeHtml(lock.name || "—")}${lock.pid ? ` (PID ${escapeHtml(lock.pid)})` : ""}`).join(" · ")}</p>` : "";
+  const relatedLocks = (Array.isArray(status.active_locks) ? status.active_locks : []).filter((lock) => !relevantNames.has(String(lock.name || "")));
+  const relatedLine = relatedLocks.length ? `<p class="status-locks">同时运行：${relatedLocks.map((lock) => escapeHtml(lock.name || "—")).join(" · ")}</p>` : "";
+  const liveLog = status.live_log && typeof status.live_log === "object" && status.live_log.content ? `<details class="live-log" open><summary>📜 ${escapeHtml(status.live_log.name || "运行日志")} · 日志尾部 80 行${status.live_log.truncated ? "（已截断）" : ""}</summary><pre>${escapeHtml(status.live_log.content)}</pre></details>` : "";
   const stop = status.is_active ? '<button class="danger-button" data-stop-task="1">停止当前任务</button>' : "";
-  return `<div class="status-card"><div class="status-line"><i class="status-dot ${escapeAttribute(task.state || "idle")}"></i><div><p class="eyebrow">当前任务</p><h3>${escapeHtml(task.label || "正在读取状态")}</h3><p class="muted">${escapeHtml(task.phase || "")}</p></div><span class="timestamp">${task.started_at ? `开始于 ${escapeHtml(formatTime(task.started_at))}` : ""}</span></div>${progress}${task.detail ? `<p class="issue-box">${escapeHtml(task.detail)}</p>` : ""}<div class="action-row">${options.startLabel ? `<button class="primary-button" data-start-task="${escapeAttribute(options.mode)}" ${status.can_start ? "" : "disabled"}>${escapeHtml(options.startLabel)} <span>→</span></button>` : ""}${stop}<button class="secondary-button" data-refresh-status="${escapeAttribute(options.kind || "daily")}">刷新状态</button></div></div>`;
+  return `<div class="status-card"><div class="status-line"><i class="status-dot ${escapeAttribute(task.state || "idle")}"></i><div><p class="eyebrow">当前任务</p><h3>${escapeHtml(task.label || "正在读取状态")}</h3><p class="muted">${escapeHtml(task.phase || "")}</p></div><span class="timestamp">${task.started_at ? `开始于 ${escapeHtml(formatTime(task.started_at))}` : ""}</span></div>${counterText ? `<p class="status-counters">${escapeHtml(counterText)}</p>` : ""}${progress}${lockLine}${relatedLine}${task.detail ? `<p class="issue-box">${escapeHtml(task.detail)}</p>` : ""}${liveLog}<div class="action-row">${options.startLabel ? `<button class="primary-button" data-start-task="${escapeAttribute(options.mode)}" ${status.can_start ? "" : "disabled"}>${escapeHtml(options.startLabel)} <span>→</span></button>` : ""}${stop}<button class="secondary-button" data-refresh-status="${escapeAttribute(options.kind || "daily")}">刷新状态</button></div></div>`;
 }
 
 function metrics(items) {
@@ -322,17 +336,24 @@ async function renderDaily(token) {
   root.innerHTML = `${pageHeader()}<div class="loading">正在读取每日研究状态…</div>`;
   const status = await fetchStatus("daily");
   if (token !== state.renderToken) return;
-  root.innerHTML = `${pageHeader()}${section("每日研究", statusCard(status, { startLabel: "开始每日研究", mode: "daily_research", kind: "daily" }), { icon: "🚀" })}${divider()}${section("状态面板", `${metrics([
+  const autoRefresh = state.pageData.dailyAutoRefresh !== false;
+  const launchHint = status.can_start ? "" : '<p class="hint-text">已有任务运行或正在等待工作进程接手；完成后可再次启动。</p>';
+  root.innerHTML = `${pageHeader()}${section("每日研究", `<div class="action-row"><button class="primary-button" data-start-task="daily_research" ${status.can_start ? "" : "disabled"}>开始每日研究 <span>→</span></button><button class="secondary-button" data-refresh-status="daily">刷新状态</button></div>${launchHint}`, { icon: "🚀" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，仅在任务运行或刚提交等待接手时每 5 秒刷新状态、队列和日志尾部。</small></span><input id="daily-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label>${statusCard(status, { kind: "daily" })}${divider()}<h3>每日研究队列</h3>${metrics([
     { label: "待处理论文", value: formatNumber(status.queue?.pending), help: "会在后续每日研究中处理" },
     { label: "待重试论文", value: formatNumber(status.queue?.retry), help: "保留阶段状态与问题摘要" },
     { label: "最近一次运行", value: formatNumber(status.last_run?.total_papers), help: status.last_run ? `${status.last_run.status || "已记录"} · ${formatTime(status.last_run.completed_at)}` : "尚无记录" },
-  ])}<label class="refresh-row"><span><strong>状态自动刷新</strong><small>有正在运行或等待接手的任务时，每 5 秒自动刷新。</small></span><input id="daily-auto-refresh" type="checkbox" checked /><i></i></label>`, { icon: "📊" })}${divider()}${renderDailySettings()}`;
+  ])}`, { icon: "📊" })}${divider()}${renderDailySettings()}`;
   bindCommon(root);
-  if (status.is_active && $("#daily-auto-refresh")?.checked) scheduleRefresh("daily", () => renderPage(), 5000);
+  $("#daily-auto-refresh", root)?.addEventListener("change", (event) => {
+    state.pageData.dailyAutoRefresh = event.target.checked;
+    if (!event.target.checked) window.clearTimeout(state.timers.get("daily"));
+    else if (status.is_active) scheduleRefresh("daily", () => renderPage(), 5000);
+  });
+  if (status.is_active && autoRefresh) scheduleRefresh("daily", () => renderPage(), 5000);
 }
 
 function renderDailySettings() {
-  return section("每日研究设置", `<div class="form-grid three">${field({ label: "生成 HTML 报告", key: "enable_html_report", type: "checkbox", fallback: true })}${field({ label: "生成 Markdown 报告", key: "enable_markdown_report", type: "checkbox", fallback: true })}${field({ label: "报告包含全部论文", key: "include_all_in_report", type: "checkbox", fallback: true })}</div><div class="form-grid two">${field({ label: "本次最多处理论文数（0 不限）", key: "daily_max_papers_per_run", type: "number", min: 0, step: 1, fallback: 200 })}${field({ label: "每日运行时间", key: "daily_run_time", type: "time", fallback: "12:00" })}</div>`, { icon: "⚙️", hint: "修改后点击左侧“保存所有更改”生效。" });
+  return `<details class="settings-expander"><summary>⚙️ 每日研究设置</summary><p class="hint-text">修改后点击侧边栏的“保存所有更改”生效。</p><div class="form-grid three">${field({ label: "生成 HTML 报告", key: "enable_html_report", type: "checkbox", fallback: true })}${field({ label: "生成 Markdown 报告", key: "enable_markdown_report", type: "checkbox", fallback: true })}${field({ label: "报告包含全部论文", key: "include_all_in_report", type: "checkbox", fallback: true })}</div><div class="form-grid two">${field({ label: "本次最多处理论文数（0 不限）", key: "daily_max_papers_per_run", type: "number", min: 0, step: 1, fallback: 200 })}${field({ label: "每日运行时间", key: "daily_run_time", type: "time", fallback: "12:00" })}</div></details>`;
 }
 
 async function renderPastDaily(token) {

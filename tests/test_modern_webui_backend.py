@@ -60,6 +60,19 @@ class ModernBackendTests(unittest.TestCase):
 
         self.assertEqual(locks, [{"name": trend_lock.name, "pid": 42}])
 
+    def test_run_status_surfaces_a_live_lock_without_a_receipt(self) -> None:
+        with patch.object(backend, "flat_config", return_value={}), patch.object(
+            backend, "active_locks", return_value=[{"name": "trend_research_a1b2.lock", "pid": 42}]
+        ), patch.object(backend, "task_records", return_value=[]), patch.object(
+            backend, "open_store", return_value=None
+        ), patch.object(backend, "_live_log_tail", return_value=None):
+            status = backend.run_status("trend")
+
+        self.assertTrue(status["is_active"])
+        self.assertFalse(status["can_start"])
+        self.assertEqual(status["task"]["label"], "趋势任务")
+        self.assertEqual(status["relevant_locks"][0]["pid"], 42)
+
     def test_report_tokens_are_bound_to_the_report_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

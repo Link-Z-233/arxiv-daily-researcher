@@ -104,7 +104,10 @@ h3 { margin: 0 0 10px; font-size: .94rem; }
 .refresh-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 17px; padding-top: 16px; border-top: 1px solid var(--line); }
 .refresh-row span { display: grid; gap: 4px; }
 .refresh-row small { color: var(--muted); font-size: .75rem; }
-.refresh-row input { width: 18px; height: 18px; accent-color: var(--brand); }
+.refresh-row.toggle-field input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.settings-expander { padding: 18px 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: 0 5px 18px rgba(16,24,40,.035); }
+.settings-expander > summary { cursor: pointer; color: #344054; font-size: 1.02rem; font-weight: 700; }
+.settings-expander[open] > summary { margin-bottom: 16px; }
 .mini-card, .subsection, .channel-card, .compact-form { padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
 .mini-card .form-field + .form-field { margin-top: 10px; }
 .subsection + .subsection, .channel-card + .channel-card { margin-top: 12px; }
@@ -127,6 +130,10 @@ h3 { margin: 0 0 10px; font-size: .94rem; }
 .progress > div { height: 7px; overflow: hidden; border-radius: 999px; background: #e5eaf3; }
 .progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #3867d6, #6a92ed); }
 .progress span { display: block; margin-top: 6px; color: var(--muted); font-size: .75rem; }
+.status-counters, .status-locks { margin: 13px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.55; }
+.live-log { margin-top: 15px; padding: 10px 12px; border: 1px solid #dbe3f3; border-radius: 8px; background: #f8faff; }
+.live-log > summary { cursor: pointer; color: #344054; font-size: .79rem; font-weight: 700; }
+.live-log pre { max-height: 360px; margin: 10px 0 0; overflow: auto; padding: 11px; border-radius: 6px; background: #101828; color: #e4e7ec; font-family: "SFMono-Regular", Consolas, monospace; font-size: .73rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 11px; margin: 16px 0 0; }
 .metric-card { min-height: 118px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .metric-card p { margin-bottom: 12px; color: var(--muted); font-size: .76rem; }
