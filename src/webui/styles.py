@@ -3,23 +3,41 @@
 CUSTOM_CSS = """
 <style>
 /* ==================== Global ==================== */
+/*
+ * Streamlit keeps its toolbar above the document with a high z-index. A
+ * compact 2rem main padding lets the first tab row slip beneath that toolbar
+ * on several Streamlit versions, visibly clipping its labels. Keep the first
+ * interactive row below the 60px header across the supported releases.
+ */
+[data-testid="stMainBlockContainer"],
 .block-container {
-    padding-top: 2rem;
+    padding-top: 4.5rem !important;
     padding-bottom: 2rem;
 }
 
 /* ==================== Tab Styling ==================== */
-.stTabs [data-baseweb="tab-list"] {
+.stTabs [data-baseweb="tab-list"],
+.stTabs [role="tablist"] {
     gap: 4px;
     background-color: #f8f9fa;
     border-radius: 10px;
     padding: 4px;
+    overflow-x: auto;
 }
-.stTabs [data-baseweb="tab"] {
+.stTabs [data-baseweb="tab"],
+.stTabs [role="tab"] {
     border-radius: 8px;
     padding: 8px 16px;
     font-weight: 500;
     font-size: 0.9rem;
+    min-height: 2.5rem;
+    align-items: center;
+    white-space: nowrap;
+}
+.stTabs [data-baseweb="tab"] p,
+.stTabs [role="tab"] p {
+    margin: 0;
+    line-height: 1.35;
 }
 .stTabs [aria-selected="true"] {
     background-color: white;
@@ -40,22 +58,23 @@ CUSTOM_CSS = """
 
 /* ==================== Sidebar ==================== */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
 }
 [data-testid="stSidebar"] [data-testid="stMarkdown"] p,
 [data-testid="stSidebar"] [data-testid="stMarkdown"] li,
 [data-testid="stSidebar"] [data-testid="stMarkdown"] span {
-    color: #c8d6e5 !important;
+    color: #475569 !important;
 }
 [data-testid="stSidebar"] h1,
 [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3 {
-    color: #f5f6fa !important;
+    color: #0f172a !important;
 }
 
 /* Sidebar divider */
 [data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.15);
+    border-color: #e2e8f0;
     margin: 1rem 0;
 }
 
@@ -64,21 +83,22 @@ CUSTOM_CSS = """
     justify-content: flex-start;
     min-height: 2.2rem;
     border-radius: 8px;
-    border-color: rgba(255,255,255,0.10);
-    color: #eaf0f7;
+    border-color: #dbe3ef;
+    color: #334155;
     font-size: 0.88rem;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"] {
-    background: transparent;
+    background: #ffffff;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button[kind="secondary"]:hover {
-    background: rgba(255,255,255,0.10);
-    border-color: rgba(255,255,255,0.18);
+    background: #eff6ff;
+    border-color: #93c5fd;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
-    background: linear-gradient(90deg, #667eea, #5a67d8);
+    background: #2563eb;
     border-color: transparent;
-    box-shadow: 0 4px 12px rgba(59, 73, 170, 0.28);
+    color: #ffffff;
+    box-shadow: 0 3px 10px rgba(37, 99, 235, 0.18);
 }
 
 /* ==================== Form Elements ==================== */
