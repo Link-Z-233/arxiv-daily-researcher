@@ -147,6 +147,7 @@ _LIVE_TASK_STATES = frozenset({"queued", "starting", "running"})
 _RETRYABLE_TASK_STATES = frozenset(
     {"failed", "rejected", "interrupted", "skipped_busy"}
 )
+_TRIGGER_STALE_AFTER_SECONDS = 30
 
 # Secrets never leave the server.  An empty form input therefore keeps the
 # existing value; explicit clearing is available through ``clear_env``.
@@ -423,6 +424,92 @@ def active_locks(flat: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     return results
 
 
+def _is_container_webui() -> bool:
+    """Whether this presentation process is the standalone Docker UI.
+
+    The compatibility panel uses the same distinction: a source checkout can
+    remove an abandoned local trigger, while a container must leave that
+    request on the shared volume for the worker/watcher to inspect.
+    """
+    return not (PROJECT_ROOT / "main.py").is_file()
+
+
+def trigger_queue_state(
+    active: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Describe the oldest queued worker request without exposing its data.
+
+    A request waiting behind an active worker is normal, even if it is old.
+    It becomes stale only after the watcher has had time to pick it up and no
+    worker lock can explain the wait.  This mirrors the Streamlit run manager
+    and prevents a stale trigger from looking like a permanently active task.
+    """
+    queue_dir = trigger_directory(DEFAULT_DATA_DIR)
+    try:
+        queued = [path for path in queue_dir.glob("*.json") if path.is_file()]
+    except OSError:
+        queued = []
+    oldest_mtime: float | None = None
+    for path in queued:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        oldest_mtime = mtime if oldest_mtime is None else min(oldest_mtime, mtime)
+    if oldest_mtime is None:
+        return {
+            "pending": False,
+            "stale": False,
+            "age_seconds": None,
+            "can_clear": False,
+            "container_managed": _is_container_webui(),
+        }
+    age_seconds = max(0, int(time.time() - oldest_mtime))
+    locks = list(active) if active is not None else active_locks()
+    stale = age_seconds > _TRIGGER_STALE_AFTER_SECONDS and not locks
+    return {
+        "pending": not stale,
+        "stale": stale,
+        "age_seconds": age_seconds,
+        "can_clear": stale and not _is_container_webui(),
+        "container_managed": _is_container_webui(),
+    }
+
+
+def clear_stale_triggers() -> dict[str, int]:
+    """Remove only an abandoned local trigger queue after revalidation.
+
+    Docker requests are worker-owned files on a shared volume.  Removing them
+    from a WebUI container can race the watcher, so operators are directed to
+    inspect/restart the research container there instead.
+    """
+    if _is_container_webui():
+        raise ModernWebUIError("Docker 部署请保留请求并检查或重启研究容器。")
+    locks = active_locks()
+    state = trigger_queue_state(locks)
+    if not state["stale"]:
+        raise ModernWebUIError("当前没有可清除的过期请求。")
+    queue_dir = trigger_directory(DEFAULT_DATA_DIR)
+    removed = 0
+    try:
+        paths = [path for path in queue_dir.glob("*.json") if path.is_file()]
+    except OSError as exc:
+        raise ModernWebUIError(f"无法读取任务队列：{exc}") from exc
+    for path in paths:
+        # Do not race a newly submitted request that appeared between the
+        # stale-state check and this controlled cleanup.
+        try:
+            if time.time() - path.stat().st_mtime <= _TRIGGER_STALE_AFTER_SECONDS:
+                continue
+            path.unlink()
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ModernWebUIError(f"清除过期请求失败：{exc}") from exc
+    return {"removed": removed}
+
+
 def _locks_for_kind(locks: Iterable[Mapping[str, Any]], kind: str) -> list[dict[str, Any]]:
     """Filter active lock metadata for one operation page."""
     prefixes = _LOCK_KIND_PREFIXES.get(kind, ())
@@ -588,6 +675,7 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
     """Return the durable state for a modern run page without starting work."""
     flat = flat_config()
     locks = active_locks(flat)
+    trigger = trigger_queue_state(locks)
     mode_map = {
         "daily": {"daily_research", "supplement_run"},
         "past": {"backfill_run"},
@@ -666,6 +754,16 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
                 "failed": int(progress.get("failed") or 0),
             },
         }
+    elif trigger["stale"]:
+        task = {
+            "state": "stale",
+            "label": "等待工作进程的请求已过期",
+            "phase": "请检查研究容器或清除本地过期请求",
+            "detail": "",
+            "current": None,
+            "total": None,
+            "started_at": "",
+        }
     elif visible_live_records:
         latest = visible_live_records[0]
         task = {
@@ -710,17 +808,21 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
                 "total": None,
                 "started_at": "",
             }
-    active = bool(visible_live_records or progress_matches or visible_locks)
+    active = bool(
+        (visible_live_records and not trigger["stale"])
+        or progress_matches
+        or visible_locks
+    )
     if kind == "past":
         # A date range is a durable queue request.  As in the Streamlit
         # panel, it may be placed behind an already-running worker task; only
         # the short trigger hand-off window is held back to avoid writing a
         # confusing burst of requests before the watcher has claimed one.
-        can_start = not any(
+        can_start = not trigger["stale"] and not any(
             row["state"] in {"queued", "starting"} for row in all_live_records
         )
     elif kind == "daily":
-        can_start = not bool(locks or all_live_records)
+        can_start = not bool(trigger["stale"] or locks or all_live_records)
     elif kind == "trend":
         # Trend analysis uses its own parameterized lock and only shares the
         # legacy-import activity gate with the daily workflow.  It therefore
@@ -731,7 +833,9 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         trigger_handoff_pending = any(
             row["state"] in {"queued", "starting"} for row in all_live_records
         )
-        can_start = not bool(trigger_handoff_pending or relevant_locks or live_records)
+        can_start = not bool(
+            trigger["stale"] or trigger_handoff_pending or relevant_locks or live_records
+        )
     else:
         # History maintenance is intentionally allowed to enter the durable
         # idle-time queue behind normal research, but duplicate history work
@@ -756,6 +860,7 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         "active_locks": display_locks,
         "relevant_locks": relevant_locks,
         "has_relevant_lock": bool(relevant_locks),
+        "trigger": trigger,
         "live_log": _live_log_tail(visible_locks) if active else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

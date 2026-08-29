@@ -265,6 +265,8 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .status-dot.running, .status-dot.queued, .status-dot.starting, .status-dot.waiting { background: var(--brand); box-shadow: 0 0 0 5px rgba(70, 95, 213, .13); animation: pulse 1.7s ease-in-out infinite; }
 .status-dot.idle, .status-dot.succeeded { background: var(--success); box-shadow: 0 0 0 5px rgba(11, 143, 104, .12); }
 .status-dot.failed, .status-dot.rejected, .status-dot.interrupted, .status-dot.skipped_busy { background: var(--danger); box-shadow: 0 0 0 5px rgba(203, 63, 63, .11); }
+.status-dot.stale { background: #d68a16; box-shadow: 0 0 0 5px rgba(214, 138, 22, .14); }
+.trigger-notice p { margin: 4px 0 10px; }
 .timestamp { margin-left: auto; color: var(--muted); font-size: .75rem; text-align: right; }
 .progress { margin-top: 17px; }
 .progress > div { height: 7px; overflow: hidden; border-radius: 999px; background: #e7ebf3; }

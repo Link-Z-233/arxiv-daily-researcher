@@ -459,6 +459,27 @@ function bindPagers(root = document) {
   $$('[data-table-next]', root).forEach((element) => element.addEventListener("click", () => { state.tables[element.dataset.tableNext].page += 1; renderPage(); }));
 }
 
+function triggerNotice(status) {
+  const trigger = status?.trigger;
+  if (!trigger?.stale) return "";
+  const english = state.language === "en";
+  const age = Number(trigger.age_seconds);
+  const ageText = Number.isFinite(age)
+    ? (english ? `Waiting for ${Math.max(0, Math.floor(age))} seconds` : `已等待 ${Math.max(0, Math.floor(age))} 秒`)
+    : (english ? "Waiting beyond the normal hand-off time" : "已等待超过正常接手时间");
+  const title = english ? "⚠️ Worker has not claimed the request" : "⚠️ 工作进程未接手请求";
+  if (trigger.can_clear) {
+    const description = english
+      ? `${ageText}, with no active task. Clear the stale local request before starting again.`
+      : `${ageText}，且没有运行中的任务。可以清除本地过期请求后重新开始。`;
+    return `<div class="issue-box trigger-notice"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(description)}</p><button class="secondary-button compact-button" data-clear-stale-triggers="1">${english ? "Clear stale requests" : "清除过期请求"}</button></div>`;
+  }
+  const description = english
+    ? `${ageText}, with no active task. In Docker, keep the request and inspect or restart the research container.`
+    : `${ageText}，且没有运行中的任务。Docker 部署请保留请求，并检查或重启研究容器。`;
+  return `<div class="issue-box trigger-notice"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(description)}</p></div>`;
+}
+
 function statusCard(status, options = {}) {
   const task = status.task || {};
   const total = Number(task.total);
@@ -480,7 +501,7 @@ function statusCard(status, options = {}) {
   const liveLog = status.live_log && typeof status.live_log === "object" && status.live_log.content ? `<details class="live-log" open><summary>📜 ${escapeHtml(status.live_log.name || "运行日志")} · 日志尾部 80 行${status.live_log.truncated ? "（已截断）" : ""}</summary><pre>${escapeHtml(status.live_log.content)}</pre></details>` : "";
   const stop = status.is_active && options.allowStop !== false ? '<button class="danger-button" data-stop-task="1">停止当前任务</button>' : "";
   const refresh = options.refresh === false ? "" : `<button class="secondary-button" data-refresh-status="${escapeAttribute(options.kind || "daily")}">刷新状态</button>`;
-  return `<div class="status-card"><div class="status-line"><i class="status-dot ${escapeAttribute(task.state || "idle")}"></i><div><p class="eyebrow">当前任务</p><h3>${escapeHtml(task.label || "正在读取状态")}</h3><p class="muted">${escapeHtml(task.phase || "")}</p></div><span class="timestamp">${task.started_at ? `开始于 ${escapeHtml(formatTime(task.started_at))}` : ""}</span></div>${counterText ? `<p class="status-counters">${escapeHtml(counterText)}</p>` : ""}${progress}${lockLine}${relatedLine}${task.detail ? `<p class="issue-box">${escapeHtml(task.detail)}</p>` : ""}${liveLog}<div class="action-row">${options.startLabel ? `<button class="primary-button" data-start-task="${escapeAttribute(options.mode)}" ${status.can_start ? "" : "disabled"}>${escapeHtml(options.startLabel)} <span>→</span></button>` : ""}${stop}${refresh}</div></div>`;
+  return `<div class="status-card"><div class="status-line"><i class="status-dot ${escapeAttribute(task.state || "idle")}"></i><div><p class="eyebrow">当前任务</p><h3>${escapeHtml(task.label || "正在读取状态")}</h3><p class="muted">${escapeHtml(task.phase || "")}</p></div><span class="timestamp">${task.started_at ? `开始于 ${escapeHtml(formatTime(task.started_at))}` : ""}</span></div>${counterText ? `<p class="status-counters">${escapeHtml(counterText)}</p>` : ""}${progress}${lockLine}${relatedLine}${triggerNotice(status)}${task.detail ? `<p class="issue-box">${escapeHtml(task.detail)}</p>` : ""}${liveLog}<div class="action-row">${options.startLabel ? `<button class="primary-button" data-start-task="${escapeAttribute(options.mode)}" ${status.can_start ? "" : "disabled"}>${escapeHtml(options.startLabel)} <span>→</span></button>` : ""}${stop}${refresh}</div></div>`;
 }
 
 function metrics(items) {
@@ -570,7 +591,7 @@ async function renderPastDaily(token) {
   if (token !== state.renderToken) return;
   const queue = status.backfill || {};
   const hasQueue = ["pending", "running", "completed", "failed"].some((key) => Number(queue[key] || 0) > 0);
-  root.innerHTML = `${pageHeader()}${section("过去日报", `<p class="hint-text">选择过去日期范围后开始运行。系统会按天把任务写入持久化队列，并与其他研究任务安全互斥。</p><div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="backfill-from" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.from)}" /></label><label class="form-field"><span>结束日期</span><input id="backfill-to" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.to)}" /></label></div><div class="action-row"><button id="backfill-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button><button class="secondary-button" data-refresh-status="past">刷新状态</button></div>${compactTaskNotice(status)}`, { icon: "🗓" })}${divider()}${section("过去日报队列", hasQueue ? metrics([
+  root.innerHTML = `${pageHeader()}${section("过去日报", `<p class="hint-text">选择过去日期范围后开始运行。系统会按天把任务写入持久化队列，并与其他研究任务安全互斥。</p><div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="backfill-from" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.from)}" /></label><label class="form-field"><span>结束日期</span><input id="backfill-to" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.to)}" /></label></div><div class="action-row"><button id="backfill-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button><button class="secondary-button" data-refresh-status="past">刷新状态</button></div>${triggerNotice(status)}${compactTaskNotice(status)}`, { icon: "🗓" })}${divider()}${section("过去日报队列", hasQueue ? metrics([
     { label: "等待中", value: formatNumber(queue.pending), help: queue.next_date ? `下一日期：${queue.next_date}` : "暂无待处理日期" },
     { label: "运行中", value: formatNumber(queue.running), help: queue.active_date ? `当前日期：${queue.active_date}` : "" },
     { label: "已完成", value: formatNumber(queue.completed), help: "已生成历史日期报告" },
@@ -1974,6 +1995,14 @@ function bindCommon(root = document) {
   $$('[data-stop-task]', root).forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm("确认停止当前任务？已完成的阶段会保留，未完成论文将留队等待重试。")) return;
     try { await api("/api/tasks/stop", { method: "POST", body: {} }); toast("已发送停止请求。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); }
+  }));
+  $$('[data-clear-stale-triggers]', root).forEach((button) => button.addEventListener("click", async () => {
+    if (!window.confirm("确认清除所有本地过期任务请求？未被工作进程接手的任务需要重新提交。")) return;
+    try {
+      const result = await api("/api/triggers/stale", { method: "POST", body: {} });
+      toast(`已清除 ${Number(result.removed || 0)} 个过期请求。`, "success");
+      renderPage();
+    } catch (error) { toast(error.message, "error"); }
   }));
 }
 

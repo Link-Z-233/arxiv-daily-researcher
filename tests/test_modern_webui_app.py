@@ -53,6 +53,25 @@ class ModernWebUIAppTests(unittest.TestCase):
             "en": "📄 Reports",
         })
 
+    def test_stale_trigger_cleanup_uses_the_authenticated_api_boundary(self) -> None:
+        self.assertEqual(self.client.post("/api/triggers/stale", json={}).status_code, 503)
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/setup",
+                json={
+                    "username": "trigger_admin",
+                    "password": "secret6",
+                    "password_confirmation": "secret6",
+                },
+            ).status_code,
+            200,
+        )
+        with patch.object(modern_app.backend, "clear_stale_triggers", return_value={"removed": 2}):
+            response = self.client.post("/api/triggers/stale", json={})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"removed": 2})
+
     def test_setup_login_and_settings_use_the_same_authenticated_session(self) -> None:
         setup = self.client.post(
             "/api/auth/setup",

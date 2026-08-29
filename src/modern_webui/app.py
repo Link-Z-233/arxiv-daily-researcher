@@ -330,6 +330,14 @@ async def daily_status(request: Request) -> JSONResponse:
         raise _safe_error(exc) from exc
 
 
+async def clear_stale_triggers(request: Request) -> JSONResponse:
+    _require_session(request)
+    try:
+        return JSONResponse(await _blocking_call(backend.clear_stale_triggers))
+    except Exception as exc:
+        raise _safe_error(exc) from exc
+
+
 async def start_task(request: Request) -> JSONResponse:
     _require_session(request)
     mode = request.path_params.get("mode", "")
@@ -738,6 +746,7 @@ app = Starlette(
         Route("/api/system/restart-worker", restart_worker, methods=["POST"]),
         Route("/api/status/{kind}", status_get, methods=["GET"]),
         Route("/api/daily/status", daily_status, methods=["GET"]),
+        Route("/api/triggers/stale", clear_stale_triggers, methods=["POST"]),
         Route("/api/tasks/{mode}", start_task, methods=["POST"]),
         Route("/api/daily/run", daily_start, methods=["POST"]),
         Route("/api/tasks/stop", stop_tasks, methods=["POST"]),

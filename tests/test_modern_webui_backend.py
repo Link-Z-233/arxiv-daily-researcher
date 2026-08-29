@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -72,6 +74,45 @@ class ModernBackendTests(unittest.TestCase):
         self.assertFalse(status["can_start"])
         self.assertEqual(status["task"]["label"], "趋势任务")
         self.assertEqual(status["relevant_locks"][0]["pid"], 42)
+
+    def test_run_status_marks_an_unclaimed_trigger_as_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            request = enqueue_trigger(data_dir, "daily_research")
+            old = time.time() - backend._TRIGGER_STALE_AFTER_SECONDS - 5
+            os.utime(request, (old, old))
+            with patch.object(backend, "DEFAULT_DATA_DIR", data_dir), patch.object(
+                backend, "flat_config", return_value={}
+            ), patch.object(backend, "active_locks", return_value=[]), patch.object(
+                backend, "open_store", return_value=None
+            ), patch.object(backend, "_is_container_webui", return_value=False):
+                status = backend.run_status("daily")
+
+        self.assertTrue(status["trigger"]["stale"])
+        self.assertTrue(status["trigger"]["can_clear"])
+        self.assertFalse(status["is_active"])
+        self.assertFalse(status["can_start"])
+        self.assertEqual(status["task"]["state"], "stale")
+
+    def test_clear_stale_triggers_keeps_a_fresh_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            stale = enqueue_trigger(data_dir, "daily_research")
+            fresh = enqueue_trigger(data_dir, "daily_research")
+            old = time.time() - backend._TRIGGER_STALE_AFTER_SECONDS - 5
+            os.utime(stale, (old, old))
+            with patch.object(backend, "DEFAULT_DATA_DIR", data_dir), patch.object(
+                backend, "active_locks", return_value=[]
+            ), patch.object(backend, "_is_container_webui", return_value=False):
+                result = backend.clear_stale_triggers()
+                self.assertEqual(result, {"removed": 1})
+                self.assertFalse(stale.exists())
+                self.assertTrue(fresh.exists())
+
+    def test_clear_stale_triggers_is_disabled_in_a_container(self) -> None:
+        with patch.object(backend, "_is_container_webui", return_value=True):
+            with self.assertRaisesRegex(backend.ModernWebUIError, "Docker"):
+                backend.clear_stale_triggers()
 
     def test_log_categories_match_the_streamlit_three_picker_layout(self) -> None:
         self.assertEqual(backend._log_category("system.log"), "system")
