@@ -1068,6 +1068,48 @@ function renderSources() {
   return `${section("arXiv", `<label class="toggle-field"><span>启动 arXiv 来源</span><input id="source-arxiv" type="checkbox" ${data.arxiv ? "checked" : ""}/><i></i></label>${data.arxiv ? `<p class="hint-text">选择需要扫描的 arXiv 分类。</p><div class="form-grid two"><label class="form-field"><span>arXiv 分类</span><select id="source-domains" multiple>${categoryOptions}</select></label>${field({ label: "请求超时（秒）", key: "arxiv_fetch_timeout_seconds", type: "number", min: 30, max: 1800, fallback: 180 })}${field({ label: "公告回看宽限（天）", key: "arxiv_announcement_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}</div>` : ""}`)}${divider()}${section("额外数据源", `<label class="toggle-field"><span>启动额外数据源</span><input id="extra-enabled" type="checkbox" ${data.extraEnabled ? "checked" : ""}/><i></i></label>${data.extraEnabled ? `<div class="form-grid ${hasExtraSource ? "two" : "one"}"><label class="form-field"><span>内置来源</span><select id="extra-builtins" multiple>${builtinOptions}</select></label>${hasExtraSource ? field({ label: "按数据源分类整理报告", key: "reports_by_source", type: "checkbox", fallback: true }) : ""}</div><div class="source-custom"><h3>自定义来源</h3>${customRows}<details><summary>添加自定义 OpenAlex 期刊来源</summary><div class="form-grid two"><label class="form-field"><span>来源代码</span><input id="custom-code" placeholder="optica_express" /></label><label class="form-field"><span>展示名称</span><input id="custom-display" placeholder="Opt. Express" /></label><label class="form-field"><span>完整名称</span><input id="custom-full" placeholder="Optics Express" /></label><label class="form-field"><span>ISSN（逗号分隔）</span><input id="custom-issn" placeholder="1094-4087" /></label></div><button id="custom-add" class="secondary-button">添加来源</button></details></div>${data.builtins.includes("huggingface_papers") ? `<div class="form-grid two">${field({ label: "Hugging Face 可用性滞后（天）", key: "huggingface_papers_availability_lag_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "回看宽限（天）", key: "huggingface_papers_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "请求超时（秒）", key: "huggingface_papers_request_timeout_seconds", type: "number", min: 5, max: 600, fallback: 30 })}${field({ label: "请求间隔（秒）", key: "huggingface_papers_request_interval_seconds", type: "number", min: 0, max: 60, step: 0.05, fallback: 0.25 })}</div>` : ""}` : '<p class="hint-text">开启后可选择内置来源或添加 ISSN 期刊来源。</p>'}`)}`;
 }
 
+function validatedCustomJournalSource(raw, data) {
+  // Keep the add-button feedback as strict as the shared
+  // ``validate_source_definitions`` contract used by Streamlit and by the
+  // save endpoint.  This avoids the frustrating path where an operator adds
+  // a visibly valid-looking journal and only discovers an ISSN typo after
+  // editing unrelated settings and pressing the global Save button.
+  const code = String(raw.code || "").trim().toLowerCase();
+  if (!/^[a-z][a-z0-9_]{1,63}$/.test(code)) {
+    throw new Error("来源代码无效；只能使用小写字母、数字和下划线。");
+  }
+  if (["arxiv", "prl"].includes(code)) {
+    throw new Error(`来源代码与内置核心来源冲突：${code}。`);
+  }
+  if (data.custom.some((item) => item.code === code) || data.builtins.includes(code)) {
+    throw new Error("来源代码已经存在。");
+  }
+  const text = (value, label) => {
+    const normalized = String(value || "").trim();
+    if (!normalized) throw new Error(`${label}不能为空。`);
+    if (normalized.length > 200 || /[\x00-\x1F\x7F]/.test(normalized)) {
+      throw new Error(`${label}包含无效字符或过长。`);
+    }
+    return normalized;
+  };
+  const issn = [];
+  for (const item of raw.issn || []) {
+    const normalized = String(item || "").trim().toUpperCase();
+    if (!/^\d{4}-\d{3}[\dX]$/.test(normalized)) {
+      throw new Error(`ISSN 无效：${normalized || "（空）"}。`);
+    }
+    if (!issn.includes(normalized)) issn.push(normalized);
+  }
+  if (!issn.length) throw new Error("ISSN 至少需要填写一项。");
+  return {
+    type: "openalex_journal",
+    code,
+    display_name: text(raw.display_name, "展示名称"),
+    full_name: text(raw.full_name, "完整名称"),
+    issn,
+  };
+}
+
 function bindSources(root) {
   const data = ensureSourceState();
   $("#source-arxiv", root)?.addEventListener("change", (event) => { data.arxiv = event.target.checked; renderPage(); });
@@ -1076,10 +1118,18 @@ function bindSources(root) {
   $("#extra-builtins", root)?.addEventListener("change", (event) => { data.builtins = Array.from(event.target.selectedOptions).map((item) => item.value); renderPage(); });
   $$('[data-remove-custom]', root).forEach((button) => button.addEventListener("click", () => { data.custom.splice(Number(button.dataset.removeCustom), 1); renderPage(); }));
   $("#custom-add", root)?.addEventListener("click", () => {
-    const code = $("#custom-code").value.trim().toLowerCase(); const display = $("#custom-display").value.trim(); const full = $("#custom-full").value.trim(); const issn = $("#custom-issn").value.split(",").map((item) => item.trim()).filter(Boolean);
-    if (!/^[a-z][a-z0-9_]{1,63}$/.test(code) || !display || !full || !issn.length) return toast("请填写有效的来源代码、名称和 ISSN。", "error");
-    if (data.custom.some((item) => item.code === code) || data.builtins.includes(code)) return toast("来源代码已经存在。", "error");
-    data.custom.push({ type: "openalex_journal", code, display_name: display, full_name: full, issn }); renderPage();
+    try {
+      const candidate = validatedCustomJournalSource({
+        code: $("#custom-code").value,
+        display_name: $("#custom-display").value,
+        full_name: $("#custom-full").value,
+        issn: $("#custom-issn").value.split(","),
+      }, data);
+      data.custom.push(candidate);
+      renderPage();
+    } catch (error) {
+      toast(error.message, "error");
+    }
   });
 }
 
