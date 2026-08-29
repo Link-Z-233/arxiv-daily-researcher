@@ -1024,6 +1024,15 @@ function reportGroupKey(type, source) {
   return `${type}:${source}`;
 }
 
+function scrollSelect({ id, rows, selected, label, placeholder = "—", optionAttribute, valueAttribute }) {
+  if (!rows.length) {
+    return `<div class="scroll-select is-empty" aria-disabled="true"><span>${escapeHtml(placeholder)}</span></div>`;
+  }
+  const active = rows.find((item) => item.id === selected);
+  const selectedLabel = active ? label(active) : placeholder;
+  return `<details class="scroll-select" data-scroll-select="${escapeAttribute(id)}"><summary><span>${escapeHtml(selectedLabel)}</span><i aria-hidden="true">⌄</i></summary><div class="scroll-select-options" role="listbox">${rows.map((item) => `<button type="button" role="option" aria-selected="${item.id === selected ? "true" : "false"}" class="${item.id === selected ? "is-selected" : ""}" ${escapeAttribute(optionAttribute)}="${escapeAttribute(id)}" ${escapeAttribute(valueAttribute)}="${escapeAttribute(item.id)}">${escapeHtml(label(item))}</button>`).join("")}</div></details>`;
+}
+
 function reportPicker(title, icon, type, rows, selected) {
   if (!rows.length) {
     return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">${reportCountLabel(0)}</p><p class="muted">${localeText("暂无报告", "No reports")}</p></div>`;
@@ -1042,10 +1051,7 @@ function reportPicker(title, icon, type, rows, selected) {
     const sourceLabel = type === "keyword_trend"
       ? "关键词趋势"
       : String(groupRows[0].source_label || source);
-    // Keep long report histories usable without expanding the picker card
-    // indefinitely.  A native listbox preserves keyboard selection and shows
-    // exactly five report rows before its own scrollbar takes over.
-    return `<div class="report-picker-group"><label class="report-select-field"><span>${escapeHtml(sourceLabel)} <small>(${groupRows.length})</small></span><select data-report-select="${escapeAttribute(groupKey)}" size="5">${groupRows.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === selectedHere ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label><button class="secondary-button compact-button report-preview-button" data-preview-group="${escapeAttribute(groupKey)}">${localeText("预览", "Preview")}</button></div>`;
+    return `<div class="report-picker-group"><div class="report-select-field"><span>${escapeHtml(sourceLabel)} <small>(${groupRows.length})</small></span>${scrollSelect({ id: groupKey, rows: groupRows, selected: selectedHere, label: (item) => item.label, optionAttribute: "data-report-select-option", valueAttribute: "data-report-id" })}</div><button class="secondary-button compact-button report-preview-button" data-preview-group="${escapeAttribute(groupKey)}">${localeText("预览", "Preview")}</button></div>`;
   }).join("");
   return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">${reportCountLabel(rows.length)}</p>${body}</div>`;
 }
@@ -1140,10 +1146,13 @@ async function renderReports(token) {
   bindCommon(root);
   $("#report-non-arxiv").addEventListener("change", (event) => { state.pageData.showNonArxiv = event.target.checked; state.pageData.selectedReport = ""; state.pageData.reportSelections = {}; renderPage(); });
   $("#reports-refresh").addEventListener("click", () => { state.pageData.selectedReport = ""; state.pageData.reportSelections = {}; renderPage(); });
-  $$('[data-report-select]', root).forEach((select) => select.addEventListener("change", () => chooseReport(select.value)));
+  $$('[data-report-select-option]', root).forEach((button) => button.addEventListener("click", () => chooseReport(button.dataset.reportId)));
   $$('[data-preview-group]', root).forEach((button) => button.addEventListener("click", () => {
-    const select = $$('[data-report-select]', root).find((item) => item.dataset.reportSelect === button.dataset.previewGroup);
-    if (select) chooseReport(select.value);
+    const selectedOption = $$('[data-report-select-option]', root).find((item) => (
+      item.dataset.reportSelectOption === button.dataset.previewGroup
+      && item.getAttribute("aria-selected") === "true"
+    ));
+    if (selectedOption) chooseReport(selectedOption.dataset.reportId);
   }));
   const report = all.find((item) => item.id === selected);
   if (report) await loadReportPreview(report, reports, token, chooseReport);
@@ -2220,15 +2229,11 @@ async function renderLogs(token) {
   if (!selected || !items.some((item) => item.id === selected)) selected = nonSystemLogs[0]?.id || "";
   state.pageData.selectedLog = selected;
   const logLabel = (item) => `${item.name}  [${formatTime(item.modified_at).slice(5, 16)}  ${Math.round(Number(item.size_bytes) / 1024)} KB]`;
-  // ``size=5`` intentionally makes the native selector a compact scrollable
-  // list.  It avoids a browser-dependent popup whose height cannot be
-  // constrained reliably, while retaining native keyboard and screen-reader
-  // behaviour for long log histories.
-  const selector = (id, title, rows) => `<label class="log-select-field"><span>${escapeHtml(title)}</span><select id="${escapeAttribute(id)}" size="5" ${rows.length ? "" : "disabled"}><option value="">—</option>${rows.map((item) => `<option value="${escapeAttribute(item.id)}" ${selected === item.id ? "selected" : ""}>${escapeHtml(logLabel(item))}</option>`).join("")}</select></label>`;
+  const selector = (id, title, rows) => `<div class="log-select-field"><span>${escapeHtml(title)}</span>${scrollSelect({ id, rows, selected, label: logLabel, optionAttribute: "data-log-select-option", valueAttribute: "data-log-id" })}</div>`;
   root.innerHTML = `${pageHeader()}<div class="log-selector-grid">${selector("log-system-select", "📌 系统日志", systemLogs)}${selector("log-run-select", "📀 运行日志", runLogs)}${selector("log-other-select", "📄 其他日志", otherLogs)}</div>${selected && !state.pageData.logClosed ? '<div id="log-content" class="loading">正在读取日志内容…</div>' : '<p class="empty-state">选择一个日志文件后可在这里查看内容。</p>'}`;
-  ["#log-system-select", "#log-run-select", "#log-other-select"].forEach((selectorId) => $(selectorId, root)?.addEventListener("change", (event) => {
-    if (!event.target.value) return;
-    state.pageData.selectedLog = event.target.value;
+  $$('[data-log-select-option]', root).forEach((button) => button.addEventListener("click", () => {
+    if (!button.dataset.logId) return;
+    state.pageData.selectedLog = button.dataset.logId;
     state.pageData.logClosed = false;
     renderPage();
   }));

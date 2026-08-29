@@ -334,9 +334,6 @@ h3 { margin: 0 0 12px; font-size: .92rem; line-height: 1.45; }
 .report-picker-group + .report-picker-group { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .report-select-field { display: grid; gap: 6px; color: var(--text-secondary); font-size: .77rem; font-weight: 750; }
 .report-select-field small { color: var(--muted); font-weight: 500; }
-.report-select-field select { width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: #fff; color: var(--text); font-size: .79rem; font-weight: 450; }
-.report-select-field select[size] { height: 9.9rem; min-height: 9.9rem; overflow-y: auto; scrollbar-gutter: stable; }
-.report-select-field select:focus { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
 .report-preview-button { width: 100%; margin-top: 8px; }
 .report-link { border: 0; background: transparent; color: var(--brand); text-align: left; font-size: inherit; }
 .report-link.is-selected { color: #263d9e; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
@@ -373,9 +370,19 @@ h3 { margin: 0 0 12px; font-size: .92rem; line-height: 1.45; }
 
 .log-selector-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .log-select-field { display: grid; gap: 7px; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); color: var(--text-secondary); font-size: .79rem; font-weight: 750; box-shadow: var(--shadow-xs); }
-.log-select-field select { width: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: #fff; color: var(--text); font-size: .77rem; font-weight: 450; }
-.log-select-field select[size] { height: 9.9rem; min-height: 9.9rem; overflow-y: auto; scrollbar-gutter: stable; }
-.log-select-field select:focus { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
+.scroll-select { position: relative; min-width: 0; }
+.scroll-select > summary, .scroll-select.is-empty { display: flex; align-items: center; justify-content: space-between; gap: 9px; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; outline: 0; background: #fff; color: var(--text); font-size: .79rem; font-weight: 450; cursor: pointer; list-style: none; }
+.scroll-select > summary::-webkit-details-marker { display: none; }
+.scroll-select > summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scroll-select > summary > i { flex: 0 0 auto; color: var(--muted); font-style: normal; font-size: 1rem; transition: transform .15s ease; }
+.scroll-select[open] { z-index: 4; }
+.scroll-select[open] > summary { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
+.scroll-select[open] > summary > i { transform: rotate(180deg); }
+.scroll-select.is-empty { color: var(--muted-light); cursor: default; }
+.scroll-select-options { position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; left: 0; display: grid; max-height: 196px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; box-shadow: var(--shadow-md); scrollbar-gutter: stable; }
+.scroll-select-options button { min-height: 38px; padding: 8px 10px; border: 0; border-bottom: 1px solid #edf0f5; background: #fff; color: var(--text-secondary); text-align: left; font-size: .78rem; line-height: 1.4; overflow-wrap: anywhere; }
+.scroll-select-options button:last-child { border-bottom: 0; }
+.scroll-select-options button:hover, .scroll-select-options button.is-selected { background: var(--brand-soft); color: #334ab4; }
 .log-content { margin-top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: var(--shadow-sm); }
 .log-content .toolbar { align-items: flex-start; margin-bottom: 14px; }
 .log-content .action-row { margin-top: 0; }
