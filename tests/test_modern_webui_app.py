@@ -69,6 +69,15 @@ class ModernWebUIAppTests(unittest.TestCase):
         self.assertIn('pagedTable("favorite-papers"', response.text)
         self.assertNotIn('class="favorite-card"', response.text)
 
+    def test_usage_summary_has_horizontal_headers_and_one_value_row(self) -> None:
+        response = self.client.get("/assets/app.js")
+        start = response.text.index("function usageSummaryTable")
+        end = response.text.index("function refreshAnalyticsContent", start)
+        summary = response.text[start:end]
+
+        self.assertIn('<thead><tr>${metrics.map(([label])', summary)
+        self.assertIn('<tbody><tr>${metrics.map(([, value])', summary)
+
     def test_stale_trigger_cleanup_uses_the_authenticated_api_boundary(self) -> None:
         self.assertEqual(self.client.post("/api/triggers/stale", json={}).status_code, 503)
         self.assertEqual(

@@ -2785,11 +2785,13 @@ function analyticsRangeControl(values) {
 }
 
 function usageSummaryTable(summary) {
-  const rows = [
-    [["输入 Token", formatNumber(summary.prompt)], ["输出 Token", formatNumber(summary.completion)]],
-    [["合计 Token", formatNumber(summary.total)], ["涉及运行", formatNumber(summary.runs)]],
+  const metrics = [
+    ["输入 Token", formatNumber(summary.prompt)],
+    ["输出 Token", formatNumber(summary.completion)],
+    ["合计 Token", formatNumber(summary.total)],
+    ["涉及运行", formatNumber(summary.runs)],
   ];
-  return `<div class="table-wrap usage-summary-table"><table><tbody>${rows.map((metrics) => `<tr>${metrics.map(([label, value]) => `<th scope="row">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap usage-summary-table"><table><thead><tr>${metrics.map(([label]) => `<th scope="col">${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody><tr>${metrics.map(([, value]) => `<td>${escapeHtml(value)}</td>`).join("")}</tr></tbody></table></div>`;
 }
 
 async function refreshAnalyticsContent(root = $("#page-root"), token = state.renderToken) {
