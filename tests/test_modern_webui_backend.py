@@ -283,8 +283,12 @@ class ModernBackendTests(unittest.TestCase):
                     "text": "关注实验进展",
                     "builtin": False,
                     "overridden": False,
+                    "default": False,
                 })
-                self.assertEqual(len([item for item in rows if item["builtin"]]), 3)
+                default_template = next(item for item in rows if item["default"])
+                self.assertEqual(default_template["name"], backend.DEFAULT_TREND_PROMPT_TEMPLATE_NAME)
+                self.assertTrue(default_template["builtin"])
+                self.assertEqual(len([item for item in rows if item["builtin"]]), 4)
                 after_delete = backend.delete_trend_prompt_template("量子计算")
                 self.assertFalse(any(item["name"] == "量子计算" for item in after_delete))
 

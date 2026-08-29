@@ -194,6 +194,8 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "输出格式": "Output Formats",
   "分析技能": "Analysis Skills",
   "综合分析": "Comprehensive analysis",
+  "综合分析模板": "Comprehensive Analysis Template",
+  "每次趋势研究都会运行综合分析；默认使用内置模板，可在此查看、编辑、保存或恢复。": "Every trend run performs comprehensive analysis. The built-in template is used by default and can be viewed, edited, saved, or restored here.",
   "模板操作": "Template Actions",
   "删除当前模板": "Delete Current Template",
   "选择模板后，模板内容会作为本次趋势研究的深度分析提示词；不选择时使用默认分析流程。": "A selected template is used as the deep-analysis prompt for this run; otherwise the default analysis flow is used.",
@@ -1033,31 +1035,34 @@ function renderTrendForm(templates = []) {
   const today = relativeLocalDateKey(0);
   const defaultFrom = relativeLocalDateKey(-Number(config("trend_default_date_range_days", 365)));
   const configuredPrompt = String(config("trend_analysis_prompt", "") || "");
-  const matchingTemplate = templates.find((item) => item.text === configuredPrompt)?.name || "";
-  const configuredSkills = Array.isArray(config("trend_enabled_skills", ["comprehensive_analysis"])) ? config("trend_enabled_skills", ["comprehensive_analysis"]) : [];
+  const defaultTemplate = templates.find((item) => item.default) || templates.find((item) => item.builtin) || null;
+  const matchingTemplate = templates.find((item) => item.text === configuredPrompt) || (!configuredPrompt ? defaultTemplate : null);
   // Keep a previously saved custom prompt even when it has not been stored
   // in the template library.  The Streamlit collector preserves that value
   // until the operator explicitly selects a template (or “no template”);
   // merely opening this page and saving another setting must not erase it.
-  const values = state.pageData.trend || { keywords: "", date_from: defaultFrom, date_to: today, categories: [], max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"), analysis_prompt: configuredPrompt, template: matchingTemplate, skills: configuredSkills };
-  const selectedSkills = Array.isArray(values.skills) ? values.skills : configuredSkills;
+  const values = state.pageData.trend || {
+    keywords: "", date_from: defaultFrom, date_to: today, categories: [],
+    max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"),
+    analysis_prompt: configuredPrompt || defaultTemplate?.text || "", template: matchingTemplate?.name || "",
+  };
   const categoryChoices = arxivCategories().map((item) => ({ value: item.code, label: item.label }));
   const selectedTemplate = templates.find((item) => item.name === values.template) || null;
-  const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(item.name)}${item.builtin ? "（内置）" : ""}</option>`).join("");
+  const templateLabel = (item) => `${item.name}${item.default ? localeText("（默认内置）", " (built-in default)") : item.builtin ? localeText("（内置）", " (built-in)") : ""}`;
+  const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(templateLabel(item))}</option>`).join("");
   const outputFormats = Array.isArray(config("trend_output_formats", ["markdown", "html"]))
     ? config("trend_output_formats", ["markdown", "html"])
     : ["markdown", "html"];
   const generateTldr = booleanValue(config("trend_generate_tldr", true), true);
-  const analysisEnabled = selectedSkills.includes("comprehensive_analysis");
   const outputField = (key, format, label) => {
     const enabled = state.draft.config[key] ?? outputFormats.includes(format);
     return `<label class="toggle-field"><span>${escapeHtml(label)}</span><input type="checkbox" data-field="${escapeAttribute(key)}" data-scope="config" ${enabled ? "checked" : ""}/><i></i></label>`;
   };
   const templateName = selectedTemplate?.name || String(values.template_name || "");
-  const templateText = String(values.analysis_prompt || selectedTemplate?.text || "");
-  const templateEditor = `<div class="trend-template-editor"><div class="form-grid two"><label class="form-field"><span>提示词模板</span><select id="trend-template"><option value="">新建或自定义模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><div class="template-action-buttons"><button id="trend-template-new" type="button" class="secondary-button">新建模板</button><button id="trend-template-delete" type="button" class="secondary-button" ${selectedTemplate && (!selectedTemplate.builtin || selectedTemplate.overridden) ? "" : "disabled"}>${selectedTemplate?.builtin ? "恢复内置模板" : "删除当前模板"}</button></div></div></div><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" ${selectedTemplate ? "readonly" : ""} value="${escapeAttribute(templateName)}" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="8" maxlength="8000" placeholder="填写趋势研究的深度分析要求">${escapeHtml(templateText)}</textarea></label><p class="hint-text">模板会作为本次趋势研究的深度分析要求。编辑内置模板后保存即可覆盖本机副本；恢复会重新使用内置内容。</p><div class="action-row"><button id="trend-template-save" type="button" class="secondary-button">保存模板</button><span id="trend-template-result" class="inline-result"></span></div></div>`;
+  const templateText = String(values.analysis_prompt || selectedTemplate?.text || defaultTemplate?.text || "");
+  const templateEditor = `<div class="trend-template-editor"><div class="form-grid two"><label class="form-field"><span>提示词模板</span><select id="trend-template"><option value="">新建或自定义模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><div class="template-action-buttons"><button id="trend-template-new" type="button" class="secondary-button">新建模板</button><button id="trend-template-delete" type="button" class="secondary-button" ${selectedTemplate && (!selectedTemplate.builtin || selectedTemplate.overridden) ? "" : "disabled"}>${selectedTemplate?.builtin ? "恢复内置模板" : "删除当前模板"}</button></div></div></div><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" ${selectedTemplate ? "readonly" : ""} value="${escapeAttribute(templateName)}" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="8" maxlength="8000" placeholder="填写趋势研究的深度分析要求">${escapeHtml(templateText)}</textarea></label><p class="hint-text">每次趋势研究都会运行综合分析；默认使用内置模板，可在此查看、编辑、保存或恢复。</p><div class="action-row"><button id="trend-template-save" type="button" class="secondary-button">保存模板</button><span id="trend-template-result" class="inline-result"></span></div></div>`;
   const tldrSettings = `${field({ label: "为每篇趋势论文生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true, help: "用简短文字概括每篇入选论文的研究问题、方法和结论；关闭后趋势报告只保留标题、摘要和综合分析。" })}<div id="trend-tldr-dependent" class="trend-dependent-fields" ${generateTldr ? "" : "hidden"}>${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div>`;
-  const analysisSettings = `<h3>分析技能</h3><label class="toggle-field"><span>综合分析</span><input id="trend-skill-comprehensive" type="checkbox" ${analysisEnabled ? "checked" : ""}/><i></i></label><div id="trend-analysis-dependent" class="trend-dependent-fields" ${analysisEnabled ? "" : "hidden"}>${templateEditor}</div><p id="trend-analysis-disabled-hint" class="hint-text trend-disabled-hint" ${analysisEnabled ? "hidden" : ""}>关闭综合分析后，不会发送深度分析提示词；已保存模板会保留，重新开启后可继续使用。</p>`;
+  const analysisSettings = `<h3>综合分析模板</h3>${templateEditor}`;
   return {
     run: `<label class="form-field"><span>研究关键词</span><input id="trend-keywords" value="${escapeAttribute(values.keywords)}" placeholder="例如 quantum error correction" /></label>`,
     parameters: `<div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><div id="trend-categories-host">${tagMultiSelect({ id: "trend-categories", label: "arXiv 分类（可选）", selected: values.categories, choices: categoryChoices, addLabel: localeText("添加分类", "Add category"), emptyLabel: localeText("不限制 arXiv 分类", "No arXiv category limit") })}</div>`,
@@ -1123,10 +1128,9 @@ async function renderTrend(token) {
       max_results: Number($("#trend-max-results").value), template: templateControl?.value ?? String(prior.template || ""),
       template_name: $("#trend-template-name")?.value ?? String(prior.template_name || ""),
       analysis_prompt: $("#trend-template-text")?.value ?? String(prior.analysis_prompt || ""),
-      skills: $("#trend-skill-comprehensive").checked ? ["comprehensive_analysis"] : [],
     };
   };
-  const templateOptions = (selected) => `<option value="">新建或自定义模板</option>${templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${item.name === selected ? "selected" : ""}>${escapeHtml(item.name)}${item.builtin ? "（内置）" : ""}</option>`).join("")}`;
+  const templateOptions = (selected) => `<option value="">新建或自定义模板</option>${templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${item.name === selected ? "selected" : ""}>${escapeHtml(`${item.name}${item.default ? localeText("（默认内置）", " (built-in default)") : item.builtin ? localeText("（内置）", " (built-in)") : ""}`)}</option>`).join("")}`;
   const selectedTemplate = () => templates.find((item) => item.name === $("#trend-template")?.value) || null;
   const updateTemplateAction = () => {
     const item = selectedTemplate();
@@ -1189,11 +1193,6 @@ async function renderTrend(token) {
   ["#trend-template-name", "#trend-template-text"].forEach((selector) => $(selector)?.addEventListener("input", () => {
     preserveTrend(); markConfigurationDirty();
   }));
-  $("#trend-skill-comprehensive")?.addEventListener("change", () => {
-    $("#trend-analysis-dependent", root).hidden = !$("#trend-skill-comprehensive", root).checked;
-    $("#trend-analysis-disabled-hint", root).hidden = $("#trend-skill-comprehensive", root).checked;
-    preserveTrend(); markConfigurationDirty();
-  });
   $('[data-field="trend_generate_tldr"]', root)?.addEventListener("change", (event) => {
     $("#trend-tldr-dependent", root).hidden = !event.target.checked;
   });
@@ -1247,7 +1246,7 @@ async function renderTrend(token) {
       return;
     }
     try {
-      await api("/api/tasks/trend_research", { method: "POST", body: { args: { keywords, date_from: values.date_from, date_to: values.date_to, categories: values.categories, sort_order: values.sort_order, max_results: values.max_results, analysis_prompt: values.skills.includes("comprehensive_analysis") ? values.analysis_prompt.trim() : "" } } });
+      await api("/api/tasks/trend_research", { method: "POST", body: { args: { keywords, date_from: values.date_from, date_to: values.date_to, categories: values.categories, sort_order: values.sort_order, max_results: values.max_results, analysis_prompt: values.analysis_prompt.trim() } } });
       toast("趋势任务已加入队列。 "); await refreshTrendStatus(root, token);
     } catch (error) { toast(error.message, "error"); }
   };
@@ -3046,9 +3045,9 @@ function normalizeForSave() {
   if (state.pageData.trend) {
     const trend = state.pageData.trend;
     config.trend_analysis_prompt = String(trend.analysis_prompt || "");
-    config.trend_enabled_skills = Array.isArray(trend.skills)
-      ? trend.skills.filter((item) => item === "comprehensive_analysis")
-      : [];
+    // 综合分析是趋势研究的固定阶段。保留这个兼容字段的规范值，避免旧
+    // 配置中的空技能列表在 Worker 侧意外跳过分析。
+    config.trend_enabled_skills = ["comprehensive_analysis"];
     // These two controls live beside the one-off launch form, but they are
     // also persisted preferences in the compatibility panel.  Keep their
     // browser constraints explicit here because native number inputs can be

@@ -70,7 +70,29 @@ DEFAULT_REPORTS_DIR = DEFAULT_DATA_DIR / "reports"
 DEFAULT_DB_RELATIVE_PATH = Path("daily_research") / "daily_research.db"
 LOGS_DIR = PROJECT_ROOT / "logs"
 TREND_PROMPT_TEMPLATES_PATH = DEFAULT_DATA_DIR / "trend_prompt_templates.json"
+DEFAULT_TREND_PROMPT_TEMPLATE_NAME = "综合分析"
 BUILTIN_TREND_PROMPT_TEMPLATES: dict[str, str] = {
+    DEFAULT_TREND_PROMPT_TEMPLATE_NAME: """请对以下论文集合进行综合趋势分析，用 Markdown 格式输出，包含以下五个部分：
+
+## 1. 热点话题
+识别 3-5 个主要研究子方向；每个子方向列出代表性论文（论文标识 + 标题），评估热度（高/中/低）和趋势（上升/稳定/下降）。
+
+## 2. 时间演变
+将时间段分为前期和后期，概述研究重心的变化，标注关键转折点和代表性论文。
+
+## 3. 核心研究者
+列出论文数量最多的 Top-5 研究者及其主要研究方向，简要描述主要合作团队。
+
+## 4. 研究空白与机会
+指出覆盖较少的方向和潜在的交叉研究机会（2-3 个即可）。
+
+## 5. 方法论趋势
+列出最常见的研究方法（Top-5），标注新兴方法。
+
+要求：
+- 分析必须基于提供的论文数据，不要引用外部论文
+- 每个部分简洁明了，避免冗长论述
+- 提及论文时标注论文标识""",
     "研究脉络综述": """请基于本次收集到的论文，写一份面向研究者的趋势综述。
 
 按以下结构组织：研究问题与范围、关键进展（按主题或时间线）、代表性方法与结果、不同路线之间的联系、已知局限，以及下一步值得跟踪的问题。只使用论文中可核实的信息；证据不足时明确说明，不要补充未给出的实验结果、结论或引用。""",
@@ -1234,6 +1256,7 @@ def list_trend_prompt_templates() -> list[dict[str, Any]]:
                 "text": stored.get(name, default_text),
                 "builtin": True,
                 "overridden": overridden,
+                "default": name == DEFAULT_TREND_PROMPT_TEMPLATE_NAME,
             }
         )
     rows.extend(
@@ -1242,6 +1265,7 @@ def list_trend_prompt_templates() -> list[dict[str, Any]]:
             "text": text,
             "builtin": False,
             "overridden": False,
+            "default": False,
         }
         for name, text in sorted(stored.items(), key=lambda item: item[0].casefold())
         if name not in BUILTIN_TREND_PROMPT_TEMPLATES

@@ -199,8 +199,9 @@ class TrendAgent:
         返回:
             Dict[str, str]: {skill_name: 分析结果 Markdown}
         """
-        # 获取启用的技能
-        enabled_skill_ids = settings.RESEARCH_ENABLED_SKILLS
+        # 综合分析是趋势研究的固定阶段。保留 ``RESEARCH_ENABLED_SKILLS``
+        # 仅用于读取旧配置，不能让旧实例保存的空列表跳过核心结果。
+        enabled_skill_ids = ["comprehensive_analysis"]
         all_skills = {s["name"]: s for s in self.skills.get("skills", [])}
         active_skills = [all_skills[sid] for sid in enabled_skill_ids if sid in all_skills]
 

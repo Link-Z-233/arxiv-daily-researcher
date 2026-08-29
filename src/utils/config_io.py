@@ -1181,10 +1181,9 @@ def build_config_dict(
             "generate_tldr": trend_generate_tldr,
             "tldr_batch_size": trend_tldr_batch_size,
             "output_formats": trend_output_formats or ["markdown", "html"],
-            "enabled_skills": trend_enabled_skills
-            or [
-                "comprehensive_analysis",
-            ],
+            # 综合分析是趋势研究的固定阶段。保留旧键以兼容旧版本配置，
+            # 但不再允许空列表关闭它。
+            "enabled_skills": ["comprehensive_analysis"],
             "analysis_prompt": trend_analysis_prompt or "",
         },
     }
@@ -1592,12 +1591,8 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     flat["trend_generate_tldr"] = tr.get("generate_tldr", True)
     flat["trend_tldr_batch_size"] = tr.get("tldr_batch_size", 10)
     flat["trend_output_formats"] = tr.get("output_formats", ["markdown", "html"])
-    flat["trend_enabled_skills"] = tr.get(
-        "enabled_skills",
-        [
-            "comprehensive_analysis",
-        ],
-    )
+    # v4.1 起综合分析始终执行；对旧配置中的空数组同样返回规范值。
+    flat["trend_enabled_skills"] = ["comprehensive_analysis"]
     flat["trend_analysis_prompt"] = tr.get("analysis_prompt", "")
 
     return flat

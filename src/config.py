@@ -437,10 +437,12 @@ class Settings(BaseSettings):
     RESEARCH_GENERATE_TLDR: bool = True  # 是否为每篇论文生成 LLM TLDR
     RESEARCH_TLDR_BATCH_SIZE: int = 10  # TLDR 批量并发大小
     RESEARCH_OUTPUT_FORMATS: List[str] = ["markdown", "html"]  # 输出格式
-    RESEARCH_ENABLED_SKILLS: List[str] = [  # 启用的趋势分析技能
+    # 综合分析是趋势研究的固定阶段。此兼容字段仍会写入旧配置，以便
+    # 已部署实例平滑升级，但不再作为用户可关闭的开关。
+    RESEARCH_ENABLED_SKILLS: List[str] = [
         "comprehensive_analysis",
     ]
-    RESEARCH_ANALYSIS_PROMPT: str = ""  # 自定义深度分析提示词；空则用技能库内置指令
+    RESEARCH_ANALYSIS_PROMPT: str = ""  # 综合分析模板文本；空则使用内置模板
 
     # ==================== Pydantic Settings配置 ====================
     # 指定从.env文件加载配置，支持嵌套参数用双下划线分隔
@@ -1063,12 +1065,9 @@ class Settings(BaseSettings):
                 self.RESEARCH_GENERATE_TLDR = tr.get("generate_tldr", True)
                 self.RESEARCH_TLDR_BATCH_SIZE = tr.get("tldr_batch_size", 10)
                 self.RESEARCH_OUTPUT_FORMATS = tr.get("output_formats", ["markdown", "html"])
-                self.RESEARCH_ENABLED_SKILLS = tr.get(
-                    "enabled_skills",
-                    [
-                        "comprehensive_analysis",
-                    ],
-                )
+                # ``enabled_skills`` 是 v4.0 及之前的兼容字段。趋势研究
+                # 始终执行综合分析，因此历史配置中的空数组也不能跳过它。
+                self.RESEARCH_ENABLED_SKILLS = ["comprehensive_analysis"]
                 analysis_prompt = tr.get("analysis_prompt", "")
                 self.RESEARCH_ANALYSIS_PROMPT = (
                     analysis_prompt.strip() if isinstance(analysis_prompt, str) else ""

@@ -24,6 +24,18 @@ class TrendPromptConfigRoundTripTests(unittest.TestCase):
         empty = build_config_dict()
         self.assertEqual(empty["trend_research"]["analysis_prompt"], "")
 
+    def test_comprehensive_analysis_cannot_be_disabled_by_legacy_skill_list(self):
+        config = build_config_dict(trend_enabled_skills=[])
+        self.assertEqual(
+            config["trend_research"]["enabled_skills"], ["comprehensive_analysis"]
+        )
+        self.assertEqual(
+            flatten_config_dict({"trend_research": {"enabled_skills": []}})[
+                "trend_enabled_skills"
+            ],
+            ["comprehensive_analysis"],
+        )
+
 
 class TrendAgentPromptOverrideTests(unittest.TestCase):
     def test_custom_prompt_replaces_comprehensive_skill_instruction(self):
@@ -48,7 +60,9 @@ class TrendAgentPromptOverrideTests(unittest.TestCase):
             return "分析结果"
 
         with (
-            patch.object(settings, "RESEARCH_ENABLED_SKILLS", ["comprehensive_analysis"]),
+            # A v4.0 config may still contain an empty skill list.  The v4.1
+            # pipeline must keep the required comprehensive analysis active.
+            patch.object(settings, "RESEARCH_ENABLED_SKILLS", []),
             patch.object(settings, "RESEARCH_ANALYSIS_PROMPT", " 自定义指令 "),
             patch.object(agent, "_run_single_skill", side_effect=fake_run),
         ):
