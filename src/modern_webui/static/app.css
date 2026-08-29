@@ -42,7 +42,7 @@ a:hover { color: var(--brand-strong); text-decoration: underline; text-underline
 h1, h2, h3, p { margin-top: 0; }
 h1 { margin-bottom: 10px; font-size: clamp(1.92rem, 3vw, 2.62rem); line-height: 1.15; letter-spacing: -.052em; }
 h2 { margin-bottom: 4px; font-size: 1.02rem; line-height: 1.35; letter-spacing: -.022em; }
-h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
+h3 { margin: 0 0 12px; font-size: .92rem; line-height: 1.45; }
 
 .app-shell { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh; }
 .sidebar {
@@ -172,7 +172,7 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
   background: var(--card);
   box-shadow: var(--shadow-sm);
 }
-.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-bottom: 17px; }
+.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-bottom: 19px; }
 .section-heading p { max-width: 48%; margin-bottom: 0; font-size: .79rem; text-align: right; }
 .section-divider { height: 1px; margin: 22px 3px; background: linear-gradient(90deg, transparent, var(--line-strong) 8%, var(--line-strong) 92%, transparent); }
 .loading, .empty-state { padding: 26px; border: 1px dashed #cdd5e3; border-radius: 12px; background: rgba(255, 255, 255, .6); color: var(--muted); text-align: center; font-size: .85rem; line-height: 1.6; }
@@ -198,18 +198,18 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .wide-button { width: 100%; }
 .compact-button { min-height: 31px; padding: 0 9px; border-radius: 7px; font-size: .73rem; }
 .icon-danger { width: 29px; height: 29px; border: 0; border-radius: 8px; background: #fff0ef; color: var(--danger); font-size: 1.05rem; }
-.action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 16px; }
+.action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 18px; }
 .history-maintenance-actions { margin-top: 8px; }
 .inline-result { color: var(--muted); font-size: .79rem; line-height: 1.45; }
 .inline-result.success { color: var(--success); }
 .inline-result.error { color: var(--danger); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
 
-.form-grid { display: grid; gap: 14px; }
+.form-grid { display: grid; gap: 16px; }
 .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid.author-bonus-grid { grid-template-columns: minmax(0, 3fr) minmax(140px, 1fr); }
-.form-field { display: grid; gap: 7px; min-width: 0; color: var(--text-secondary); font-size: .79rem; font-weight: 700; }
+.form-field { display: grid; gap: 8px; min-width: 0; color: var(--text-secondary); font-size: .79rem; font-weight: 700; }
 .form-field > span { display: flex; align-items: center; gap: 5px; }
 .field-help { color: var(--muted-light); font-weight: 450; }
 .form-field input, .form-field textarea, .form-field select, .stack-form input, .stack-form select {
@@ -252,6 +252,17 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .refresh-row span { display: grid; gap: 4px; }
 .refresh-row small { color: var(--muted); font-size: .74rem; font-weight: 500; }
 .refresh-row.toggle-field input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.section-card > .form-field + .form-field,
+.section-card > .form-field + .toggle-field,
+.section-card > .form-field + .form-grid,
+.section-card > .toggle-field + .form-field,
+.section-card > .toggle-field + .toggle-field,
+.section-card > .toggle-field + .form-grid,
+.section-card > .form-grid + .form-field,
+.section-card > .form-grid + .toggle-field,
+.section-card > .form-grid + .form-grid,
+.section-card > .form-grid + .source-custom,
+.section-card > .source-custom + .form-grid { margin-top: 17px; }
 .settings-expander { padding: 18px 21px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); box-shadow: var(--shadow-sm); }
 .settings-expander > summary { cursor: pointer; color: var(--text-secondary); font-size: .98rem; font-weight: 750; }
 .settings-expander[open] > summary { margin-bottom: 16px; }
