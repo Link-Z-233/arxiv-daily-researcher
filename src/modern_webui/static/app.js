@@ -228,6 +228,9 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "高性能 LLM": "High-capability LLM",
   "测试连接": "Test Connection",
   "自定义": "Custom",
+  "归一化使用的 LLM": "LLM for normalization",
+  "该选择会用于每日关键词标准化，并同步记录到 LLM 健康统计。": "This model is used for daily keyword normalization and recorded in LLM health statistics.",
+  "自定义趋势视图天数": "Custom trend view days",
   "关闭后不会请求 OpenAlex。开启后，还需在“数据源 → 额外数据源”中选择期刊来源。": "When disabled, OpenAlex is never requested. When enabled, choose journal sources under Data Sources → Additional Data Sources.",
   "通知设置": "Notification Settings",
   "配置任务完成、失败和阶段异常通知。可先准备渠道并测试连接，再启用全局通知。": "Configure completion, failure, and stage-level issue notifications. Prepare and test channels before enabling global notifications.",
@@ -1695,9 +1698,37 @@ function renderProxySettings() {
   return section("网络代理设置", `${field({ label: "启用网络代理", key: "proxy_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `${field({ label: "代理地址", key: "proxy_url", fallback: "", placeholder: "http://127.0.0.1:7890", help: "支持 HTTP 代理（http://host:port）和 SOCKS5 代理（socks5://host:port）。" })}${proxyNoProxyEditor()}${divider()}<h3>🎯 代理范围控制</h3><p class="hint-text">选择哪些服务使用代理。可以按需为不同服务分别启用或禁用代理。</p><div class="form-grid two">${field({ label: "ArXiv API", key: "proxy_arxiv", type: "checkbox", fallback: true, help: "ArXiv 论文抓取 API（export.arxiv.org）。" })}${field({ label: "OpenAlex API", key: "proxy_openalex", type: "checkbox", fallback: false, help: "OpenAlex 期刊论文数据源。" })}${field({ label: "Hugging Face Papers API", key: "proxy_huggingface_papers", type: "checkbox", fallback: false, help: "Hugging Face Papers 可选补充论文流。" })}${field({ label: "Semantic Scholar API", key: "proxy_semantic_scholar", type: "checkbox", fallback: false, help: "Semantic Scholar TL;DR 增强功能。" })}${field({ label: "LLM API", key: "proxy_llm_api", type: "checkbox", fallback: false, help: "LLM 大模型 API（评分、分析等）。" })}${field({ label: "通知 Webhook", key: "proxy_notifications", type: "checkbox", fallback: false, help: "企业微信、钉钉、Telegram 等通知推送。" })}${field({ label: "WebDAV 同步", key: "proxy_webdav", type: "checkbox", fallback: true, help: "WebDAV 配置和数据备份/恢复请求。" })}${field({ label: "检查更新", key: "proxy_update_check", type: "checkbox", fallback: false, help: "GitHub 版本更新检查（需访问 api.github.com）。" })}</div>` : ""}`, { icon: "🌐" });
 }
 
+function keywordTrendDefaultDaysFields() {
+  const presets = [7, 14, 30, 90, 365];
+  const savedDays = Math.max(1, Math.round(Number(configValue("keyword_trend_default_days", 30)) || 30));
+  const savedChoice = presets.includes(savedDays) ? String(savedDays) : "custom";
+  const choice = String(configValue("keyword_trend_default_days_ui", savedChoice));
+  const options = presets.map((value) => ({ value: String(value), label: `${value} ${localeText("天", "days")}` }));
+  options.push({ value: "custom", label: localeText("自定义", "Custom") });
+  const select = field({
+    label: "默认趋势视图天数",
+    key: "keyword_trend_default_days_ui",
+    type: "select",
+    choices: options,
+    fallback: savedChoice,
+    redraw: true,
+  });
+  if (choice !== "custom") return select;
+  return `${select}${field({
+    label: localeText("自定义趋势视图天数", "Custom trend view days"),
+    key: "keyword_trend_default_days_custom",
+    type: "number",
+    min: 1,
+    step: 1,
+    fallback: savedDays,
+  })}`;
+}
+
 function renderAdvanced() {
   const mineru = configValue("pdf_parser_mode", "pymupdf") === "mineru";
   const tracker = Boolean(configValue("keyword_tracker_enabled", true));
+  const normalizationEnabled = tracker && Boolean(configValue("keyword_normalization_enabled", true));
+  const keywordReportEnabled = tracker && Boolean(configValue("keyword_report_enabled", true));
   const downloadLimit = Math.max(1, Math.floor(Number(configValue("pdf_download_max_bytes", 52428800)) / 1048576));
   const pdfParser = section("PDF 解析器", [
     '<p class="hint-text">选择解析研究论文 PDF 的方式。</p>',
@@ -1708,8 +1739,8 @@ function renderAdvanced() {
   const concurrency = section("并发设置", `<p class="hint-text">LLM 评分的并行处理，注意 API 速率限制。</p><div class="form-grid two">${field({ label: "启用并发处理", key: "concurrency_enabled", type: "checkbox", fallback: false })}${field({ label: "工作线程数", key: "concurrency_workers", type: "number", min: 1, max: 10, fallback: 3, help: "推荐：3–5，过高可能触发速率限制。" })}</div>`, { icon: "⚡" });
   const requestPool = section("LLM 请求池", `<p class="hint-text">全局限制 LLM 请求速率，避免并发任务触发 API 限流。</p><div class="form-grid three">${field({ label: "启用 LLM 请求池", key: "llm_request_pool_enabled", type: "checkbox", fallback: true })}${field({ label: "每分钟请求数", key: "llm_requests_per_minute", type: "number", min: 1, max: 600, fallback: 30 })}${field({ label: "慢等待日志阈值（秒）", key: "llm_request_pool_log_slow_wait_seconds", type: "number", min: 0, max: 120, step: 0.5, fallback: 5 })}</div>`, { icon: "🚦" });
   const persistence = section("每日研究持久化", `<p class="hint-text">保存论文级评分与分析进度，用于断点续跑和失败恢复。</p>${field({ label: "启用每日深度分析", key: "daily_enable_deep_analysis", type: "checkbox", fallback: true })}${field({ label: "持久化数据库路径", key: "daily_research_db_path", fallback: "data/daily_research/daily_research.db" })}`, { icon: "💾" });
-  const featureToggles = section("功能开关", `<div class="form-grid two">${field({ label: "Token 用量追踪", key: "token_tracking_enabled", type: "checkbox", fallback: true })}${field({ label: "检查新版本并通知", key: "auto_update_enabled", type: "checkbox", fallback: true, help: "只检查 GitHub Release，不会自动拉取代码、重建镜像或重启容器。发现比当前版本更新的发布版时，经已启用的通知渠道提醒；若所有渠道未送达，后续检查会重试。" })}</div>`, { icon: "📊" });
-  const keywordTracker = section("关键词趋势追踪", `${field({ label: "启用关键词追踪", key: "keyword_tracker_enabled", type: "checkbox", fallback: true, redraw: true })}${tracker ? `<div class="form-grid two">${field({ label: "AI 归一化", key: "keyword_normalization_enabled", type: "checkbox", fallback: true })}${field({ label: "归一化批次大小", key: "keyword_normalization_batch_size", type: "number", min: 5, max: 100, fallback: 25 })}${field({ label: "默认趋势视图天数", key: "keyword_trend_default_days", type: "number", min: 7, max: 365, fallback: 30 })}${field({ label: "柱状图 Top-N", key: "keyword_chart_top_n", type: "number", min: 5, max: 50, fallback: 15 })}${field({ label: "趋势图 Top-N", key: "keyword_trend_top_n", type: "number", min: 3, max: 20, fallback: 5 })}${field({ label: "启用趋势报告", key: "keyword_report_enabled", type: "checkbox", fallback: true })}${field({ label: "报告频率", key: "keyword_report_frequency", type: "select", choices: ["daily", "weekly", "monthly", "always"], fallback: "weekly" })}</div>` : ""}`, { icon: "🧩" });
+  const featureToggles = section("功能开关", `${field({ label: "Token 用量追踪", key: "token_tracking_enabled", type: "checkbox", fallback: true })}${field({ label: "检查新版本并通知", key: "auto_update_enabled", type: "checkbox", fallback: true, help: "只检查 GitHub Release，不会自动拉取代码、重建镜像或重启容器。发现比当前版本更新的发布版时，经已启用的通知渠道提醒；若所有渠道未送达，后续检查会重试。" })}`, { icon: "📊" });
+  const keywordTracker = section("关键词趋势追踪", `${field({ label: "启用关键词追踪", key: "keyword_tracker_enabled", type: "checkbox", fallback: true, redraw: true })}${tracker ? `${field({ label: "AI 归一化", key: "keyword_normalization_enabled", type: "checkbox", fallback: true, redraw: true })}${normalizationEnabled ? `<div class="form-grid two">${field({ label: "归一化批次大小", key: "keyword_normalization_batch_size", type: "number", min: 5, max: 100, fallback: 25 })}${field({ label: "归一化使用的 LLM", key: "keyword_normalization_llm_role", type: "select", choices: [{ value: "cheap", label: "低成本 LLM" }, { value: "smart", label: "高性能 LLM" }], fallback: "cheap", help: "该选择会用于每日关键词标准化，并同步记录到 LLM 健康统计。" })}</div>` : ""}${keywordTrendDefaultDaysFields()}<div class="form-grid two">${field({ label: "柱状图 Top-N", key: "keyword_chart_top_n", type: "number", min: 5, max: 50, fallback: 15 })}${field({ label: "趋势图 Top-N", key: "keyword_trend_top_n", type: "number", min: 3, max: 20, fallback: 5 })}</div>${field({ label: "启用趋势报告", key: "keyword_report_enabled", type: "checkbox", fallback: true, redraw: true })}${keywordReportEnabled ? field({ label: "报告频率", key: "keyword_report_frequency", type: "select", choices: ["daily", "weekly", "monthly", "always"], fallback: "weekly" }) : ""}` : ""}`, { icon: "🧩" });
   const retryAndLogs = section("重试与日志", `<div class="form-grid three">${field({ label: "最大重试次数", key: "retry_max_attempts", type: "number", min: 1, max: 10, fallback: 3 })}${field({ label: "最短等待（秒）", key: "retry_min_wait", type: "number", min: 1, max: 60, fallback: 2 })}${field({ label: "最长等待（秒）", key: "retry_max_wait", type: "number", min: 5, max: 300, fallback: 30 })}</div>${field({ label: "运行锁超龄告警阈值（小时）", key: "run_lock_max_age_hours", type: "number", min: 1, max: 168, fallback: 12, help: "同一任务超过该时长时，后续同类任务会告警并跳过；不会按 PID 自动终止进程。" })}<div class="form-grid two">${field({ label: "日志轮转方式", key: "log_rotation_type", type: "select", choices: [{ value: "time", label: "time" }, { value: "size", label: "size" }], fallback: "time" })}${field({ label: "日志保留天数", key: "log_keep_days", type: "number", min: 1, max: 365, fallback: 30 })}</div>`, { icon: "♻️" });
   return [pdfParser, concurrency, requestPool, persistence, featureToggles, keywordTracker, retryAndLogs, renderProxySettings()].join(divider());
 }
@@ -2268,6 +2299,15 @@ function normalizeForSave() {
   if (Object.prototype.hasOwnProperty.call(config, "pdf_download_max_mb_ui")) {
     config.pdf_download_max_bytes = Math.max(1, Number(config.pdf_download_max_mb_ui) || 50) * 1024 * 1024;
     delete config.pdf_download_max_mb_ui;
+  }
+  if (Object.prototype.hasOwnProperty.call(config, "keyword_trend_default_days_ui")) {
+    const choice = String(config.keyword_trend_default_days_ui || "30");
+    const rawDays = choice === "custom"
+      ? Number(config.keyword_trend_default_days_custom)
+      : Number(choice);
+    config.keyword_trend_default_days = Math.max(1, Math.round(Number.isFinite(rawDays) ? rawDays : 30));
+    delete config.keyword_trend_default_days_ui;
+    delete config.keyword_trend_default_days_custom;
   }
   const sourceState = state.pageData.sources;
   if (sourceState) {
