@@ -1372,20 +1372,35 @@ function sourceDefinition(code) {
   return (state.settings.builtin_sources || []).find((item) => item.code === code);
 }
 
+function tagMultiSelect({ id, label, selected, choices, addLabel, emptyLabel, help = "" }) {
+  const byValue = new Map(choices.map((item) => [String(item.value), item]));
+  const selectedItems = selected.map((value) => byValue.get(String(value)) || {
+    value: String(value), label: String(value),
+  });
+  const chips = selectedItems.length
+    ? selectedItems.map((item) => `<span class="source-tag"><span>${escapeHtml(item.label)}</span><button type="button" data-tag-remove="${escapeAttribute(id)}" data-tag-value="${escapeAttribute(item.value)}" aria-label="移除 ${escapeAttribute(item.label)}">×</button></span>`).join("")
+    : `<span class="tag-select-placeholder">${escapeHtml(emptyLabel)}</span>`;
+  const available = choices.filter((item) => !selected.includes(String(item.value)));
+  return `<div class="form-field tag-select-field"><span>${escapeHtml(label)}${help ? `<span class="field-help">${escapeHtml(help)}</span>` : ""}</span><div class="tag-select-box"><div class="tag-select-chips">${chips}</div><select id="${escapeAttribute(id)}" aria-label="${escapeAttribute(label)}" ${available.length ? "" : "disabled"}><option value="">${escapeHtml(addLabel)}</option>${available.map((item) => `<option value="${escapeAttribute(item.value)}">${escapeHtml(item.label)}</option>`).join("")}</select></div></div>`;
+}
+
 function renderSources() {
   const data = ensureSourceState();
   // A report directory split only has meaning when there is a real secondary
   // source.  Keeping the toggle hidden for an empty master group mirrors the
   // Streamlit panel and avoids persisting a misleading no-op setting.
   const hasExtraSource = data.builtins.length > 0 || data.custom.length > 0;
-  const builtinOptions = (state.settings.builtin_sources || []).map((item) => `<option value="${escapeAttribute(item.code)}" ${data.builtins.includes(item.code) ? "selected" : ""}>${escapeHtml(item.display_name)}（${escapeHtml(item.code)}）</option>`).join("");
+  const builtinChoices = (state.settings.builtin_sources || []).map((item) => ({
+    value: item.code,
+    label: `${item.display_name}（${item.code}）`,
+  }));
   const customRows = pagedItems(
     "custom-sources",
     data.custom.map((item, index) => `<div class="list-row"><span><strong>${escapeHtml(item.display_name)}</strong> · ${escapeHtml(item.code)} · ${escapeHtml(item.full_name)}${item.issn?.length ? ` · ISSN: ${escapeHtml(item.issn.join(", "))}` : ""}</span><button class="icon-danger" data-remove-custom="${index}" aria-label="移除来源">×</button></div>`),
     "暂无自定义额外来源。",
   );
-  const categoryOptions = arxivCategories().map((item) => `<option value="${escapeAttribute(item.code)}" ${data.domains.includes(item.code) ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
-  return `${section("arXiv", `<label class="toggle-field"><span>启动 arXiv 来源</span><input id="source-arxiv" type="checkbox" ${data.arxiv ? "checked" : ""}/><i></i></label>${data.arxiv ? `<p class="hint-text">选择需要扫描的 arXiv 分类。</p><div class="form-grid two"><label class="form-field"><span>arXiv 分类</span><select id="source-domains" multiple>${categoryOptions}</select></label>${field({ label: "请求超时（秒）", key: "arxiv_fetch_timeout_seconds", type: "number", min: 30, max: 1800, fallback: 180 })}${field({ label: "公告回看宽限（天）", key: "arxiv_announcement_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}</div>` : ""}`)}${divider()}${section("额外数据源", `<label class="toggle-field"><span>启动额外数据源</span><input id="extra-enabled" type="checkbox" ${data.extraEnabled ? "checked" : ""}/><i></i></label>${data.extraEnabled ? `<div class="form-grid ${hasExtraSource ? "two" : "one"}"><label class="form-field"><span>内置来源</span><select id="extra-builtins" multiple>${builtinOptions}</select></label>${hasExtraSource ? field({ label: "按数据源分类整理报告", key: "reports_by_source", type: "checkbox", fallback: true }) : ""}</div><div class="source-custom"><h3>自定义来源</h3>${customRows}<details><summary>添加自定义 OpenAlex 期刊来源</summary><div class="form-grid two"><label class="form-field"><span>来源代码</span><input id="custom-code" placeholder="optica_express" /></label><label class="form-field"><span>展示名称</span><input id="custom-display" placeholder="Opt. Express" /></label><label class="form-field"><span>完整名称</span><input id="custom-full" placeholder="Optics Express" /></label><label class="form-field"><span>ISSN（逗号分隔）</span><input id="custom-issn" placeholder="1094-4087" /></label></div><button id="custom-add" class="secondary-button">添加来源</button></details></div>${data.builtins.includes("huggingface_papers") ? `<div class="form-grid two">${field({ label: "Hugging Face 可用性滞后（天）", key: "huggingface_papers_availability_lag_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "回看宽限（天）", key: "huggingface_papers_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "请求超时（秒）", key: "huggingface_papers_request_timeout_seconds", type: "number", min: 5, max: 600, fallback: 30 })}${field({ label: "请求间隔（秒）", key: "huggingface_papers_request_interval_seconds", type: "number", min: 0, max: 60, step: 0.05, fallback: 0.25 })}</div>` : ""}` : '<p class="hint-text">开启后可选择内置来源或添加 ISSN 期刊来源。</p>'}`)}`;
+  const categoryChoices = arxivCategories().map((item) => ({ value: item.code, label: item.label }));
+  return `${section("arXiv", `<label class="toggle-field"><span>启动 arXiv 来源</span><input id="source-arxiv" type="checkbox" ${data.arxiv ? "checked" : ""}/><i></i></label>${data.arxiv ? `<p class="hint-text">选择需要扫描的 arXiv 分类。</p>${tagMultiSelect({ id: "source-domains", label: "arXiv 分类", selected: data.domains, choices: categoryChoices, addLabel: localeText("添加分类", "Add category"), emptyLabel: localeText("尚未选择分类", "No categories selected") })}<div class="form-grid two">${field({ label: "请求超时（秒）", key: "arxiv_fetch_timeout_seconds", type: "number", min: 30, max: 1800, fallback: 180 })}${field({ label: "公告回看宽限（天）", key: "arxiv_announcement_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}</div>` : ""}`)}${divider()}${section("额外数据源", `<label class="toggle-field"><span>启动额外数据源</span><input id="extra-enabled" type="checkbox" ${data.extraEnabled ? "checked" : ""}/><i></i></label>${data.extraEnabled ? `<div class="form-grid ${hasExtraSource ? "two" : "one"}">${tagMultiSelect({ id: "extra-builtins", label: "内置来源", selected: data.builtins, choices: builtinChoices, addLabel: localeText("添加内置来源", "Add built-in source"), emptyLabel: localeText("尚未选择内置来源", "No built-in sources selected") })}${hasExtraSource ? field({ label: "按数据源分类整理报告", key: "reports_by_source", type: "checkbox", fallback: true }) : ""}</div><div class="source-custom"><h3>自定义来源</h3>${customRows}<details><summary>添加自定义 OpenAlex 期刊来源</summary><div class="form-grid two"><label class="form-field"><span>来源代码</span><input id="custom-code" placeholder="optica_express" /></label><label class="form-field"><span>展示名称</span><input id="custom-display" placeholder="Opt. Express" /></label><label class="form-field"><span>完整名称</span><input id="custom-full" placeholder="Optics Express" /></label><label class="form-field"><span>ISSN（逗号分隔）</span><input id="custom-issn" placeholder="1094-4087" /></label></div><button id="custom-add" class="secondary-button">添加来源</button></details></div>${data.builtins.includes("huggingface_papers") ? `<div class="form-grid two">${field({ label: "Hugging Face 可用性滞后（天）", key: "huggingface_papers_availability_lag_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "回看宽限（天）", key: "huggingface_papers_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "请求超时（秒）", key: "huggingface_papers_request_timeout_seconds", type: "number", min: 5, max: 600, fallback: 30 })}${field({ label: "请求间隔（秒）", key: "huggingface_papers_request_interval_seconds", type: "number", min: 0, max: 60, step: 0.05, fallback: 0.25 })}</div>` : ""}` : '<p class="hint-text">开启后可选择内置来源或添加 ISSN 期刊来源。</p>'}`)}`;
 }
 
 function validatedCustomJournalSource(raw, data) {
@@ -1434,8 +1449,26 @@ function bindSources(root) {
   const data = ensureSourceState();
   $("#source-arxiv", root)?.addEventListener("change", (event) => { data.arxiv = event.target.checked; renderPage(); });
   $("#extra-enabled", root)?.addEventListener("change", (event) => { data.extraEnabled = event.target.checked; renderPage(); });
-  $("#source-domains", root)?.addEventListener("change", (event) => { data.domains = Array.from(event.target.selectedOptions).map((item) => item.value); });
-  $("#extra-builtins", root)?.addEventListener("change", (event) => { data.builtins = Array.from(event.target.selectedOptions).map((item) => item.value); renderPage(); });
+  $("#source-domains", root)?.addEventListener("change", (event) => {
+    const value = String(event.target.value || "");
+    if (!value || data.domains.includes(value)) return;
+    data.domains.push(value);
+    renderPage();
+  });
+  $("#extra-builtins", root)?.addEventListener("change", (event) => {
+    const value = String(event.target.value || "");
+    if (!value || data.builtins.includes(value)) return;
+    data.builtins.push(value);
+    renderPage();
+  });
+  $$('[data-tag-remove="source-domains"]', root).forEach((button) => button.addEventListener("click", () => {
+    data.domains = data.domains.filter((value) => value !== button.dataset.tagValue);
+    renderPage();
+  }));
+  $$('[data-tag-remove="extra-builtins"]', root).forEach((button) => button.addEventListener("click", () => {
+    data.builtins = data.builtins.filter((value) => value !== button.dataset.tagValue);
+    renderPage();
+  }));
   $$('[data-remove-custom]', root).forEach((button) => button.addEventListener("click", () => { data.custom.splice(Number(button.dataset.removeCustom), 1); renderPage(); }));
   $("#custom-add", root)?.addEventListener("click", () => {
     try {
