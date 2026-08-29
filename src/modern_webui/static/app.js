@@ -760,7 +760,9 @@ function statusCard(status, options = {}) {
   const relatedLocks = (Array.isArray(status.active_locks) ? status.active_locks : []).filter((lock) => !relevantNames.has(String(lock.name || "")));
   const relatedLine = relatedLocks.length ? `<p class="status-locks">同时运行：${relatedLocks.map((lock) => escapeHtml(lock.name || "—")).join(" · ")}</p>` : "";
   const liveLog = status.live_log && typeof status.live_log === "object" && status.live_log.content ? `<details class="live-log" open><summary>📜 ${escapeHtml(status.live_log.name || "运行日志")} · 日志尾部 80 行${status.live_log.truncated ? "（已截断）" : ""}</summary><pre>${escapeHtml(status.live_log.content)}</pre></details>` : "";
-  const stop = status.is_active && options.allowStop !== false ? '<button class="danger-button" data-stop-task="1">停止当前任务</button>' : "";
+  const stop = status.can_stop && options.allowStop !== false
+    ? `<button class="danger-button" data-stop-task="${escapeAttribute(status.stop_kind || options.kind || "")}">停止当前任务</button>`
+    : "";
   const refresh = options.refresh === false ? "" : `<button class="secondary-button" data-refresh-status="${escapeAttribute(options.kind || "daily")}">刷新状态</button>`;
   return `<div class="status-card"><div class="status-line"><i class="status-dot ${escapeAttribute(task.state || "idle")}"></i><div><p class="eyebrow">当前任务</p><h3>${escapeHtml(task.label || "正在读取状态")}</h3><p class="muted">${escapeHtml(task.phase || "")}</p></div><span class="timestamp">${task.started_at ? `开始于 ${escapeHtml(formatTime(task.started_at))}` : ""}</span></div>${counterText ? `<p class="status-counters">${escapeHtml(counterText)}</p>` : ""}${progress}${lockLine}${relatedLine}${triggerNotice(status)}${task.detail ? `<p class="issue-box">${escapeHtml(task.detail)}</p>` : ""}${liveLog}<div class="action-row">${options.startLabel ? `<button class="primary-button" data-start-task="${escapeAttribute(options.mode)}" ${status.can_start ? "" : "disabled"}>${escapeHtml(options.startLabel)} <span>→</span></button>` : ""}${stop}${refresh}</div></div>`;
 }
@@ -2304,7 +2306,7 @@ function bindCommon(root = document) {
   }));
   $$('[data-stop-task]', root).forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm("确认停止当前任务？已完成的阶段会保留，未完成论文将留队等待重试。")) return;
-    try { await api("/api/tasks/stop", { method: "POST", body: {} }); toast("已发送停止请求。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); }
+    try { await api("/api/tasks/stop", { method: "POST", body: { kind: button.dataset.stopTask } }); toast("已发送停止请求。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); }
   }));
   $$('[data-clear-stale-triggers]', root).forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm("确认清除所有本地过期任务请求？未被工作进程接手的任务需要重新提交。")) return;

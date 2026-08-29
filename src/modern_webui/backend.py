@@ -94,6 +94,7 @@ _LOCK_KIND_PREFIXES = {
         "history_omission_scan.lock",
     ),
 }
+_STOPPABLE_TASK_KINDS = frozenset(_LOCK_KIND_PREFIXES)
 _LIVE_LOG_PREFIXES = {
     "daily_research.lock": ("daily_", "cron_", "startup_"),
     "legacy_import.lock": ("legacy_import_",),
@@ -521,6 +522,29 @@ def _locks_for_kind(locks: Iterable[Mapping[str, Any]], kind: str) -> list[dict[
     return rows
 
 
+def _lock_kind(name: object) -> str | None:
+    """Map a lock filename to the presentation/control task kind."""
+    value = str(name or "")
+    for kind in _LOCK_KIND_PREFIXES:
+        if _locks_for_kind(({"name": value},), kind):
+            return kind
+    return None
+
+
+def _mode_kind(mode: object) -> str | None:
+    """Map a durable trigger mode to the matching lock/control kind."""
+    normalized = str(mode or "").strip().lower()
+    if normalized in {"daily", "daily_research", "supplement", "supplement_run"}:
+        return "daily"
+    if normalized in {"backfill", "backfill_run"}:
+        return "past"
+    if normalized in {"trend", "trend_research"}:
+        return "trend"
+    if normalized in HISTORY_MODES:
+        return "history"
+    return None
+
+
 def _is_history_lock(lock: Mapping[str, Any]) -> bool:
     """Whether a lock belongs exclusively to idle-time history maintenance."""
     return bool(_locks_for_kind((lock,), "history"))
@@ -737,7 +761,12 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         or (kind == "history" and progress_kind in HISTORY_MODES)
         or (kind == "trend" and progress_kind in {"trend", "trend_research"})
     )
+    # The stop control belongs to the one task represented by this status
+    # card.  A daily overview can intentionally show a running backfill or
+    # trend job, so do not assume that the page kind itself owns the process.
+    stop_kind: str | None = None
     if progress_matches:
+        stop_kind = _mode_kind(progress_kind)
         task = {
             "state": "running",
             "label": MODE_LABELS.get(progress_kind, "正在运行"),
@@ -766,6 +795,7 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         }
     elif visible_live_records:
         latest = visible_live_records[0]
+        stop_kind = _mode_kind(latest["mode"])
         task = {
             "state": latest["state"],
             "label": MODE_LABELS.get(latest["mode"], latest["mode"]),
@@ -777,6 +807,7 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         }
     elif visible_locks:
         primary = visible_locks[0]
+        stop_kind = _lock_kind(primary.get("name"))
         task = {
             "state": "running",
             "label": _label_for_lock(str(primary.get("name") or "")),
@@ -812,6 +843,12 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         (visible_live_records and not trigger["stale"])
         or progress_matches
         or visible_locks
+    )
+    stop_locks = _locks_for_kind(locks, stop_kind) if stop_kind else []
+    can_stop = bool(
+        active
+        and stop_kind in _STOPPABLE_TASK_KINDS
+        and any(isinstance(lock.get("pid"), int) for lock in stop_locks)
     )
     if kind == "past":
         # A date range is a durable queue request.  As in the Streamlit
@@ -852,6 +889,8 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         "task": task,
         "is_active": active,
         "can_start": can_start,
+        "stop_kind": stop_kind,
+        "can_stop": can_stop,
         "queue": {
             "pending": int(queue.get("total") or 0),
             "retry": int(queue.get("failed_retry") or 0),
@@ -878,11 +917,31 @@ def enqueue_task(mode: str, args: Mapping[str, Any] | None = None) -> dict[str, 
     return {"queued": True, "request_id": path.stem.rsplit("_", 1)[-1], "mode": mode}
 
 
-def stop_active_tasks() -> list[int]:
-    pids = [row["pid"] for row in active_locks() if isinstance(row.get("pid"), int)]
+def stop_active_tasks(kind: str | None = None) -> list[int]:
+    """Request a graceful stop for one displayed task scope.
+
+    A modern status card may be rendered while an unrelated task is also
+    active (most notably a trend task beside a daily/backfill operation).
+    Scope the request to the card's matched lock instead of broadcasting a
+    stop request to every Worker PID.  ``None`` preserves the authenticated
+    legacy API behaviour for callers that deliberately request all tasks.
+    """
+    normalized_kind = str(kind or "").strip().lower() or None
+    if normalized_kind is not None and normalized_kind not in _STOPPABLE_TASK_KINDS:
+        raise ModernWebUIError("不支持该任务的停止操作。")
+    records = active_locks()
+    selected = (
+        _locks_for_kind(records, normalized_kind)
+        if normalized_kind is not None
+        else records
+    )
+    pids = [row["pid"] for row in selected if isinstance(row.get("pid"), int)]
     if not pids:
         raise ModernWebUIError("没有可停止的 WebUI 任务。")
     for pid in pids:
+        # Triggered children always monitor the Worker-owned shared queue
+        # below DEFAULT_DATA_DIR.  A custom database/data path can host run
+        # locks, but it does not move the trigger watcher's stop channel.
         request_stop(DEFAULT_DATA_DIR, pid)
     return pids
 

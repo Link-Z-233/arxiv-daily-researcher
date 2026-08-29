@@ -358,8 +358,15 @@ async def daily_start(request: Request) -> JSONResponse:
 
 async def stop_tasks(request: Request) -> JSONResponse:
     _require_session(request)
+    payload = await _optional_payload(request)
+    # ``/api/daily/stop`` predates scoped controls. Keep its intuitive
+    # compatibility meaning while the generic endpoint receives the exact
+    # status-card scope from the modern client.
+    kind = payload.get("kind")
+    if kind is None and request.url.path.endswith("/daily/stop"):
+        kind = "daily"
     try:
-        pids = await _blocking_call(backend.stop_active_tasks)
+        pids = await _blocking_call(backend.stop_active_tasks, kind)
     except Exception as exc:
         raise _safe_error(exc) from exc
     return JSONResponse({"ok": True, "pids": pids})
@@ -747,10 +754,10 @@ app = Starlette(
         Route("/api/status/{kind}", status_get, methods=["GET"]),
         Route("/api/daily/status", daily_status, methods=["GET"]),
         Route("/api/triggers/stale", clear_stale_triggers, methods=["POST"]),
-        Route("/api/tasks/{mode}", start_task, methods=["POST"]),
-        Route("/api/daily/run", daily_start, methods=["POST"]),
         Route("/api/tasks/stop", stop_tasks, methods=["POST"]),
         Route("/api/daily/stop", stop_tasks, methods=["POST"]),
+        Route("/api/tasks/{mode}", start_task, methods=["POST"]),
+        Route("/api/daily/run", daily_start, methods=["POST"]),
         Route("/api/history", history_get, methods=["GET"]),
         Route("/api/history/{request_id:str}/retry", history_retry, methods=["POST"]),
         Route("/api/papers", papers_get, methods=["GET"]),

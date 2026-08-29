@@ -72,6 +72,25 @@ class ModernWebUIAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"removed": 2})
 
+    def test_stop_endpoint_forwards_the_status_card_task_scope(self) -> None:
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/setup",
+                json={
+                    "username": "stop_admin",
+                    "password": "secret6",
+                    "password_confirmation": "secret6",
+                },
+            ).status_code,
+            200,
+        )
+        with patch.object(modern_app.backend, "stop_active_tasks", return_value=[42]) as stop:
+            response = self.client.post("/api/tasks/stop", json={"kind": "trend"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "pids": [42]})
+        stop.assert_called_once_with("trend")
+
     def test_setup_login_and_settings_use_the_same_authenticated_session(self) -> None:
         setup = self.client.post(
             "/api/auth/setup",

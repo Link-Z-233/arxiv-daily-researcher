@@ -74,6 +74,25 @@ class ModernBackendTests(unittest.TestCase):
         self.assertFalse(status["can_start"])
         self.assertEqual(status["task"]["label"], "趋势任务")
         self.assertEqual(status["relevant_locks"][0]["pid"], 42)
+        self.assertEqual(status["stop_kind"], "trend")
+        self.assertTrue(status["can_stop"])
+
+    def test_scoped_stop_targets_only_matching_lock(self) -> None:
+        locks = [
+            {"name": "daily_research.lock", "pid": 101},
+            {"name": "trend_research_abc123.lock", "pid": 202},
+        ]
+        with patch.object(backend, "active_locks", return_value=locks), patch.object(
+            backend, "request_stop"
+        ) as request_stop:
+            stopped = backend.stop_active_tasks("trend")
+
+        self.assertEqual(stopped, [202])
+        request_stop.assert_called_once_with(backend.DEFAULT_DATA_DIR, 202)
+
+    def test_scoped_stop_rejects_unknown_task_kind(self) -> None:
+        with self.assertRaisesRegex(backend.ModernWebUIError, "不支持"):
+            backend.stop_active_tasks("unknown")
 
     def test_run_status_marks_an_unclaimed_trigger_as_stale(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
