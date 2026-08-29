@@ -1306,7 +1306,7 @@ function historyStatusPanel(data) {
   return `${statusCard(status, { kind: "history", refresh: false, allowStop: false })}${divider()}<h3>最近一次导入结果</h3>${latestResult}${divider()}<h3>未完成任务</h3>${pagedTable("history-tasks", [{ label: "任务", value: (row) => row.label || row.mode || "—" }, { label: "状态", value: (row) => historyTaskStateLabel(row.state) }, { label: "进度", value: (row) => row.progress || "—" }, { label: "开始时间", value: (row) => formatTime(row.started_at || row.created_at) }, { label: "完成时间", value: (row) => formatTime(row.completed_at) }, { label: "问题摘要", value: (row) => row.issue || "—" }, { label: "操作", html: (row) => row.retryable ? `<button class="secondary-button compact-button" data-history-retry="${escapeAttribute(row.request_id)}">重试</button>` : "—" }], tasks, { empty: "没有未完成的历史维护任务。" })}`;
 }
 
-function bindHistoryActions(root) {
+function bindHistoryLaunchers(root) {
   $("#history-import", root)?.addEventListener("click", async () => {
     try {
       const selectedFullRepair = Boolean(configValue("legacy_import_full_repair_enabled", false));
@@ -1322,20 +1322,39 @@ function bindHistoryActions(root) {
   $("#history-omission", root)?.addEventListener("click", async () => {
     try { await api("/api/tasks/history_omission_scan", { method: "POST", body: { args: {} } }); toast("历史遗漏扫描已加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
   });
+}
+
+function bindHistoryRetries(root) {
   $$('[data-history-retry]', root).forEach((button) => button.addEventListener("click", async () => {
     try { await api(`/api/history/${encodeURIComponent(button.dataset.historyRetry)}/retry`, { method: "POST", body: {} }); toast("历史维护任务已重新加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
   }));
 }
 
+function updateHistoryActionAvailability(root, data) {
+  const pendingModes = new Set(historyTasks(data)
+    .filter((task) => ["queued", "starting", "running"].includes(task.state))
+    .map((task) => task.mode));
+  const availability = [
+    ["#history-import", "legacy_import"],
+    ["#history-repair", "history_data_repair"],
+    ["#history-omission", "history_omission_scan"],
+  ];
+  availability.forEach(([selector, mode]) => {
+    const button = $(selector, root);
+    if (button) button.disabled = pendingModes.has(mode);
+  });
+}
+
 function updateHistoryStatus(root, data) {
-  const actions = $("#history-actions", root);
   const status = $("#history-status-content", root);
-  if (!actions || !status) return false;
-  actions.innerHTML = historyActions(data);
+  if (!status) return false;
+  // Unlike the live status table, the import controls can contain an
+  // unsaved checkbox value.  Keep their DOM nodes and only update their
+  // disabled state so an automatic refresh never discards an operator edit.
+  updateHistoryActionAvailability(root, data);
   status.innerHTML = historyStatusPanel(data);
-  bindCommon(actions);
   bindPagers(status);
-  bindHistoryActions(root);
+  bindHistoryRetries(status);
   return true;
 }
 
@@ -1361,7 +1380,8 @@ async function renderHistory(token) {
   const autoRefresh = state.pageData.historyAutoRefresh !== false;
   root.innerHTML = `${pageHeader()}${section("旧版本历史导入", `<div id="history-actions">${historyActions(data)}</div>`, { icon: "📜" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，在历史任务运行或等待工作进程接手时每 5 秒刷新状态、进度和日志尾部。</small></span><input id="history-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label><div id="history-status-content">${historyStatusPanel(data)}</div>`, { icon: "📊" })}`;
   bindCommon(root);
-  bindHistoryActions(root);
+  bindHistoryLaunchers(root);
+  bindHistoryRetries(root);
   $("#history-auto-refresh", root)?.addEventListener("change", (event) => {
     state.pageData.historyAutoRefresh = event.target.checked;
     if (!event.target.checked) window.clearTimeout(state.timers.get("history"));
