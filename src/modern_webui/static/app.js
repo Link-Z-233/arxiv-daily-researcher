@@ -1320,10 +1320,18 @@ async function renderDiagnostics(token) {
   const root = $("#page-root");
   const ranges = { runs: "7", llm: "7", sources: "7", ...(state.pageData.diagnosticsRanges || {}) };
   root.innerHTML = `${pageHeader()}<div class="loading">正在读取运行诊断…</div>`;
+  // All three panels are backed by the same aggregate.  When their ranges
+  // match (the common default), share one request instead of making three
+  // identical SQLite reads and serialising them behind the server worker.
+  const requests = new Map();
+  const loadRange = (days) => {
+    if (!requests.has(days)) requests.set(days, api(`/api/diagnostics?days=${days}`));
+    return requests.get(days);
+  };
   const [runData, llmData, sourceData] = await Promise.all([
-    api(`/api/diagnostics?days=${ranges.runs}`),
-    api(`/api/diagnostics?days=${ranges.llm}`),
-    api(`/api/diagnostics?days=${ranges.sources}`),
+    loadRange(ranges.runs),
+    loadRange(ranges.llm),
+    loadRange(ranges.sources),
   ]);
   if (token !== state.renderToken) return;
   root.innerHTML = `${pageHeader()}${section("运行诊断", `${diagnosticsRangeControl("diagnostics-range", ranges.runs)}<p class="hint-text">显示所选时间范围内的每日研究与过去日报；旧历史维护任务请在“系统 → 历史维护”查看。</p>${pagedTable("operational-runs", [{ label: "任务", value: (row) => diagnosticTaskKindLabel(row.run_kind) }, { label: "状态", value: (row) => diagnosticRunStatusLabel(row.status) }, { label: "开始时间", value: (row) => formatTime(row.started_at) }, { label: "完成时间", value: (row) => formatTime(row.completed_at) }, { label: "论文数", key: "total_papers" }, { label: "问题摘要", value: (row) => row.error_summary || "—" }], runData.runs || [], { empty: "尚无每日研究或过去日报运行记录。" })}`, { icon: "🩺" })}${divider()}${section("LLM 健康", `${diagnosticsRangeControl("llm-range", ranges.llm)}<p class="hint-text">汇总所有真实任务（含历史维护）的 LLM 调用；查看不会发送探针请求，也不会额外消耗 Token。</p>${healthTable("llm-health", "llm", llmData.llm || [])}`, { icon: "🧠" })}${divider()}${section("数据源健康", `${diagnosticsRangeControl("source-range", ranges.sources)}<p class="hint-text">汇总所有真实任务（含历史维护）的数据源请求；查看不会发送探针请求。</p>${healthTable("source-health", "source", sourceData.sources || [])}`, { icon: "🌐" })}`;
