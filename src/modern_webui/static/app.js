@@ -5,25 +5,25 @@ const NAVIGATION = [
     ["trend_tasks", "📈 趋势任务"],
   ] },
   { id: "content", label: "内容", pages: [
-    ["reports", "📚 报告查看"],
+    ["reports", "📄 报告"],
     ["favorites", "⭐ 收藏"],
-    ["paper_search", "🔍 论文检索"],
+    ["paper_search", "🔎 检索"],
   ] },
   { id: "configuration", label: "配置", pages: [
-    ["keywords", "🏷️ 关键词"],
+    ["keywords", "🔑 关键词"],
     ["data_sources", "🧭 数据源"],
-    ["scoring", "🧮 评分策略"],
-    ["api", "🔑 API"],
+    ["scoring", "⚖️ 评分"],
+    ["api", "🔌 API"],
     ["notifications", "🔔 通知"],
     ["advanced", "⚙️ 高级设置"],
     ["accounts", "👤 账户"],
   ] },
   { id: "system", label: "系统", pages: [
     ["backup_sync", "☁️ 备份与同步"],
-    ["history_tasks", "📜 历史维护"],
+    ["history_tasks", "🗂 历史维护"],
     ["diagnostics", "🩺 诊断"],
     ["analytics", "📊 数据分析"],
-    ["logs", "🧾 日志"],
+    ["logs", "📜 日志"],
   ] },
 ];
 
