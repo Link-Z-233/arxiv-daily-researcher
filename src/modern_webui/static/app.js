@@ -113,7 +113,20 @@ function localizedString(value) {
   const leading = source.match(/^\s*/)?.[0] || "";
   const trailing = source.match(/\s*$/)?.[0] || "";
   const core = source.slice(leading.length, source.length - trailing.length);
-  return `${leading}${state.translationIndex.get(core) || MODERN_EN_TRANSLATIONS[core] || core}${trailing}`;
+  const translate = (text) => state.translationIndex.get(text) || MODERN_EN_TRANSLATIONS[text] || "";
+  let translated = translate(core);
+  // Section headings are rendered as an icon followed by wording in one text
+  // node (for example "🧮 评价策略").  The shared catalogue stores the
+  // wording without its presentational icon, so retain that prefix while
+  // translating the semantic portion.
+  if (!translated) {
+    const decorated = core.match(/^(\S+\s+)(.+)$/u);
+    if (decorated) {
+      const suffix = translate(decorated[2]);
+      if (suffix) translated = `${decorated[1]}${suffix}`;
+    }
+  }
+  return `${leading}${translated || core}${trailing}`;
 }
 
 function localizeRoot(root = document) {
