@@ -36,7 +36,7 @@ const PAGE_META = {
   paper_search: ["内容 / 论文检索", "论文检索", "从 SQLite 多维论文历史库检索已处理论文及其来源变体。"],
   keywords: ["配置 / 关键词", "关键词", "设置研究背景、主关键词和参考文献关键词提取。"],
   data_sources: ["配置 / 数据源", "数据源", "管理内置 arXiv 与额外数据来源。"],
-  scoring: ["配置 / 评分策略", "评分策略", "控制论文资格判定、排序与作者偏好。"],
+  scoring: ["配置 / 评分", "评分", "控制论文资格判定、排序与作者偏好。"],
   api: ["配置 / API", "API 配置", "配置 LLM、PDF 解析和第三方数据服务。"],
   notifications: ["配置 / 通知", "通知", "配置任务完成和阶段级异常通知。"],
   advanced: ["配置 / 高级设置", "高级设置", "调整解析、并发、重试、代理和持久化行为。"],
@@ -1099,9 +1099,9 @@ async function renderScoring(token) {
 
 function strategyDescription(strategy) {
   const descriptions = {
-    core_relevance_v2: "V2 先检查主关键词的内容相关度：加权平均分达到阈值，且至少一个主关键词达到强匹配分。参考关键词和专家作者仅用于排序，不能让无关论文通过。",
-    legacy_weighted_keyword_v1: "将主关键词和参考关键词的得分按权重累加，再叠加专家作者加分；总分达到“基础分 + 权重系数 × 全部关键词总权重”即通过。参考词和作者加分同时影响资格与排序，适合复现旧报告或临时回退。",
-    learned_preference_v1: "以加权关键词 V1 为基础，再加入从喜欢/不喜欢和历史通过记录学习到的关键词、作者偏好。每个学习项先限幅再衰减，且已直接配置的关键词不会重复计算；学习项会改变总分，也可能改变资格。",
+    core_relevance_v2: "先由模型为每个关键词给出内容相关度。资格只看主关键词：按主关键词权重计算平均相关度，并且至少一个主关键词达到“强匹配”门槛；两项都满足才通过。通过后，参考关键词和收藏作者只用于排序，不能让无关论文获得资格。",
+    legacy_weighted_keyword_v1: "将主关键词和参考关键词的得分按权重累加，再叠加专家作者加分；总分达到“基础分 + 权重系数 × 全部关键词总权重”即通过。参考词和作者加分同时影响资格与排序，适合复现旧报告或临时回退，但可能放大非核心信号。",
+    learned_preference_v1: "以加权关键词 V1 为基础，再加入从喜欢/不喜欢和历史通过记录学习到的关键词、作者偏好。每个学习项先限幅再衰减，且已直接配置的关键词不会重复计算；但学习项仍会改变总分，因此也可能改变资格。适合个人化筛选，不适合严格复现基准结果。",
   };
   return `<p class="info-box">${escapeHtml(descriptions[strategy] || descriptions.core_relevance_v2)}</p>`;
 }
@@ -1112,18 +1112,18 @@ function strategyQualificationNotice(strategy) {
   const hasPrimary = Array.isArray(primary) ? primary.some((item) => String(item || "").trim()) : Boolean(String(primary || "").trim());
   if (hasPrimary) return "";
   return configValue("enable_reference_extraction", false)
-    ? '<p class="info-box">尚未配置主关键词。此次运行会先从参考文献 PDF 提取可用关键词，并临时作为核心集合；若没有可用 PDF 或提取结果为空，运行会给出明确提示。</p>'
-    : '<p class="issue-box">尚未配置主关键词，且参考文献关键词提取未启用。运行无法开始；请添加主关键词，或启用提取并提供参考 PDF。</p>';
+    ? '<p class="info-box">尚未配置主要关键词。此次运行会先从参考文献 PDF 提取可用关键词；提取到的关键词将临时作为核心集合。若没有可用 PDF 或提取结果为空，运行会给出明确提示。</p>'
+    : '<p class="issue-box">尚未配置主要关键词，且参考文献关键词提取未启用。运行无法开始；请添加主要关键词，或启用参考文献关键词提取并提供参考 PDF。</p>';
 }
 
 function renderStrategyFields(strategy) {
   const maxKeywordScore = Math.max(1, Number(configValue("max_score_per_keyword", 10)) || 10);
   if (strategy === "core_relevance_v2") return `<div class="form-grid three">${field({ label: "核心相关性门槛", key: "core_relevance_threshold", type: "number", min: 0, max: maxKeywordScore, step: 0.5, fallback: 6 })}${field({ label: "核心词强匹配门槛", key: "core_keyword_min_score", type: "number", min: 0, max: maxKeywordScore, step: 0.5, fallback: 7 })}${field({ label: "参考词排序系数", key: "reference_ranking_weight", type: "number", min: 0, max: 5, step: 0.05, fallback: 0.25, help: "仅影响已合格论文的排序，不参与是否推荐。" })}</div>${field({ label: "每个关键词最高得分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}`;
-  if (strategy === "learned_preference_v1") return `<div class="form-grid two">${field({ label: "学习权重衰减", key: "learned_weight_dampening", type: "number", min: 0, max: 1, step: 0.05, fallback: 0.5 })}${field({ label: "学习词权重上限", key: "learned_term_weight_cap", type: "number", min: 0.1, max: 10, step: 0.1, fallback: 2 })}</div>${legacyStrategyFields()}<div id="learned-library"><div class="loading">正在读取偏好词库…</div></div>`;
+  if (strategy === "learned_preference_v1") return `<div class="form-grid two">${field({ label: "学习权重衰减系数", key: "learned_weight_dampening", type: "number", min: 0, max: 1, step: 0.05, fallback: 0.5 })}${field({ label: "学习单项限幅", key: "learned_term_weight_cap", type: "number", min: 0.1, max: 10, step: 0.1, fallback: 2 })}</div>${legacyStrategyFields()}<div id="learned-library"><div class="loading">正在读取偏好词库…</div></div>`;
   return legacyStrategyFields();
 }
 
-function legacyStrategyFields() { return `<div class="form-grid three">${field({ label: "基础通过分", key: "passing_score_base", type: "number", min: 0, max: 100, step: 0.5, fallback: 5 })}${field({ label: "权重系数", key: "passing_score_weight_coefficient", type: "number", min: 0, max: 20, step: 0.5, fallback: 3 })}${field({ label: "单关键词最高分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}</div>`; }
+function legacyStrategyFields() { return `<div class="form-grid three">${field({ label: "基础分", key: "passing_score_base", type: "number", min: 0, max: 100, step: 0.5, fallback: 5 })}${field({ label: "权重系数", key: "passing_score_weight_coefficient", type: "number", min: 0, max: 20, step: 0.5, fallback: 3 })}${field({ label: "每个关键词最高得分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}</div>`; }
 
 function legacyFormulaPreview(strategy) {
   if (strategy === "core_relevance_v2") return "";
