@@ -687,9 +687,15 @@ def task_records(modes: Iterable[str] | None = None, *, limit: int = 200) -> lis
         if record is None or record["mode"] not in allowed:
             continue
         # A live queue entry has precedence over an older receipt with the
-        # same ID. This makes worker hand-off visible without flickering.
+        # same ID. Once the watcher has written its ``running`` receipt,
+        # however, keep that stronger state while the ``.running`` hand-off
+        # file remains present for the lifetime of the child process.
         existing = records.get(record["request_id"])
-        if existing is None or existing["state"] not in {"queued", "starting"}:
+        if (
+            existing is None
+            or existing["state"] == "queued"
+            or (existing["state"] == "starting" and record["state"] == "running")
+        ):
             records[record["request_id"]] = record
     rows = list(records.values())
     rows.sort(key=lambda item: (item.get("updated_at") or item.get("created_at") or ""), reverse=True)

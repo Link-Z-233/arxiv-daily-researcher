@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import time
 import unittest
@@ -10,7 +11,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from modern_webui import backend
-from utils.webui_trigger import enqueue_trigger
+from utils.webui_trigger import enqueue_trigger, trigger_status_directory
 
 
 class ModernBackendTests(unittest.TestCase):
@@ -47,6 +48,33 @@ class ModernBackendTests(unittest.TestCase):
         self.assertEqual(rows[0]["request_id"], queued.stem.rsplit("_", 1)[-1])
         self.assertEqual(rows[0]["state"], "queued")
         self.assertFalse(rows[0]["args"]["full_repair"])
+
+    def test_running_receipt_beats_persistent_handoff_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            request = enqueue_trigger(data_dir, "legacy_import", full_repair=False)
+            request_id = request.stem.rsplit("_", 1)[-1]
+            request.rename(request.with_suffix(".running"))
+            status_dir = trigger_status_directory(data_dir)
+            status_dir.mkdir(parents=True, exist_ok=True)
+            (status_dir / f"{request_id}.json").write_text(
+                json.dumps(
+                    {
+                        "request_id": request_id,
+                        "mode": "legacy_import",
+                        "state": "running",
+                        "created_at": "2026-08-29T00:00:00+00:00",
+                        "started_at": "2026-08-29T00:00:03+00:00",
+                        "updated_at": "2026-08-29T00:00:03+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(backend, "DEFAULT_DATA_DIR", data_dir):
+                rows = backend.task_records({"legacy_import"})
+
+        self.assertEqual(rows[0]["state"], "running")
+        self.assertEqual(rows[0]["started_at"], "2026-08-29T00:00:03+00:00")
 
     def test_active_locks_includes_parameterized_trend_locks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
