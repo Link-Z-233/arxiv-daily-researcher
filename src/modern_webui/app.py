@@ -47,6 +47,7 @@ from modern_webui.auth import (  # noqa: E402
     validate_username,
     verify_password_hash,
 )
+from modern_webui.i18n import client_catalogue  # noqa: E402
 from utils.config_io import read_env, write_env  # noqa: E402
 
 
@@ -160,6 +161,12 @@ def _safe_error(exc: Exception) -> HTTPException:
 
 async def health(_request: Request) -> Response:
     return Response("ok", media_type="text/plain")
+
+
+async def translations_get(_request: Request) -> JSONResponse:
+    """Expose the shared, non-sensitive UI wording before sign-in."""
+
+    return JSONResponse({"items": client_catalogue()})
 
 
 async def auth_status(request: Request) -> JSONResponse:
@@ -691,6 +698,7 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
 app = Starlette(
     routes=[
         Route("/api/health", health, methods=["GET"]),
+        Route("/api/i18n", translations_get, methods=["GET"]),
         Route("/api/auth/status", auth_status, methods=["GET"]),
         Route("/api/auth/setup", setup_account, methods=["POST"]),
         Route("/api/auth/login", login, methods=["POST"]),

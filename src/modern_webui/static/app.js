@@ -48,6 +48,38 @@ const PAGE_META = {
   logs: ["系统 / 日志", "运行日志", "按任务分组读取最近的本地运行日志。"],
 };
 
+// Most wording comes from the compatibility panel's shared i18n catalogue.
+// These entries are unique to the modern presentation layer, so they live
+// beside that layer rather than duplicating an otherwise shared translation.
+const MODERN_EN_TRANSLATIONS = Object.freeze({
+  "现代管理面板": "Modern management panel",
+  "现代管理面板 · 预览": "Modern management panel · preview",
+  "正在读取配置文件…": "Loading configuration files…",
+  "重新加载配置": "Reload configuration",
+  "重启研究容器": "Restart research container",
+  "状态自动刷新": "Auto refresh status",
+  "显示非 arXiv 来源报告": "Show non-arXiv source reports",
+  "每行一个关键词": "One keyword per line",
+  "主关键词权重": "Primary keyword weight",
+  "最多关键词数量": "Maximum keyword count",
+  "启动 arXiv 来源": "Enable arXiv source",
+  "启动额外数据源": "Enable extra data sources",
+  "请求超时（秒）": "Request timeout (seconds)",
+  "公告回看宽限（天）": "Announcement lookback grace (days)",
+  "基础通过分": "Base passing score",
+  "单关键词最高分": "Maximum score per keyword",
+  "输出 Markdown": "Markdown report",
+  "输出 HTML": "HTML report",
+  "综合分析": "Comprehensive analysis",
+  "研究关键词": "Research keywords",
+  "已保存提示词模板": "Saved prompt template",
+  "不使用模板": "No template",
+  "查看范围": "View range",
+  "每页": "Rows per page",
+  "上一页": "Previous",
+  "下一页": "Next",
+});
+
 const FALLBACK_ARXIV_CATEGORIES = [
   "quant-ph", "hep-th", "hep-ex", "hep-lat", "gr-qc", "astro-ph", "cond-mat", "physics", "math-ph", "cs.AI", "cs.LG", "stat.ML",
 ];
@@ -66,10 +98,89 @@ const state = {
   timers: new Map(),
   pageData: {},
   renderToken: 0,
+  language: window.localStorage.getItem("adr-modern-language") === "en" ? "en" : "zh",
+  translationIndex: new Map(),
+  originalText: new WeakMap(),
+  originalAttributes: new WeakMap(),
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+function localizedString(value) {
+  const source = String(value ?? "");
+  if (state.language !== "en") return source;
+  const leading = source.match(/^\s*/)?.[0] || "";
+  const trailing = source.match(/\s*$/)?.[0] || "";
+  const core = source.slice(leading.length, source.length - trailing.length);
+  return `${leading}${state.translationIndex.get(core) || MODERN_EN_TRANSLATIONS[core] || core}${trailing}`;
+}
+
+function localizeRoot(root = document) {
+  const rootNode = root === document ? document.documentElement : root;
+  if (!rootNode) return;
+  const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent || !node.nodeValue?.trim() || parent.closest("script, style, pre, code, textarea")) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach((node) => {
+    if (!state.originalText.has(node)) state.originalText.set(node, node.nodeValue || "");
+    node.nodeValue = localizedString(state.originalText.get(node));
+  });
+  const elements = [];
+  if (rootNode instanceof Element && rootNode.matches("[placeholder], [title], [aria-label]")) elements.push(rootNode);
+  elements.push(...$$('[placeholder], [title], [aria-label]', rootNode));
+  elements.forEach((element) => {
+    let originals = state.originalAttributes.get(element);
+    if (!originals) {
+      originals = new Map();
+      state.originalAttributes.set(element, originals);
+    }
+    ["placeholder", "title", "aria-label"].forEach((attribute) => {
+      if (!element.hasAttribute(attribute)) return;
+      if (!originals.has(attribute)) originals.set(attribute, element.getAttribute(attribute) || "");
+      element.setAttribute(attribute, localizedString(originals.get(attribute)));
+    });
+  });
+  document.documentElement.lang = state.language === "en" ? "en" : "zh-CN";
+}
+
+function renderLanguageButton() {
+  const button = $("#language-button");
+  if (button) button.textContent = state.language === "en" ? "中文" : "English";
+}
+
+function applyLocale(root = document) {
+  localizeRoot(root);
+  renderLanguageButton();
+}
+
+async function loadTranslations() {
+  const payload = await api("/api/i18n");
+  const entries = payload?.items && typeof payload.items === "object" ? Object.values(payload.items) : [];
+  state.translationIndex = new Map(entries
+    .filter((entry) => entry && typeof entry.zh === "string" && typeof entry.en === "string")
+    .map((entry) => [entry.zh, entry.en]));
+}
+
+function toggleLanguage() {
+  state.language = state.language === "en" ? "zh" : "en";
+  window.localStorage.setItem("adr-modern-language", state.language);
+  renderNavigation();
+  if (state.auth?.authenticated) {
+    renderPage();
+  } else {
+    showAuth(state.auth || { enabled: true, configured: false });
+  }
+  applyLocale(document);
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -92,14 +203,14 @@ function formatTime(value) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).replace("T", " ").slice(0, 19);
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(state.language === "en" ? "en-US" : "zh-CN", {
     year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
   }).format(date);
 }
 
 function formatNumber(value) {
   const number = Number(value);
-  return Number.isFinite(number) ? new Intl.NumberFormat("zh-CN").format(number) : "—";
+  return Number.isFinite(number) ? new Intl.NumberFormat(state.language === "en" ? "en-US" : "zh-CN").format(number) : "—";
 }
 
 function formatPercent(value) {
@@ -166,7 +277,7 @@ async function api(path, options = {}) {
 
 function toast(text, type = "success") {
   const node = $("#toast");
-  node.textContent = text;
+  node.textContent = localizedString(text);
   node.className = `toast ${type}`;
   node.hidden = false;
   window.clearTimeout(node._timer);
@@ -221,6 +332,8 @@ function renderNavigation() {
     renderNavigation();
     renderPage();
   }));
+  applyLocale(navigation);
+  applyLocale($("#top-tabs"));
 }
 
 function pageHeader() {
@@ -375,6 +488,8 @@ function updateDailyStatus(root, status) {
   // settings form stays in place, keeping unfinished edits and focus intact.
   bindCommon(launch);
   bindCommon(statusHost);
+  applyLocale(launch);
+  applyLocale(statusHost);
   return true;
 }
 
@@ -1333,6 +1448,7 @@ function updateHistoryStatus(root, data) {
   status.innerHTML = historyStatusPanel(data);
   bindPagers(status);
   bindHistoryRetries(status);
+  applyLocale(status);
   return true;
 }
 
@@ -1780,7 +1896,16 @@ async function renderPage() {
   setLocation();
   const token = ++state.renderToken;
   const renderer = PAGE_RENDERERS[state.page] || renderDaily;
-  try { await renderer(token); } catch (error) { if (token === state.renderToken) $("#page-root").innerHTML = `${pageHeader()}<section class="section-card"><p class="error-message">${escapeHtml(error.message)}</p><button class="secondary-button" id="page-retry">重试</button></section>`; $("#page-retry")?.addEventListener("click", renderPage); }
+  try {
+    await renderer(token);
+    if (token === state.renderToken) applyLocale($("#page-root"));
+  } catch (error) {
+    if (token === state.renderToken) {
+      $("#page-root").innerHTML = `${pageHeader()}<section class="section-card"><p class="error-message">${escapeHtml(error.message)}</p><button class="secondary-button" id="page-retry">重试</button></section>`;
+      $("#page-retry")?.addEventListener("click", renderPage);
+      applyLocale($("#page-root"));
+    }
+  }
 }
 
 function showApp() {
@@ -1788,6 +1913,7 @@ function showApp() {
   $("#app").hidden = false;
   renderNavigation();
   $("#file-status").textContent = ".env 与 config.json 已加载";
+  applyLocale(document);
 }
 
 function showAuth(auth) {
@@ -1799,6 +1925,7 @@ function showAuth(auth) {
     $("#auth-title").textContent = "内网模式";
     $("#auth-hint").textContent = "登录验证已关闭，正在进入面板。";
     setup.hidden = true; login.hidden = true;
+    applyLocale(document);
     return;
   }
   if (!auth.configured) {
@@ -1810,6 +1937,7 @@ function showAuth(auth) {
     $("#auth-hint").textContent = "使用本机配置的管理员账户登录。";
     setup.hidden = true; login.hidden = false;
   }
+  applyLocale(document);
 }
 
 async function loadSettings() {
@@ -1849,16 +1977,21 @@ async function initialize() {
   $("#login-form").addEventListener("submit", loginSubmit);
   $("#setup-form").addEventListener("submit", setupSubmit);
   $("#skip-auth-button").addEventListener("click", skipAuth);
+  $("#language-button").addEventListener("click", toggleLanguage);
   $("#logout-button").addEventListener("click", logout);
   $("#save-button").addEventListener("click", () => saveAll(true));
   $("#reload-button").addEventListener("click", async () => { try { await loadSettings(); state.draft = { config: {}, env: {}, clearEnv: new Set() }; state.pageData.sources = undefined; toast("配置已重新加载。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); } });
   $("#restart-worker-button").addEventListener("click", async () => { if (!window.confirm("确认请求重启研究容器？正在运行的任务会由容器重启策略处理。")) return; try { await api("/api/system/restart-worker", { method: "POST", body: {} }); toast("已发送研究容器重启请求。", "success"); } catch (error) { toast(error.message, "error"); } });
   window.addEventListener("hashchange", () => { readLocation(); renderNavigation(); renderPage(); });
   try {
+    await loadTranslations().catch(() => null);
     state.auth = await api("/api/auth/status");
     if (!state.auth.authenticated) { showAuth(state.auth); return; }
     await loadSettings(); showApp(); renderPage();
-  } catch (error) { showAuth({ configured: false, enabled: true }); $("#auth-hint").textContent = error.message; }
+  } catch (error) {
+    showAuth({ configured: false, enabled: true });
+    $("#auth-hint").textContent = localizedString(error.message);
+  }
 }
 
 initialize();

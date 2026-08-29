@@ -44,6 +44,15 @@ class ModernWebUIAppTests(unittest.TestCase):
         self.assertEqual(settings.status_code, 503)
         self.assertIn("尚未初始化", settings.json()["detail"])
 
+    def test_shared_translation_catalogue_is_available_before_sign_in(self) -> None:
+        response = self.client.get("/api/i18n")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"]["nav_reports"], {
+            "zh": "📄 报告",
+            "en": "📄 Reports",
+        })
+
     def test_setup_login_and_settings_use_the_same_authenticated_session(self) -> None:
         setup = self.client.post(
             "/api/auth/setup",

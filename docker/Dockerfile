@@ -166,6 +166,7 @@ COPY src/utils/webdav_sync.py ./src/utils/
 COPY src/utils/webui_trigger.py ./src/utils/
 COPY src/utils/container_health.py ./src/utils/
 COPY src/webui/arxiv_categories.py ./src/webui/arxiv_categories.py
+COPY src/webui/i18n.py ./src/webui/i18n.py
 COPY src/modern_webui/ ./src/modern_webui/
 COPY VERSION* ./
 COPY .env.example ./
