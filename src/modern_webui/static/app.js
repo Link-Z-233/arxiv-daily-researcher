@@ -1328,6 +1328,30 @@ function localBackupMessage(result) {
   return `已创建本地备份：${result.name}`;
 }
 
+function webdavOperationDraft() {
+  const configKeys = [
+    "webdav_enabled", "webdav_remote_path", "webdav_sync_configs",
+    "webdav_sync_history", "webdav_sync_keywords", "webdav_sync_reports",
+    "proxy_enabled", "proxy_webdav", "proxy_url",
+  ];
+  const config = Object.fromEntries(configKeys.map((key) => [key, configValue(key)]));
+  const env = {
+    WEBDAV_URL: envValue("WEBDAV_URL"),
+    WEBDAV_USERNAME: envValue("WEBDAV_USERNAME"),
+  };
+  // A blank password input deliberately means "keep the saved password".
+  // Only include an entered replacement in this non-persistent operation.
+  if (state.draft.env.WEBDAV_PASSWORD) env.WEBDAV_PASSWORD = state.draft.env.WEBDAV_PASSWORD;
+  return { config, env };
+}
+
+function localBackupDraft() {
+  const draft = webdavOperationDraft();
+  draft.config.backup_local_retention_days = configValue("backup_local_retention_days", 7);
+  draft.config.backup_local_same_day_max_count = configValue("backup_local_same_day_max_count", 0);
+  return draft;
+}
+
 function webdavSettings() {
   const enabled = Boolean(configValue("webdav_enabled", false));
   const backupEnabled = Boolean(configValue("backup_enabled", true));
@@ -1348,9 +1372,9 @@ async function renderBackupSync(token) {
   });
   $("#config-export", root).addEventListener("click", () => { window.location.assign("/api/configuration/export"); });
   $$("[data-webdav]", root).forEach((button) => button.addEventListener("click", async () => {
-    try { await saveAll(false); const result = await api("/api/webdav", { method: "POST", body: { operation: button.dataset.webdav } }); $("#webdav-result").textContent = webdavOperationMessage(button.dataset.webdav, result); $("#webdav-result").className = `inline-result ${result.ok ? "success" : "error"}`; } catch (error) { toast(error.message, "error"); }
+    try { const result = await api("/api/webdav", { method: "POST", body: { operation: button.dataset.webdav, ...webdavOperationDraft() } }); $("#webdav-result").textContent = webdavOperationMessage(button.dataset.webdav, result); $("#webdav-result").className = `inline-result ${result.ok ? "success" : "error"}`; } catch (error) { toast(error.message, "error"); }
   }));
-  $("#backup-create", root).addEventListener("click", async () => { try { await saveAll(false); const result = await api("/api/backups/create", { method: "POST", body: {} }); toast(localBackupMessage(result), result.created && !result.upload_error ? "success" : "error"); renderPage(); } catch (error) { toast(error.message, "error"); } });
+  $("#backup-create", root).addEventListener("click", async () => { try { const result = await api("/api/backups/create", { method: "POST", body: localBackupDraft() }); toast(localBackupMessage(result), result.created && !result.upload_error ? "success" : "error"); renderPage(); } catch (error) { toast(error.message, "error"); } });
   $("#backup-export", root).addEventListener("click", () => { window.location.assign("/api/backups/export"); });
   $("#backup-file", root).addEventListener("change", (event) => { $("#backup-restore").disabled = !event.target.files?.[0]; });
   $("#backup-restore", root).addEventListener("click", async () => {

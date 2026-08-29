@@ -1461,11 +1461,76 @@ def _configured_webdav_client(
         raise ModernWebUIError(f"创建 WebDAV 客户端失败：{exc}") from exc
 
 
-def create_local_backup() -> dict[str, Any]:
+_WEBDAV_OPERATION_CONFIG_FIELDS = frozenset(
+    {
+        "webdav_enabled",
+        "webdav_remote_path",
+        "webdav_sync_configs",
+        "webdav_sync_history",
+        "webdav_sync_keywords",
+        "webdav_sync_reports",
+        "proxy_enabled",
+        "proxy_webdav",
+        "proxy_url",
+        "backup_local_retention_days",
+        "backup_local_same_day_max_count",
+    }
+)
+_WEBDAV_OPERATION_ENV_FIELDS = frozenset(
+    {"WEBDAV_URL", "WEBDAV_USERNAME", "WEBDAV_PASSWORD"}
+)
+
+
+def _webdav_operation_values(
+    config_overrides: Mapping[str, Any] | None = None,
+    env_overrides: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Merge bounded, non-persistent form values for a manual WebDAV action.
+
+    Streamlit's WebDAV controls use the live form values for a test, sync or
+    local backup; they do not silently click the global Save button first.
+    Keep that contract in the modern panel.  The operator can therefore test
+    a new endpoint or scope without altering the worker's persisted settings.
+    """
+
+    if config_overrides is not None and not isinstance(config_overrides, Mapping):
+        raise ModernWebUIError("WebDAV 配置覆盖必须是对象。")
+    if env_overrides is not None and not isinstance(env_overrides, Mapping):
+        raise ModernWebUIError("WebDAV 凭据覆盖必须是对象。")
+
+    # ``flat_config`` normally builds a fresh mapping, but keep this helper
+    # side-effect free even when a caller or test supplies a cached mapping.
+    settings = dict(flat_config())
+    for key, value in (config_overrides or {}).items():
+        if key not in _WEBDAV_OPERATION_CONFIG_FIELDS:
+            raise ModernWebUIError("包含不支持的 WebDAV 配置字段。")
+        if not isinstance(value, (str, int, float, bool)):
+            raise ModernWebUIError("WebDAV 配置值无效。")
+        settings[key] = value
+
+    env = {str(key): str(value) for key, value in read_env().items()}
+    for key, value in (env_overrides or {}).items():
+        if key not in _WEBDAV_OPERATION_ENV_FIELDS:
+            raise ModernWebUIError("包含不支持的 WebDAV 凭据字段。")
+        if not isinstance(value, (str, int, float, bool)):
+            raise ModernWebUIError("WebDAV 凭据值无效。")
+        text = str(value)
+        if len(text) > 12_000 or "\x00" in text:
+            raise ModernWebUIError("WebDAV 凭据长度无效。")
+        env[key] = text
+    return settings, env
+
+
+def create_local_backup(
+    config_overrides: Mapping[str, Any] | None = None,
+    env_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create the same local snapshot and optional incremental mirror as Streamlit."""
-    settings = flat_config()
+    settings, env = _webdav_operation_values(config_overrides, env_overrides)
     try:
-        webdav_sync = _configured_webdav_client(settings, allow_unconfigured=True)
+        webdav_sync = _configured_webdav_client(
+            settings, env, allow_unconfigured=True
+        )
         result = create_backup(
             configured_data_dir(settings),
             database=configured_db_path(settings),
@@ -1524,9 +1589,13 @@ def export_configuration() -> tuple[bytes, str]:
     return buffer.getvalue(), "arxiv_researcher_config.zip"
 
 
-def webdav_operation(operation: str) -> dict[str, Any]:
-    settings = flat_config()
-    client = _configured_webdav_client(settings)
+def webdav_operation(
+    operation: str,
+    config_overrides: Mapping[str, Any] | None = None,
+    env_overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    settings, env = _webdav_operation_values(config_overrides, env_overrides)
+    client = _configured_webdav_client(settings, env)
     try:
         if operation == "test":
             return {"ok": bool(client.test_connection())}

@@ -207,6 +207,54 @@ class ModernBackendTests(unittest.TestCase):
             include_keywords=False,
         )
 
+    def test_manual_webdav_sync_uses_unsaved_form_values_without_persisting(self) -> None:
+        client = MagicMock()
+        client.sync_all.return_value = {"success": 1, "total": 1}
+        saved_settings = {
+            "webdav_enabled": True,
+            "webdav_remote_path": "/saved/",
+            "webdav_sync_configs": True,
+            "webdav_sync_history": True,
+            "webdav_sync_keywords": True,
+            "webdav_sync_reports": False,
+        }
+        saved_env = {
+            "WEBDAV_URL": "https://saved.example.test/dav/",
+            "WEBDAV_USERNAME": "saved-user",
+            "WEBDAV_PASSWORD": "saved-password",
+        }
+        overrides = {
+            "webdav_enabled": True,
+            "webdav_remote_path": "/candidate/",
+            "webdav_sync_configs": False,
+            "webdav_sync_history": False,
+            "webdav_sync_keywords": True,
+            "webdav_sync_reports": True,
+        }
+        env_overrides = {
+            "WEBDAV_URL": "https://candidate.example.test/dav/",
+            "WEBDAV_USERNAME": "candidate-user",
+            "WEBDAV_PASSWORD": "candidate-password",
+        }
+        with patch.object(backend, "flat_config", return_value=saved_settings), patch.object(
+            backend, "read_env", return_value=saved_env
+        ), patch.object(backend, "_configured_webdav_client", return_value=client) as build_client:
+            result = backend.webdav_operation("upload", overrides, env_overrides)
+
+        self.assertTrue(result["ok"])
+        settings, env = build_client.call_args.args[:2]
+        self.assertEqual(settings["webdav_remote_path"], "/candidate/")
+        self.assertEqual(env["WEBDAV_URL"], "https://candidate.example.test/dav/")
+        self.assertEqual(saved_settings["webdav_remote_path"], "/saved/")
+        self.assertEqual(saved_env["WEBDAV_URL"], "https://saved.example.test/dav/")
+        client.sync_all.assert_called_once_with(
+            direction="upload",
+            include_reports=True,
+            include_configs=False,
+            include_history=False,
+            include_keywords=True,
+        )
+
     def test_manual_backup_keeps_local_snapshot_and_mirrors_when_configured(self) -> None:
         settings = {
             "webdav_enabled": True,
@@ -228,6 +276,45 @@ class ModernBackendTests(unittest.TestCase):
             retention_days=31,
             same_day_max_count=4,
             webdav_sync=webdav_client,
+        )
+
+    def test_manual_backup_uses_unsaved_retention_and_webdav_values(self) -> None:
+        settings = {
+            "webdav_enabled": True,
+            "backup_local_retention_days": 7,
+            "backup_local_same_day_max_count": 0,
+        }
+        client = MagicMock()
+        with patch.object(backend, "flat_config", return_value=settings), patch.object(
+            backend, "read_env", return_value={"WEBDAV_URL": "https://saved.example/", "WEBDAV_USERNAME": "saved"}
+        ), patch.object(backend, "configured_data_dir", return_value=Path("/data")), patch.object(
+            backend, "configured_db_path", return_value=Path("/data/db.sqlite")
+        ), patch.object(backend, "_configured_webdav_client", return_value=client) as build_client, patch.object(
+            backend, "create_backup", return_value={"created": True, "name": "candidate.db.gz"}
+        ) as create:
+            result = backend.create_local_backup(
+                {
+                    "webdav_enabled": True,
+                    "backup_local_retention_days": 31,
+                    "backup_local_same_day_max_count": 4,
+                },
+                {
+                    "WEBDAV_URL": "https://candidate.example/",
+                    "WEBDAV_USERNAME": "candidate",
+                    "WEBDAV_PASSWORD": "candidate-password",
+                },
+            )
+
+        self.assertTrue(result["created"])
+        settings_arg, env_arg = build_client.call_args.args[:2]
+        self.assertEqual(settings_arg["backup_local_retention_days"], 31)
+        self.assertEqual(env_arg["WEBDAV_USERNAME"], "candidate")
+        create.assert_called_once_with(
+            Path("/data"),
+            database=Path("/data/db.sqlite"),
+            retention_days=31,
+            same_day_max_count=4,
+            webdav_sync=client,
         )
 
     def test_diagnostics_preserve_source_receipt_fields_for_the_ui(self) -> None:

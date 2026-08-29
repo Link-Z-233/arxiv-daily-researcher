@@ -153,6 +153,14 @@ async def _payload(request: Request, *, limit: int = _MAX_JSON_BYTES) -> dict[st
     return value
 
 
+async def _optional_payload(request: Request) -> dict[str, Any]:
+    """Keep legacy POST endpoints usable when they intentionally send no body."""
+
+    if request.headers.get("content-length") in {None, "0"}:
+        return {}
+    return await _payload(request)
+
+
 def _safe_error(exc: Exception) -> HTTPException:
     if isinstance(exc, backend.ModernWebUIError):
         return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
@@ -480,8 +488,15 @@ async def backups_get(request: Request) -> JSONResponse:
 
 async def backup_create(request: Request) -> JSONResponse:
     _require_session(request)
+    payload = await _optional_payload(request)
     try:
-        return JSONResponse(await _blocking_call(backend.create_local_backup))
+        return JSONResponse(
+            await _blocking_call(
+                backend.create_local_backup,
+                payload.get("config"),
+                payload.get("env"),
+            )
+        )
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -519,7 +534,12 @@ async def webdav_post(request: Request) -> JSONResponse:
     payload = await _payload(request)
     try:
         return JSONResponse(
-            await _blocking_call(backend.webdav_operation, str(payload.get("operation") or ""))
+            await _blocking_call(
+                backend.webdav_operation,
+                str(payload.get("operation") or ""),
+                payload.get("config"),
+                payload.get("env"),
+            )
         )
     except Exception as exc:
         raise _safe_error(exc) from exc
