@@ -483,15 +483,27 @@ class Reporter:
             )
             lines.append(f"- **当前及格分**: {passing_score:.1f}")
         if settings.ENABLE_AUTHOR_BONUS:
+            configured_author_points = getattr(settings, "AUTHOR_BONUS_BY_AUTHOR", {})
+            has_individual_author_points = bool(
+                getattr(settings, "AUTHOR_BONUS_BY_AUTHOR_EXPLICIT", False)
+            ) and isinstance(configured_author_points, dict) and bool(configured_author_points)
             if settings.normalized_score_strategy() == CORE_RELEVANCE_V2:
-                lines.append(
-                    f"- **作者偏好**: 启用（合格后排序 +{settings.AUTHOR_BONUS_POINTS} / 专家，不影响资格）"
-                )
+                if has_individual_author_points:
+                    lines.append("- **作者偏好**: 启用（合格后按作者配置加分排序，不影响资格）")
+                else:
+                    lines.append(
+                        f"- **作者偏好**: 启用（合格后排序 +{settings.AUTHOR_BONUS_POINTS} / 专家，不影响资格）"
+                    )
             else:
-                lines.append(f"- **作者加分**: 启用（{settings.AUTHOR_BONUS_POINTS}分/专家）")
+                if has_individual_author_points:
+                    lines.append("- **作者加分**: 启用（按作者配置加分）")
+                else:
+                    lines.append(f"- **作者加分**: 启用（{settings.AUTHOR_BONUS_POINTS}分/专家）")
             if settings.EXPERT_AUTHORS:
                 experts = ", ".join(
-                    markdown_text(author, multiline=False) for author in settings.EXPERT_AUTHORS
+                    f"{markdown_text(author, multiline=False)}"
+                    f"{f' (+{configured_author_points.get(author, settings.AUTHOR_BONUS_POINTS):g})' if has_individual_author_points else ''}"
+                    for author in settings.EXPERT_AUTHORS
                 )
                 lines.append(f"- **专家作者**: {experts}")
         lines.append("")

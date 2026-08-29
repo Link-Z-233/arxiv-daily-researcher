@@ -75,6 +75,30 @@ class ScoringValidationTests(unittest.TestCase):
         self.assertEqual(result.author_bonus, 3.0)
         self.assertEqual(result.total_score, 12.25)
 
+    def test_expert_bonus_uses_each_authors_configured_points(self):
+        payload = _score_payload(expert_authors_found=["Alice Smith", "Bob Jones"])
+        with patch.object(settings, "MAX_SCORE_PER_KEYWORD", 10), patch.object(
+            settings, "ENABLE_AUTHOR_BONUS", True
+        ), patch.object(
+            settings, "EXPERT_AUTHORS", ["Alice Smith", "Bob Jones"]
+        ), patch.object(
+            settings, "AUTHOR_BONUS_POINTS", 3.0
+        ), patch.object(
+            settings, "AUTHOR_BONUS_BY_AUTHOR", {"Alice Smith": 1.5, "Bob Jones": 4.0}
+        ), patch.object(
+            settings, "SCORE_STRATEGY", "legacy_weighted_keyword_v1"
+        ):
+            result = self._agent_with_response(payload).score_paper_with_keywords(
+                "title",
+                ["Alice Smith", "Bob Jones"],
+                "abstract",
+                {"quantum sensing": 1.0, "noise": 0.5},
+            )
+
+        self.assertEqual(result.expert_authors_found, ["Alice Smith", "Bob Jones"])
+        self.assertEqual(result.author_bonus, 5.5)
+        self.assertEqual(result.total_score, 14.75)
+
     def test_invalid_score_configuration_fails_before_an_llm_call(self):
         agent = AnalysisAgent.__new__(AnalysisAgent)
         agent._call_cheap_llm = lambda _prompt: self.fail("LLM must not be called")

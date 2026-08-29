@@ -47,6 +47,30 @@ def _model_settings(model: Any, temperature: Any) -> Dict[str, Any]:
     }
 
 
+def _primary_keyword_entries() -> list[list[Any]]:
+    """Return the configured per-keyword weights in prompt order."""
+    weights = getattr(settings, "PRIMARY_KEYWORD_WEIGHTS", {})
+    if not isinstance(weights, Mapping):
+        weights = {}
+    fallback = getattr(settings, "PRIMARY_KEYWORD_WEIGHT", 1.0)
+    return [
+        [str(keyword), weights.get(keyword, fallback)]
+        for keyword in getattr(settings, "PRIMARY_KEYWORDS", [])
+    ]
+
+
+def _author_bonus_entries() -> list[list[Any]]:
+    """Return author-specific bonuses without exposing unrelated settings."""
+    values = getattr(settings, "AUTHOR_BONUS_BY_AUTHOR", {})
+    if not isinstance(values, Mapping):
+        values = {}
+    fallback = getattr(settings, "AUTHOR_BONUS_POINTS", 0.0)
+    return [
+        [str(author), values.get(author, fallback)]
+        for author in getattr(settings, "EXPERT_AUTHORS", [])
+    ]
+
+
 def build_score_audit_metadata(
     paper: Any,
     keywords: Mapping[str, Any],
@@ -68,6 +92,7 @@ def build_score_audit_metadata(
         # Primary-keyword membership changes the V2 qualification rule even
         # when the merged keyword dictionary happens to stay identical.
         "primary_keywords": [str(keyword) for keyword in settings.PRIMARY_KEYWORDS],
+        "primary_keyword_entries": _primary_keyword_entries(),
         "score_settings": {
             "max_score_per_keyword": settings.MAX_SCORE_PER_KEYWORD,
             "passing_score_base": settings.PASSING_SCORE_BASE,
@@ -77,6 +102,7 @@ def build_score_audit_metadata(
             "reference_ranking_weight": settings.REFERENCE_RANKING_WEIGHT,
             "enable_author_bonus": settings.ENABLE_AUTHOR_BONUS,
             "author_bonus_points": settings.AUTHOR_BONUS_POINTS,
+            "author_bonus_entries": _author_bonus_entries(),
             "expert_authors_fingerprint": stage_input_fingerprint(
                 [str(author) for author in settings.EXPERT_AUTHORS]
             ),
@@ -101,6 +127,7 @@ def build_score_audit_metadata(
             for keyword, weight in keywords.items()
         ],
         "primary_keywords": [str(keyword) for keyword in settings.PRIMARY_KEYWORDS],
+        "primary_keyword_entries": _primary_keyword_entries(),
         # The actual configured expert list and free-text research context
         # intentionally stay out of the exportable audit evidence.  Their
         # fingerprints still distinguish policy changes without disclosure.
@@ -134,12 +161,14 @@ def build_stage_input_fingerprints(
         # Preserve configured order as it also defines the prompt's order.
         "keywords": [[str(key), value] for key, value in keywords.items()],
         "primary_keywords": [str(keyword) for keyword in settings.PRIMARY_KEYWORDS],
+        "primary_keyword_entries": _primary_keyword_entries(),
         "research_context": str(settings.RESEARCH_CONTEXT),
         "score_settings": {
             "max_score_per_keyword": settings.MAX_SCORE_PER_KEYWORD,
             "enable_author_bonus": settings.ENABLE_AUTHOR_BONUS,
             "expert_authors": [str(author) for author in settings.EXPERT_AUTHORS],
             "author_bonus_points": settings.AUTHOR_BONUS_POINTS,
+            "author_bonus_entries": _author_bonus_entries(),
             "passing_score_base": settings.PASSING_SCORE_BASE,
             "passing_score_weight_coefficient": settings.PASSING_SCORE_WEIGHT_COEFFICIENT,
             "strategy_id": configured_score_strategy_id(),

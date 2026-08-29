@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import re
 
 import json5  # 用于加载带注释的配置文件
@@ -58,6 +59,65 @@ def resolve_project_relative_path(project_root: Path, value: object, *, label: s
     except ValueError as exc:
         raise ValueError(f"{label} 必须位于项目目录内") from exc
     return resolved
+
+
+def _weighted_entries_from_config(
+    raw_entries: object,
+    *,
+    name_key: str,
+    value_key: str,
+    fallback_names: object,
+    fallback_value: object,
+    label: str,
+) -> Tuple[List[str], Dict[str, float]]:
+    """Read v4.1 per-item weights while retaining the older list format.
+
+    ``config.json`` remains portable and can be hand-edited, so the worker
+    validates this payload before a run starts instead of silently reverting to
+    a shared default weight.  The returned list preserves operator order for
+    prompts and reports; the mapping is used by the scorer.
+    """
+    if raw_entries is None:
+        if not isinstance(fallback_names, list):
+            raise ValueError(f"{label}列表必须是列表")
+        try:
+            numeric_fallback = float(fallback_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label}默认数值必须是非负数字") from exc
+        if not math.isfinite(numeric_fallback) or numeric_fallback < 0:
+            raise ValueError(f"{label}默认数值必须是非负数字")
+        entries = [{name_key: item, value_key: numeric_fallback} for item in fallback_names]
+    else:
+        if not isinstance(raw_entries, list):
+            raise ValueError(f"{label}条目必须是列表")
+        entries = raw_entries
+
+    names: List[str] = []
+    weights: Dict[str, float] = {}
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"{label}中的每一项必须是对象")
+        name = entry.get(name_key)
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{label}名称不能为空")
+        normalized_name = name.strip()
+        dedupe_key = normalized_name.casefold()
+        if dedupe_key in seen:
+            raise ValueError(f"{label}不能重复：{normalized_name}")
+        value = entry.get(value_key)
+        if isinstance(value, bool):
+            raise ValueError(f"{label}数值必须是非负数字")
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label}数值必须是非负数字") from exc
+        if not math.isfinite(numeric_value) or numeric_value < 0:
+            raise ValueError(f"{label}数值必须是非负数字")
+        names.append(normalized_name)
+        weights[normalized_name] = numeric_value
+        seen.add(dedupe_key)
+    return names, weights
 
 
 class LLMConfig(BaseModel):
@@ -145,6 +205,8 @@ class Settings(BaseSettings):
     # 主要关键词（手动指定，高权重）
     PRIMARY_KEYWORDS: List[str] = []
     PRIMARY_KEYWORD_WEIGHT: float = 1.0
+    PRIMARY_KEYWORD_WEIGHTS: Dict[str, float] = Field(default_factory=dict)
+    PRIMARY_KEYWORD_WEIGHTS_EXPLICIT: bool = False
 
     # 是否启用从参考文献提取关键词
     ENABLE_REFERENCE_EXTRACTION: bool = False
@@ -332,6 +394,8 @@ class Settings(BaseSettings):
     ENABLE_AUTHOR_BONUS: bool = True
     EXPERT_AUTHORS: List[str] = []
     AUTHOR_BONUS_POINTS: float = 5.0
+    AUTHOR_BONUS_BY_AUTHOR: Dict[str, float] = Field(default_factory=dict)
+    AUTHOR_BONUS_BY_AUTHOR_EXPLICIT: bool = False
 
     # 动态及格分公式参数
     PASSING_SCORE_BASE: float = 3.0
@@ -573,8 +637,18 @@ class Settings(BaseSettings):
                 # 主要关键词
                 if "primary_keywords" in kw_config:
                     pk = kw_config["primary_keywords"]
-                    self.PRIMARY_KEYWORDS = pk.get("keywords", [])
+                    if not isinstance(pk, dict):
+                        raise ValueError("keywords.primary_keywords 必须是对象")
                     self.PRIMARY_KEYWORD_WEIGHT = pk.get("weight", 1.0)
+                    self.PRIMARY_KEYWORD_WEIGHTS_EXPLICIT = "entries" in pk
+                    self.PRIMARY_KEYWORDS, self.PRIMARY_KEYWORD_WEIGHTS = _weighted_entries_from_config(
+                        pk.get("entries"),
+                        name_key="keyword",
+                        value_key="weight",
+                        fallback_names=pk.get("keywords", []),
+                        fallback_value=self.PRIMARY_KEYWORD_WEIGHT,
+                        label="主关键词",
+                    )
 
                 # Reference 提取配置
                 self.ENABLE_REFERENCE_EXTRACTION = kw_config.get(
@@ -619,9 +693,19 @@ class Settings(BaseSettings):
                 # 作者附加分
                 if "author_bonus" in score_cfg:
                     ab = score_cfg["author_bonus"]
+                    if not isinstance(ab, dict):
+                        raise ValueError("scoring_settings.author_bonus 必须是对象")
                     self.ENABLE_AUTHOR_BONUS = ab.get("enabled", True)
-                    self.EXPERT_AUTHORS = ab.get("expert_authors", [])
                     self.AUTHOR_BONUS_POINTS = ab.get("bonus_points", 5.0)
+                    self.AUTHOR_BONUS_BY_AUTHOR_EXPLICIT = "entries" in ab
+                    self.EXPERT_AUTHORS, self.AUTHOR_BONUS_BY_AUTHOR = _weighted_entries_from_config(
+                        ab.get("entries"),
+                        name_key="author",
+                        value_key="points",
+                        fallback_names=ab.get("expert_authors", []),
+                        fallback_value=self.AUTHOR_BONUS_POINTS,
+                        label="作者加分",
+                    )
 
                 # 动态及格分公式
                 if "passing_score_formula" in score_cfg:
@@ -1057,7 +1141,9 @@ class Settings(BaseSettings):
 
         # 添加主要关键词
         for kw in self.PRIMARY_KEYWORDS:
-            keywords_dict[kw] = self.PRIMARY_KEYWORD_WEIGHT
+            keywords_dict[kw] = self.PRIMARY_KEYWORD_WEIGHTS.get(
+                kw, self.PRIMARY_KEYWORD_WEIGHT
+            )
 
         return keywords_dict
 

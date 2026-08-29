@@ -1164,9 +1164,12 @@ class DailyResearchPipeline:
                 return fail_result
 
             logger.info("关键词准备完成:")
-            logger.info(
-                f"  - 主要关键词: {len(settings.PRIMARY_KEYWORDS)} 个（权重 {settings.PRIMARY_KEYWORD_WEIGHT}）"
-            )
+            if bool(getattr(settings, "PRIMARY_KEYWORD_WEIGHTS_EXPLICIT", False)):
+                logger.info("  - 主要关键词: %d 个（使用独立权重）", len(settings.PRIMARY_KEYWORDS))
+            else:
+                logger.info(
+                    f"  - 主要关键词: {len(settings.PRIMARY_KEYWORDS)} 个（权重 {settings.PRIMARY_KEYWORD_WEIGHT}）"
+                )
             if settings.ENABLE_REFERENCE_EXTRACTION:
                 ref_count = len(all_keywords) - len(settings.PRIMARY_KEYWORDS)
                 logger.info(f"  - Reference关键词: {ref_count} 个（权重 0.3-0.8）")

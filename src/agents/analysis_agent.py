@@ -862,12 +862,36 @@ class AnalysisAgent:
                 raise ScoreValidationError("REFERENCE_RANKING_WEIGHT 不能为负数")
 
         author_bonus_points = 0.0
+        author_bonus_by_normalized_name: Dict[str, float] = {}
         if settings.ENABLE_AUTHOR_BONUS:
             author_bonus_points = _finite_number(
                 settings.AUTHOR_BONUS_POINTS, "AUTHOR_BONUS_POINTS"
             )
             if author_bonus_points < 0:
                 raise ScoreValidationError("AUTHOR_BONUS_POINTS 不能为负数")
+            configured_author_names = getattr(settings, "EXPERT_AUTHORS", [])
+            if not isinstance(configured_author_names, list):
+                raise ScoreValidationError("EXPERT_AUTHORS 必须是列表")
+            for name in configured_author_names:
+                normalized_name = _normalized_person_name(name)
+                if normalized_name:
+                    author_bonus_by_normalized_name[normalized_name] = author_bonus_points
+            configured_author_points = getattr(settings, "AUTHOR_BONUS_BY_AUTHOR", {})
+            if configured_author_points is None:
+                configured_author_points = {}
+            if not isinstance(configured_author_points, Mapping):
+                raise ScoreValidationError("AUTHOR_BONUS_BY_AUTHOR 必须是对象")
+            for name, points in configured_author_points.items():
+                normalized_name = _normalized_person_name(name)
+                # A stale map must not award a bonus to a name which is no
+                # longer listed as an expert author.  This keeps legacy
+                # patches and hand-edited settings safely deterministic.
+                if not normalized_name or normalized_name not in author_bonus_by_normalized_name:
+                    continue
+                value = _finite_number(points, f"作者 {name!r} 的加分")
+                if value < 0:
+                    raise ScoreValidationError(f"作者 {name!r} 的加分不能为负数")
+                author_bonus_by_normalized_name[normalized_name] = value
 
         learned_weight_dampening = None
         learned_term_weight_cap = None
@@ -1023,11 +1047,7 @@ class AnalysisAgent:
             # eliminates both hallucinated and duplicate authors from score
             # calculation while still tolerating an older model that emits the
             # now-ignored field.
-            configured_experts = {
-                _normalized_person_name(name)
-                for name in settings.EXPERT_AUTHORS
-                if _normalized_person_name(name)
-            }
+            configured_experts = set(author_bonus_by_normalized_name)
             verified_experts: List[str] = []
             seen_expert_names = set()
             if settings.ENABLE_AUTHOR_BONUS:
@@ -1071,7 +1091,10 @@ class AnalysisAgent:
             # behavior where the same value participates in the pass score.
             matched_author_bonus = 0.0
             if settings.ENABLE_AUTHOR_BONUS and verified_experts:
-                matched_author_bonus = len(verified_experts) * author_bonus_points
+                matched_author_bonus = math.fsum(
+                    author_bonus_by_normalized_name[_normalized_person_name(name)]
+                    for name in verified_experts
+                )
 
             # Learned-preference fields default to "not applicable" for the
             # other strategies; only the legacy-family branch fills them in.

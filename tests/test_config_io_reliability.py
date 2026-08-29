@@ -424,6 +424,63 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "llm_role"):
             build_config_dict(keyword_normalization_llm_role="experimental")
 
+    def test_individual_keyword_and_author_weights_round_trip_into_runtime_settings(self):
+        config = build_config_dict(
+            primary_keyword_entries=[
+                {"keyword": "quantum sensing", "weight": 1.0},
+                {"keyword": "error mitigation", "weight": 0.35},
+            ],
+            author_bonus_entries=[
+                {"author": "Alice Smith", "points": 2.0},
+                {"author": "Bob Jones", "points": 4.5},
+            ],
+            enable_author_bonus=True,
+        )
+        self.assertEqual(
+            config["keywords"]["primary_keywords"]["entries"],
+            [
+                {"keyword": "quantum sensing", "weight": 1.0},
+                {"keyword": "error mitigation", "weight": 0.35},
+            ],
+        )
+        self.assertEqual(
+            config["scoring_settings"]["author_bonus"]["entries"],
+            [
+                {"author": "Alice Smith", "points": 2.0},
+                {"author": "Bob Jones", "points": 4.5},
+            ],
+        )
+        flat = flatten_config_dict(config)
+        self.assertEqual(flat["primary_keyword_entries"][1]["weight"], 0.35)
+        self.assertEqual(flat["author_bonus_entries"][1]["points"], 4.5)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "config.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            runtime = Settings(PROJECT_ROOT=root)
+            runtime.load_from_search_config(path)
+
+        self.assertEqual(
+            runtime.get_merged_keywords(),
+            {"quantum sensing": 1.0, "error mitigation": 0.35},
+        )
+        self.assertEqual(runtime.AUTHOR_BONUS_BY_AUTHOR["Alice Smith"], 2.0)
+        self.assertEqual(runtime.AUTHOR_BONUS_BY_AUTHOR["Bob Jones"], 4.5)
+
+    def test_individual_weight_entries_reject_duplicates_and_negative_values(self):
+        with self.assertRaisesRegex(ValueError, "主关键词不能重复"):
+            build_config_dict(
+                primary_keyword_entries=[
+                    {"keyword": "quantum", "weight": 1},
+                    {"keyword": "Quantum", "weight": 0.5},
+                ]
+            )
+        with self.assertRaisesRegex(ValueError, "作者加分数值必须是非负数字"):
+            build_config_dict(
+                author_bonus_entries=[{"author": "Alice Smith", "points": -1}]
+            )
+
     def test_custom_path_roots_survive_an_unrelated_config_save_round_trip(self):
         """Global WebUI saves must retain hidden/custom path settings."""
         original = {

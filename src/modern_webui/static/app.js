@@ -63,6 +63,16 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "浅色模式": "Light mode",
   "有未保存修改": "Unsaved changes",
   "有未保存的修改，保存后生效。": "You have unsaved changes. Save to apply them.",
+  "关键词": "Keyword",
+  "权重（0–1）": "Weight (0–1)",
+  "添加关键词": "Add keyword",
+  "关键词尚未添加": "No keywords added",
+  "作者": "Author",
+  "加分": "Bonus points",
+  "添加作者": "Add author",
+  "作者尚未添加": "No authors added",
+  "主关键词参与资格判定与排序；每个关键词可设置 0–1 的独立权重。": "Primary keywords determine qualification and ranking; set an individual 0–1 weight for each keyword.",
+  "为指定作者设置独立加分；核心相关性 V2 仅在论文已经合格后用于排序。": "Set an individual bonus for each author. In Core Relevance V2, it ranks papers only after they qualify.",
   "最多关键词数量": "Maximum keyword count",
   "启动 arXiv 来源": "Enable arXiv source",
   "启动额外数据源": "Enable extra data sources",
@@ -1405,11 +1415,94 @@ async function loadSearchResults(token) {
   } catch (error) { target.innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
 }
 
+function weightedEntries(configKey, legacyNamesKey, legacyValueKey, nameKey, valueKey, fallbackValue) {
+  const supplied = configValue(configKey, null);
+  if (Array.isArray(supplied)) {
+    return supplied
+      .filter((item) => item && typeof item === "object" && String(item[nameKey] || "").trim())
+      .map((item) => ({ [nameKey]: String(item[nameKey]).trim(), [valueKey]: Number(item[valueKey]) }));
+  }
+  const names = configValue(legacyNamesKey, []);
+  const sharedValue = Number(configValue(legacyValueKey, fallbackValue));
+  return Array.isArray(names)
+    ? names.filter((name) => String(name || "").trim()).map((name) => ({ [nameKey]: String(name).trim(), [valueKey]: sharedValue }))
+    : [];
+}
+
+function weightedEntryEditor({ id, entries, nameKey, valueKey, nameLabel, valueLabel, placeholder, min = 0, max = 1, step = 0.05, addLabel = "添加" }) {
+  const cards = entries.length
+    ? entries.map((entry, index) => `<span class="weighted-entry-card"><span>${escapeHtml(entry[nameKey])}</span><small>${escapeHtml(Number(entry[valueKey]).toFixed(2))}</small><button type="button" data-weighted-entry-remove="${escapeAttribute(id)}" data-weighted-entry-index="${index}" aria-label="移除 ${escapeAttribute(entry[nameKey])}">×</button></span>`).join("")
+    : `<span class="tag-select-placeholder">${escapeHtml(nameLabel)}尚未添加</span>`;
+  return `<div id="${escapeAttribute(id)}" class="weighted-entry-editor"><div class="weighted-entry-box" aria-label="${escapeAttribute(nameLabel)}列表"><div class="weighted-entry-cards">${cards}</div></div><div class="weighted-entry-add"><label class="form-field"><span>${escapeHtml(nameLabel)}</span><input id="${escapeAttribute(id)}-name" maxlength="500" placeholder="${escapeAttribute(placeholder)}" /></label><label class="form-field narrow-number-field"><span>${escapeHtml(valueLabel)}</span><input id="${escapeAttribute(id)}-value" type="number" min="${min}" max="${max}" step="${step}" value="${escapeAttribute(step === 0.05 ? 1 : 5)}" /></label><button type="button" class="secondary-button" data-weighted-entry-add="${escapeAttribute(id)}">${escapeHtml(addLabel)}</button></div></div>`;
+}
+
+function replaceWeightedEntryEditor(root, options) {
+  const host = $(`#${options.id}`, root);
+  if (!host) return;
+  host.outerHTML = weightedEntryEditor(options);
+  bindWeightedEntryEditor(root, options);
+}
+
+function bindWeightedEntryEditor(root, options) {
+  const { id, configKey, legacyNamesKey, legacyValueKey, nameKey, valueKey, fallbackValue, min = 0, max = 1 } = options;
+  const currentEntries = () => weightedEntries(configKey, legacyNamesKey, legacyValueKey, nameKey, valueKey, fallbackValue);
+  const persist = (entries) => {
+    state.draft.config[configKey] = entries;
+    state.draft.config[legacyNamesKey] = entries.map((entry) => entry[nameKey]);
+    markConfigurationDirty();
+  };
+  $(`[data-weighted-entry-add="${id}"]`, root)?.addEventListener("click", () => {
+    const name = String($(`#${id}-name`, root)?.value || "").trim();
+    const numericValue = Number($(`#${id}-value`, root)?.value);
+    if (!name) return toast(`请填写${options.nameLabel}。`, "error");
+    if (!Number.isFinite(numericValue) || numericValue < min || numericValue > max) {
+      return toast(`${options.valueLabel}必须在 ${min}–${max} 之间。`, "error");
+    }
+    const entries = currentEntries();
+    if (entries.some((entry) => entry[nameKey].localeCompare(name, undefined, { sensitivity: "accent" }) === 0)) {
+      return toast(`${options.nameLabel}已存在。`, "error");
+    }
+    entries.push({ [nameKey]: name, [valueKey]: numericValue });
+    persist(entries);
+    replaceWeightedEntryEditor(root, { ...options, entries });
+  });
+  $$(`[data-weighted-entry-remove="${id}"]`, root).forEach((button) => button.addEventListener("click", () => {
+    const index = Number(button.dataset.weightedEntryIndex);
+    const entries = currentEntries();
+    if (!Number.isInteger(index) || index < 0 || index >= entries.length) return;
+    entries.splice(index, 1);
+    persist(entries);
+    replaceWeightedEntryEditor(root, { ...options, entries });
+  }));
+}
+
+function primaryKeywordEditor() {
+  const entries = weightedEntries("primary_keyword_entries", "primary_keywords", "primary_keyword_weight", "keyword", "weight", 1);
+  return {
+    id: "primary-keyword-editor",
+    entries,
+    configKey: "primary_keyword_entries",
+    legacyNamesKey: "primary_keywords",
+    legacyValueKey: "primary_keyword_weight",
+    nameKey: "keyword",
+    valueKey: "weight",
+    nameLabel: "关键词",
+    valueLabel: "权重（0–1）",
+    placeholder: "例如 quantum sensing",
+    min: 0,
+    max: 1,
+    step: 0.05,
+    addLabel: "添加关键词",
+  };
+}
+
 async function renderKeywords(token) {
   const root = $("#page-root");
   const context = escapeHtml(String(configValue("research_context", "") || ""));
-  root.innerHTML = `${pageHeader()}<section class="section-card"><p class="hint-text">研究背景会用于评分和参考文献关键词提取。</p><label class="form-field"><textarea data-field="research_context" data-scope="config" aria-label="研究背景" rows="6" placeholder="描述你的研究问题、方法与关注方向">${context}</textarea></label></section>${divider()}${section("主关键词", `${field({ label: "每行一个关键词", key: "primary_keywords", type: "lines", rows: 8, fallback: [] })}${field({ label: "主关键词权重", key: "primary_keyword_weight", type: "range", min: 0.1, max: 5, step: 0.1, fallback: 1 })}`, { icon: "🏷️", hint: "主关键词参与资格判定与排序。" })}${divider()}${renderReferenceExtraction()}`;
+  const editor = primaryKeywordEditor();
+  root.innerHTML = `${pageHeader()}<section class="section-card"><p class="hint-text">研究背景会用于评分和参考文献关键词提取。</p><label class="form-field"><textarea data-field="research_context" data-scope="config" aria-label="研究背景" rows="6" placeholder="描述你的研究问题、方法与关注方向">${context}</textarea></label></section>${divider()}${section("主关键词", `${weightedEntryEditor(editor)}`, { icon: "🏷️", hint: "主关键词参与资格判定与排序；每个关键词可设置 0–1 的独立权重。" })}${divider()}${renderReferenceExtraction()}`;
   bindCommon(root);
+  bindWeightedEntryEditor(root, editor);
   try {
     const result = await api("/api/extracted-keywords");
     if (token !== state.renderToken || !configValue("enable_reference_extraction", false)) return;
@@ -1586,9 +1679,15 @@ async function renderDataSources(_token) {
 
 async function renderScoring(token) {
   const strategy = configValue("score_strategy", "core_relevance_v2");
+  const authorEditor = authorBonusEditor();
   const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}${section("评价策略", `<p class="hint-text">选择论文如何获得资格，以及通过后如何排序。新配置建议使用核心相关性 V2。</p>${field({ label: "评分策略", key: "score_strategy", type: "select", choices: [{ value: "core_relevance_v2", label: "核心相关性 V2（推荐）" }, { value: "legacy_weighted_keyword_v1", label: "加权关键词 V1（兼容）" }, { value: "learned_preference_v1", label: "偏好学习 V1（个性化）" }], fallback: "core_relevance_v2", redraw: true })}${strategyDescription(strategy)}${strategyQualificationNotice(strategy)}${renderStrategyFields(strategy)}${legacyFormulaPreview(strategy)}`, { icon: "🧮" })}${divider()}${renderAuthorBonus()}`;
+  root.innerHTML = `${pageHeader()}${section("评价策略", `<p class="hint-text">选择论文如何获得资格，以及通过后如何排序。新配置建议使用核心相关性 V2。</p>${field({ label: "评分策略", key: "score_strategy", type: "select", choices: [{ value: "core_relevance_v2", label: "核心相关性 V2（推荐）" }, { value: "legacy_weighted_keyword_v1", label: "加权关键词 V1（兼容）" }, { value: "learned_preference_v1", label: "偏好学习 V1（个性化）" }], fallback: "core_relevance_v2", redraw: true })}${strategyDescription(strategy)}${strategyQualificationNotice(strategy)}${renderStrategyFields(strategy)}${legacyFormulaPreview(strategy)}`, { icon: "🧮" })}${divider()}${renderAuthorBonus(authorEditor)}`;
   bindCommon(root);
+  bindWeightedEntryEditor(root, authorEditor);
+  $('[data-field="enable_author_bonus"]', root)?.addEventListener("change", (event) => {
+    const region = $("#author-bonus-entry-region", root);
+    if (region) region.hidden = !event.target.checked;
+  });
   bindLegacyFormulaPreview(root, strategy);
   if (strategy === "learned_preference_v1") {
     try {
@@ -1632,28 +1731,27 @@ function renderStrategyFields(strategy) {
 
 function legacyStrategyFields() { return `<div class="form-grid three">${field({ label: "基础分", key: "passing_score_base", type: "number", min: 0, max: 100, step: 0.5, fallback: 5 })}${field({ label: "权重系数", key: "passing_score_weight_coefficient", type: "number", min: 0, max: 20, step: 0.5, fallback: 3 })}${field({ label: "每个关键词最高得分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}</div>`; }
 
-function legacyFormulaMarkup(count, weight, base, coefficient) {
-  const totalWeight = count * weight;
+function legacyFormulaMarkup(count, totalWeight, base, coefficient) {
   const passing = base + coefficient * totalWeight;
   if (state.language === "en") {
     const noun = count === 1 ? "primary keyword" : "primary keywords";
-    return `With ${count} ${noun} at weight ${weight}: passing score = ${base} + ${coefficient} × ${totalWeight.toFixed(1)} = <strong>${passing.toFixed(1)}</strong>`;
+    return `With ${count} ${noun} at a total weight of ${totalWeight.toFixed(2)}: passing score = ${base} + ${coefficient} × ${totalWeight.toFixed(2)} = <strong>${passing.toFixed(1)}</strong>`;
   }
-  return `共 ${count} 个主关键词，权重 ${weight}：通过分数 = ${base} + ${coefficient} × ${totalWeight.toFixed(1)} = <strong>${passing.toFixed(1)}</strong>`;
+  return `共 ${count} 个主关键词，总权重 ${totalWeight.toFixed(2)}：通过分数 = ${base} + ${coefficient} × ${totalWeight.toFixed(2)} = <strong>${passing.toFixed(1)}</strong>`;
 }
 
 function legacyFormulaPreview(strategy) {
   if (strategy === "core_relevance_v2") return "";
-  const primary = configValue("primary_keywords", []);
-  const count = Array.isArray(primary) ? primary.filter((item) => String(item || "").trim()).length : 0;
-  const weight = Number(configValue("primary_keyword_weight", 1));
+  const primary = weightedEntries("primary_keyword_entries", "primary_keywords", "primary_keyword_weight", "keyword", "weight", 1);
+  const count = primary.length;
+  const totalWeight = primary.reduce((sum, entry) => sum + (Number.isFinite(Number(entry.weight)) ? Number(entry.weight) : 0), 0);
   const base = Number(configValue("passing_score_base", 5));
   const coefficient = Number(configValue("passing_score_weight_coefficient", 3));
   // Keep the number formatting and interactive preview identical in both
   // languages.  The legacy policy is one of the few UI messages assembled
   // from live form values, so the generic static catalogue cannot translate
   // it after rendering.
-  return `<p id="legacy-formula-preview" class="info-box">${legacyFormulaMarkup(count, Number.isFinite(weight) ? weight : 1, Number.isFinite(base) ? base : 5, Number.isFinite(coefficient) ? coefficient : 3)}</p>`;
+  return `<p id="legacy-formula-preview" class="info-box">${legacyFormulaMarkup(count, totalWeight, Number.isFinite(base) ? base : 5, Number.isFinite(coefficient) ? coefficient : 3)}</p>`;
 }
 
 function bindLegacyFormulaPreview(root, strategy) {
@@ -1661,26 +1759,45 @@ function bindLegacyFormulaPreview(root, strategy) {
   const preview = $("#legacy-formula-preview", root);
   if (!preview) return;
   const update = () => {
-    const primary = configValue("primary_keywords", []);
-    const count = Array.isArray(primary) ? primary.filter((item) => String(item || "").trim()).length : 0;
-    const weight = Number(configValue("primary_keyword_weight", 1));
+    const primary = weightedEntries("primary_keyword_entries", "primary_keywords", "primary_keyword_weight", "keyword", "weight", 1);
+    const count = primary.length;
+    const totalWeight = primary.reduce((sum, entry) => sum + (Number.isFinite(Number(entry.weight)) ? Number(entry.weight) : 0), 0);
     const baseField = $('[data-field="passing_score_base"]', root);
     const coefficientField = $('[data-field="passing_score_weight_coefficient"]', root);
     const base = Number(baseField?.value ?? configValue("passing_score_base", 5));
     const coefficient = Number(coefficientField?.value ?? configValue("passing_score_weight_coefficient", 3));
-    const normalizedWeight = Number.isFinite(weight) ? weight : 1;
     const normalizedBase = Number.isFinite(base) ? base : 5;
     const normalizedCoefficient = Number.isFinite(coefficient) ? coefficient : 3;
     preview.innerHTML = legacyFormulaMarkup(
-      count, normalizedWeight, normalizedBase, normalizedCoefficient,
+      count, totalWeight, normalizedBase, normalizedCoefficient,
     );
   };
   $$('[data-field="passing_score_base"], [data-field="passing_score_weight_coefficient"]', root).forEach((element) => element.addEventListener("input", update));
 }
 
-function renderAuthorBonus() {
-  const enabled = Boolean(configValue("enable_author_bonus", false));
-  return section("作者加分", `<p class="hint-text">给指定作者的论文额外加分。</p>${field({ label: "启用作者加分", key: "enable_author_bonus", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid author-bonus-grid">${field({ label: "专家作者（每行一位）", key: "expert_authors", type: "lines", rows: 6, fallback: [] })}${field({ label: "加分", key: "author_bonus_points", type: "number", min: 0, max: 50, step: 0.5, fallback: 5 })}</div>` : ""}`, { icon: "👤" });
+function authorBonusEditor() {
+  const entries = weightedEntries("author_bonus_entries", "expert_authors", "author_bonus_points", "author", "points", 5);
+  return {
+    id: "author-bonus-editor",
+    entries,
+    configKey: "author_bonus_entries",
+    legacyNamesKey: "expert_authors",
+    legacyValueKey: "author_bonus_points",
+    nameKey: "author",
+    valueKey: "points",
+    nameLabel: "作者",
+    valueLabel: "加分",
+    placeholder: "例如 Alice Smith",
+    min: 0,
+    max: 50,
+    step: 0.5,
+    addLabel: "添加作者",
+  };
+}
+
+function renderAuthorBonus(editor = authorBonusEditor()) {
+  const enabled = booleanValue(configValue("enable_author_bonus", false), false);
+  return section("作者加分", `<p class="hint-text">为指定作者设置独立加分；核心相关性 V2 仅在论文已经合格后用于排序。</p>${field({ label: "启用作者加分", key: "enable_author_bonus", type: "checkbox", fallback: false })}<div id="author-bonus-entry-region" ${enabled ? "" : "hidden"}>${weightedEntryEditor(editor)}</div>`, { icon: "👤" });
 }
 
 function llmSection(role, title, icon) {

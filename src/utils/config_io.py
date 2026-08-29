@@ -7,6 +7,7 @@ Used by: src/utils/setup_wizard.py, src/modern_webui/app.py
 import errno
 import json
 import json5
+import math
 import os
 import re
 import shutil
@@ -674,6 +675,54 @@ def write_config_json(config: Dict[str, Any], path: Optional[Path] = None) -> No
 # ==================== Config Structure Builders ====================
 
 
+def _normalize_weighted_entries(
+    raw: object,
+    *,
+    name_key: str,
+    value_key: str,
+    label: str,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Validate ordered name/value entries used by the modern configuration UI.
+
+    The durable JSON keeps the old list-and-default-value fields beside these
+    entries for older tools.  This normalizer is intentionally strict for new
+    entries so a malformed hand edit cannot silently change scoring.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"{label}必须是列表")
+    if len(raw) > limit:
+        raise ValueError(f"{label}最多允许 {limit} 条")
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError(f"{label}中的每一项必须是对象")
+        name = item.get(name_key)
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{label}名称不能为空")
+        safe_name = name.strip()
+        if len(safe_name) > 500 or "\x00" in safe_name:
+            raise ValueError(f"{label}名称长度或格式无效")
+        normalized_name = safe_name.casefold()
+        if normalized_name in seen:
+            raise ValueError(f"{label}不能重复：{safe_name}")
+        value = item.get(value_key)
+        if isinstance(value, bool):
+            raise ValueError(f"{label}数值必须是非负数字")
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label}数值必须是非负数字") from exc
+        if not math.isfinite(numeric_value) or numeric_value < 0:
+            raise ValueError(f"{label}数值必须是非负数字")
+        rows.append({name_key: safe_name, value_key: numeric_value})
+        seen.add(normalized_name)
+    return rows
+
+
 def build_config_dict(
     max_results: Optional[int] = None,
     max_results_per_source: Optional[Dict[str, int]] = None,
@@ -691,6 +740,7 @@ def build_config_dict(
     domains: Optional[List[str]] = None,
     primary_keywords: Optional[List[str]] = None,
     primary_keyword_weight: float = 1.0,
+    primary_keyword_entries: Optional[List[Dict[str, Any]]] = None,
     enable_reference_extraction: bool = False,
     max_reference_keywords: int = 10,
     similarity_threshold: float = 0.75,
@@ -705,6 +755,7 @@ def build_config_dict(
     enable_author_bonus: bool = False,
     expert_authors: Optional[List[str]] = None,
     author_bonus_points: float = 5.0,
+    author_bonus_entries: Optional[List[Dict[str, Any]]] = None,
     passing_score_base: float = 5.0,
     passing_score_weight_coefficient: float = 3.0,
     score_strategy: str = "core_relevance_v2",
@@ -901,6 +952,29 @@ def build_config_dict(
             if item["code"] not in normalized_enabled
         )
 
+    primary_entries = _normalize_weighted_entries(
+        primary_keyword_entries
+        if primary_keyword_entries is not None
+        else [
+            {"keyword": keyword, "weight": primary_keyword_weight}
+            for keyword in (primary_keywords or [])
+        ],
+        name_key="keyword",
+        value_key="weight",
+        label="主关键词",
+    )
+    author_entries = _normalize_weighted_entries(
+        author_bonus_entries
+        if author_bonus_entries is not None
+        else [
+            {"author": author, "points": author_bonus_points}
+            for author in (expert_authors or [])
+        ],
+        name_key="author",
+        value_key="points",
+        label="作者加分",
+    )
+
     config = {
         "data_sources": {
             # Preserve an explicit empty list so the worker can reject it
@@ -934,7 +1008,8 @@ def build_config_dict(
         "keywords": {
             "primary_keywords": {
                 "weight": primary_keyword_weight,
-                "keywords": primary_keywords or [],
+                "keywords": [entry["keyword"] for entry in primary_entries],
+                "entries": primary_entries,
             },
             "enable_reference_extraction": enable_reference_extraction,
             "reference_keywords_config": {
@@ -963,8 +1038,9 @@ def build_config_dict(
             },
             "author_bonus": {
                 "enabled": enable_author_bonus,
-                "expert_authors": expert_authors or [],
+                "expert_authors": [entry["author"] for entry in author_entries],
                 "bonus_points": author_bonus_points,
+                "entries": author_entries,
             },
             "passing_score_formula": {
                 "base_score": passing_score_base,
@@ -1239,8 +1315,32 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     # Keywords
     kw = config.get("keywords", {})
     pk = kw.get("primary_keywords", {})
-    flat["primary_keywords"] = pk.get("keywords", [])
-    flat["primary_keyword_weight"] = pk.get("weight", 1.0)
+    if not isinstance(pk, dict):
+        pk = {}
+    legacy_primary_weight = pk.get("weight", 1.0)
+    stored_primary_entries = pk.get("entries")
+    if isinstance(stored_primary_entries, list):
+        try:
+            primary_entries = _normalize_weighted_entries(
+                stored_primary_entries,
+                name_key="keyword",
+                value_key="weight",
+                label="主关键词",
+            )
+        except ValueError:
+            # Reading a hand-edited document remains best-effort for the WebUI
+            # inspection page. The worker performs the authoritative fail-closed
+            # validation when it loads the same document.
+            primary_entries = []
+    else:
+        primary_entries = [
+            {"keyword": keyword, "weight": legacy_primary_weight}
+            for keyword in pk.get("keywords", [])
+            if isinstance(keyword, str) and keyword.strip()
+        ]
+    flat["primary_keyword_entries"] = primary_entries
+    flat["primary_keywords"] = [entry["keyword"] for entry in primary_entries]
+    flat["primary_keyword_weight"] = legacy_primary_weight
     flat["enable_reference_extraction"] = kw.get("enable_reference_extraction", False)
 
     ref = kw.get("reference_keywords_config", {})
@@ -1264,9 +1364,30 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     krs = sc.get("keyword_relevance_score", {})
     flat["max_score_per_keyword"] = krs.get("max_score_per_keyword", 10)
     ab = sc.get("author_bonus", {})
+    if not isinstance(ab, dict):
+        ab = {}
     flat["enable_author_bonus"] = ab.get("enabled", False)
-    flat["expert_authors"] = ab.get("expert_authors", [])
-    flat["author_bonus_points"] = ab.get("bonus_points", 5.0)
+    legacy_author_points = ab.get("bonus_points", 5.0)
+    stored_author_entries = ab.get("entries")
+    if isinstance(stored_author_entries, list):
+        try:
+            author_entries = _normalize_weighted_entries(
+                stored_author_entries,
+                name_key="author",
+                value_key="points",
+                label="作者加分",
+            )
+        except ValueError:
+            author_entries = []
+    else:
+        author_entries = [
+            {"author": author, "points": legacy_author_points}
+            for author in ab.get("expert_authors", [])
+            if isinstance(author, str) and author.strip()
+        ]
+    flat["author_bonus_entries"] = author_entries
+    flat["expert_authors"] = [entry["author"] for entry in author_entries]
+    flat["author_bonus_points"] = legacy_author_points
     ps = sc.get("passing_score_formula", {})
     flat["passing_score_base"] = ps.get("base_score", 5.0)
     flat["passing_score_weight_coefficient"] = ps.get("weight_coefficient", 3.0)
