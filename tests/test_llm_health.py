@@ -15,67 +15,6 @@ from agents.trend_agent import _llm_call_with_retry  # noqa: E402
 from config import settings  # noqa: E402
 from utils.daily_research_store import DailyResearchStore  # noqa: E402
 from utils.llm_health import make_llm_health_recorder, safe_llm_error_summary  # noqa: E402
-from webui.tabs import analytics  # noqa: E402
-
-
-class _MetricColumn:
-    def __init__(self, parent):
-        self.parent = parent
-
-    def metric(self, *args, **kwargs):
-        self.parent.calls.append(("metric", args, kwargs))
-
-
-class _ContextBox:
-    def __init__(self, parent, kind):
-        self.parent = parent
-        self.kind = kind
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc):
-        return False
-
-
-class _FakeStreamlit:
-    def __init__(self):
-        self.calls = []
-
-    def markdown(self, *args, **kwargs):
-        self.calls.append(("markdown", args, kwargs))
-
-    def caption(self, *args, **kwargs):
-        self.calls.append(("caption", args, kwargs))
-
-    def info(self, *args, **kwargs):
-        self.calls.append(("info", args, kwargs))
-
-    def warning(self, *args, **kwargs):
-        self.calls.append(("warning", args, kwargs))
-
-    def code(self, *args, **kwargs):
-        self.calls.append(("code", args, kwargs))
-
-    def dataframe(self, *args, **kwargs):
-        self.calls.append(("dataframe", args, kwargs))
-
-    def segmented_control(self, *args, **kwargs):
-        self.calls.append(("segmented_control", args, kwargs))
-        return kwargs.get("default")
-
-    def container(self, *args, **kwargs):
-        self.calls.append(("container", args, kwargs))
-        return _ContextBox(self, "container")
-
-    def expander(self, *args, **kwargs):
-        self.calls.append(("expander", args, kwargs))
-        return _ContextBox(self, "expander")
-
-    def columns(self, count):
-        return [_MetricColumn(self) for _ in range(count)]
-
-
 class LLMHealthTests(unittest.TestCase):
     def test_summary_tracks_final_outcomes_and_redacts_credentials(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -163,27 +102,6 @@ class LLMHealthTests(unittest.TestCase):
                     object(), "model", 0.2, "prompt", role="smart", health_recorder=lambda *args: events.append(args)
                 )
         self.assertEqual([(event[0], event[2]) for event in events], [("smart", True), ("smart", False)])
-
-    def test_analytics_renders_model_table_and_direct_redacted_failure(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "daily.db"
-            store = DailyResearchStore(db_path)
-            recorder = make_llm_health_recorder(store)
-            recorder("cheap", "fast-model", False, RuntimeError("provider unavailable"))
-            recorder("smart", "deep-model", True, None)
-            fake_st = _FakeStreamlit()
-            with patch.object(analytics, "st", fake_st), patch.object(
-                analytics, "t", side_effect=lambda key: key
-            ), patch.object(analytics, "_daily_db_path_from_config", return_value=db_path):
-                analytics._render_llm_health_section({})
-
-        rendered = repr(fake_st.calls)
-        self.assertIn("fast-model", rendered)
-        self.assertIn("provider unavailable", rendered)
-        self.assertTrue(any(name == "dataframe" for name, _args, _kwargs in fake_st.calls))
-        self.assertFalse(any(name == "expander" for name, _args, _kwargs in fake_st.calls))
-        self.assertFalse(any(name == "code" for name, _args, _kwargs in fake_st.calls))
-
 
 if __name__ == "__main__":
     unittest.main()

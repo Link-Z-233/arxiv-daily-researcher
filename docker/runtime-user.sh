@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Shared runtime-user setup for the worker and Streamlit containers. The
+# Shared runtime-user setup for the worker and WebUI containers. The
 # entrypoints stay root only for in-container account/cron setup; every normal
 # operation on a host bind mount runs as the configured NAS user.
 

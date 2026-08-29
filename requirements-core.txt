@@ -1,6 +1,6 @@
 # Dependencies used by the scheduled research worker and CLI.
-# Keep the Streamlit stack in requirements-webui.txt so the worker image does
-# not install pandas, pyarrow, numpy, or pydeck transitively.
+# Keep presentation-layer dependencies in requirements-webui.txt so the
+# worker image does not install browser-only packages transitively.
 annotated-types==0.7.0
 anyio==4.12.1
 arxiv==2.4.0

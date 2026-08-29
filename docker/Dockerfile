@@ -67,7 +67,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY main.py VERSION* ./
-# worker 从不运行 Streamlit，刻意不带 src/webui/。
+# Worker does not include presentation-layer code.
 COPY src/agents/ ./src/agents/
 COPY src/config.py ./src/
 COPY src/keyword_tracker/ ./src/keyword_tracker/
@@ -100,60 +100,10 @@ HEALTHCHECK --interval=60s --timeout=20s --retries=3 --start-period=30s \
 
 ENTRYPOINT ["/entrypoint.sh"]
 
-# ==================== WebUI 最终镜像（target: webui） ====================
+# ==================== Modern WebUI image (target: webui) ====================
 FROM webui-deps AS webui
 
-LABEL description="ArXiv Daily Researcher - Streamlit Config Panel"
-
-COPY src/utils/config_io.py ./src/utils/
-COPY src/utils/run_lock.py ./src/utils/
-COPY src/utils/backup.py ./src/utils/
-COPY src/utils/legacy_history.py ./src/utils/
-COPY src/utils/safe_url.py ./src/utils/
-COPY src/utils/daily_research_store.py ./src/utils/
-COPY src/utils/scoring_evaluation.py ./src/utils/
-COPY src/utils/source_registry.py ./src/utils/
-COPY src/utils/webdav_sync.py ./src/utils/
-COPY src/utils/webui_trigger.py ./src/utils/
-COPY src/utils/container_health.py ./src/utils/
-COPY src/webui/ ./src/webui/
-COPY VERSION* ./
-COPY .env.example ./
-COPY configs/ ./configs/
-
-RUN touch ./src/__init__.py ./src/utils/__init__.py
-
-RUN mkdir -p /app/.streamlit /app/data /app/logs && \
-    printf '[server]\nheadless = true\nport = 8501\naddress = "0.0.0.0"\nenableCORS = true\nenableXsrfProtection = true\nfileWatcherType = "none"\n\n[browser]\ngatherUsageStats = false\n' > /app/.streamlit/config.toml && \
-    chown -R adr:adr /app/.streamlit /app/data /app/logs
-
-COPY docker/webui-entrypoint.sh /webui-entrypoint.sh
-RUN chmod 0755 /webui-entrypoint.sh
-
-EXPOSE 8501
-
-HEALTHCHECK --interval=30s --timeout=15s --retries=3 --start-period=20s \
-    CMD python /app/src/utils/container_health.py webui || exit 1
-
-ENTRYPOINT ["/webui-entrypoint.sh"]
-CMD ["streamlit", "run", "src/webui/config_panel.py", "--server.port=8501"]
-
-# ==================== Modern WebUI preview (parallel to Streamlit) ==========
-# This target intentionally starts from ``common`` rather than ``webui``.
-# The static frontend and small ASGI backend do not need Streamlit's data and
-# visualization stack (notably pandas/pyarrow), so keeping dependencies
-# separate turns the preview into a genuinely lightweight alternative.
-FROM common AS modern-webui-deps
-
-COPY requirements-modern-webui.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install \
-      -r requirements-modern-webui.txt && \
-    find /usr/local/lib/python3.12 -name '__pycache__' -type d -prune -exec rm -rf {} +
-
-FROM modern-webui-deps AS modern-webui
-
-LABEL description="ArXiv Daily Researcher - Parallel modern daily-research WebUI preview"
+LABEL description="ArXiv Daily Researcher - modern management WebUI"
 
 COPY src/utils/config_io.py ./src/utils/
 COPY src/utils/backup.py ./src/utils/
@@ -165,8 +115,6 @@ COPY src/utils/source_registry.py ./src/utils/
 COPY src/utils/webdav_sync.py ./src/utils/
 COPY src/utils/webui_trigger.py ./src/utils/
 COPY src/utils/container_health.py ./src/utils/
-COPY src/webui/arxiv_categories.py ./src/webui/arxiv_categories.py
-COPY src/webui/i18n.py ./src/webui/i18n.py
 COPY src/modern_webui/ ./src/modern_webui/
 COPY VERSION* ./
 COPY .env.example ./
@@ -180,10 +128,10 @@ RUN mkdir -p /app/data /app/logs /app/.modern-webui && \
 COPY docker/webui-entrypoint.sh /webui-entrypoint.sh
 RUN chmod 0755 /webui-entrypoint.sh
 
-EXPOSE 8504
+EXPOSE 8503
 
 HEALTHCHECK --interval=30s --timeout=15s --retries=3 --start-period=20s \
-    CMD python /app/src/utils/container_health.py webui --url http://127.0.0.1:8504/api/health || exit 1
+    CMD python /app/src/utils/container_health.py webui --url http://127.0.0.1:8503/api/health || exit 1
 
 ENTRYPOINT ["/webui-entrypoint.sh"]
-CMD ["uvicorn", "src.modern_webui.app:app", "--host", "127.0.0.1", "--port", "8504"]
+CMD ["uvicorn", "src.modern_webui.app:app", "--host", "127.0.0.1", "--port", "8503"]

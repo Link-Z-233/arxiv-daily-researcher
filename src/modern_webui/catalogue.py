@@ -1,11 +1,8 @@
-"""
-Internationalization (i18n) support for the Streamlit config panel.
+"""Static Chinese/English catalogue served by the management WebUI.
 
-Provides a t() function that returns the translated string based on the
-current language stored in st.session_state["lang"] (default: "zh").
+The browser receives this plain-data catalogue before rendering so translation
+does not depend on a server-side presentation framework.
 """
-
-import streamlit as st
 
 # ─── Translation dictionary ────────────────────────────────────────────────
 _TRANSLATIONS: dict[str, dict[str, str]] = {
@@ -1731,10 +1728,3 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Weight = sum of like(+1)/dislike(-1)/v1-pass(+0.25) signals; applied with the cap and dampening at scoring time.",
     },
 }
-
-
-def t(key: str) -> str:
-    """Return the translated string for the current language."""
-    lang = st.session_state.get("lang", "zh")
-    entry = _TRANSLATIONS.get(key, {})
-    return entry.get(lang, entry.get("en", key))

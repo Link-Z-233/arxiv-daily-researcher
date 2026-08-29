@@ -1,8 +1,7 @@
-"""ASGI application for the parallel modern ArXiv Daily Researcher WebUI.
+"""ASGI management application for ArXiv Daily Researcher.
 
-It is intentionally a second presentation layer only: all writes go through
-the existing portable config helpers, SQLite ledger and worker trigger queue.
-The mature Streamlit panel remains available in parallel during migration.
+All writes go through portable configuration helpers, the SQLite ledger, and
+the Worker-owned trigger queue.  The browser service stays presentation-only.
 """
 
 from __future__ import annotations
@@ -58,8 +57,8 @@ _MAX_JSON_BYTES = 1_000_000
 async def _blocking_call(function: Any, /, *args: Any, **kwargs: Any) -> Any:
     """Run legacy synchronous storage/network helpers outside Uvicorn's loop.
 
-    The modern UI deliberately shares the existing Streamlit backend helpers.
-    Those helpers perform SQLite access, report-directory walks, file writes and
+    The UI deliberately shares the existing backend helpers.  Those helpers
+    perform SQLite access, report-directory walks, file writes and
     occasional network connection tests synchronously.  Calling them directly
     from an ``async`` endpoint blocks every other request served by this
     process, which made the lightweight UI feel less responsive than expected.
@@ -200,8 +199,8 @@ async def setup_account(request: Request) -> JSONResponse:
     if str(payload.get("action") or "") == "skip":
         def _skip_setup() -> None:
             values = read_env()
-            # Match the Streamlit trusted-LAN opt-out: disabling the gate is
-            # an explicit fresh-start choice, so stale owner credentials and
+            # Disabling the trusted-LAN gate is an explicit fresh-start choice,
+            # so stale owner credentials and
             # managed-account records must not remain in the shared .env.
             values.update(
                 {
@@ -659,8 +658,8 @@ async def account_change_password(request: Request) -> JSONResponse:
         )
     )
     await _blocking_call(_persist_accounts, accounts)
-    # Changing a password invalidates the active browser session just as the
-    # Streamlit panel does.  The user explicitly authenticates with the new
+    # Changing a password invalidates the active browser session.  The user
+    # explicitly authenticates with the new
     # password instead of keeping a pre-change session alive.
     request.session.clear()
     return JSONResponse({"ok": True})

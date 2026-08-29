@@ -58,7 +58,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ==================== Config Panel (Web UI) ====================
+  # ==================== Modern WebUI ====================
   config-panel:
     build:
       context: .
@@ -76,69 +76,8 @@ services:
 
     # Match the worker's localhost semantics so WebUI connection tests can
     # reach host-side proxies and local LLM services exactly as scheduled jobs
-    # do.  Streamlit itself stays bound to loopback unless an authenticated
+    # do. The browser service stays bound to loopback unless an authenticated
     # reverse proxy is deliberately configured by the operator.
-    network_mode: host
-    command:
-      - streamlit
-      - run
-      - src/webui/config_panel.py
-      - --server.address=127.0.0.1
-      - --server.port=8503
-
-    environment:
-      - TZ=Asia/Shanghai
-      - PUID=${PUID:-1000}
-      - PGID=${PGID:-1000}
-
-    volumes:
-      - ./configs:/app/configs
-      - ./.env:/app/.env
-      - ./.env.example:/app/.env.example:ro
-      - ./data:/app/data
-      - ./logs:/app/logs
-
-    deploy:
-      resources:
-        limits:
-          memory: 300M
-        reservations:
-          memory: 128M
-
-    healthcheck:
-      test: [ "CMD", "python", "/app/src/utils/container_health.py", "webui", "--url", "http://127.0.0.1:8503/_stcore/health" ]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 20s
-
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "2"
-
-  # ==================== Modern WebUI Preview ====================
-  # A parallel FastAPI console. It is opt-in so the mature Streamlit panel
-  # stays available during the incremental redesign. Start it with:
-  #   docker compose --profile modern-webui up -d modern-webui
-  modern-webui:
-    profiles: ["modern-webui"]
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-      target: modern-webui
-      network: host
-      args:
-        PIP_INDEX_URL: ${ADR_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
-        PIP_TRUSTED_HOST: ${ADR_PIP_TRUSTED_HOST:-mirrors.aliyun.com}
-    image: ${ADR_MODERN_WEBUI_IMAGE:-arxiv-daily-researcher-modern-webui:latest}
-    container_name: arxiv-daily-researcher-modern-webui
-    restart: unless-stopped
-
-    # It shares the worker's localhost semantics for status and run actions,
-    # but listens only on loopback. Put an authenticated reverse proxy in
-    # front of it if remote access is required.
     network_mode: host
     command:
       - uvicorn
@@ -146,7 +85,7 @@ services:
       - --host
       - 127.0.0.1
       - --port
-      - "8504"
+      - "8503"
 
     environment:
       - TZ=Asia/Shanghai
@@ -163,12 +102,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 192M
         reservations:
-          memory: 96M
+          memory: 64M
 
     healthcheck:
-      test: [ "CMD", "python", "/app/src/utils/container_health.py", "webui", "--url", "http://127.0.0.1:8504/api/health" ]
+      test: [ "CMD", "python", "/app/src/utils/container_health.py", "webui", "--url", "http://127.0.0.1:8503/api/health" ]
       interval: 30s
       timeout: 15s
       retries: 3

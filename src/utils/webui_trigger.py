@@ -1,9 +1,9 @@
 """Validated, durable WebUI-to-worker trigger protocol.
 
-The Streamlit container deliberately contains no worker dependencies.  It
-therefore places a small JSON request in the shared data volume and the worker
-container's existing watcher executes it.  Requests are written atomically and
-validated again in the worker so malformed files cannot turn into shell input.
+The browser container deliberately contains no Worker runtime dependencies.
+It places a small JSON request in the shared data volume and the Worker's
+watcher executes it.  Requests are written atomically and validated again in
+the Worker so malformed files cannot turn into shell input.
 """
 
 from __future__ import annotations
@@ -534,7 +534,7 @@ def build_trigger_payload(
     retry_of: str | None = None,
     **args: Any,
 ) -> Dict[str, Any]:
-    """Create a normalized request payload for the Streamlit container."""
+    """Create a normalized request payload for the WebUI container."""
     payload: Dict[str, Any] = {
         "schema_version": TRIGGER_SCHEMA_VERSION,
         "request_id": uuid.uuid4().hex,

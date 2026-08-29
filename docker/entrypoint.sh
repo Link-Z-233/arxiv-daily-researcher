@@ -177,7 +177,7 @@ if [ "$RUN_ON_STARTUP" = "true" ]; then
 fi
 
 # ==================== WebUI Trigger File Watcher ====================
-# The Streamlit config panel (in a separate, thin container) puts validated
+# The WebUI (in a separate, thin container) puts validated
 # JSON requests in this shared queue.  Do not delete requests on startup: they
 # are durable user actions and must survive a worker restart.
 TRIGGER_DIR="/app/data/run/webui_triggers"

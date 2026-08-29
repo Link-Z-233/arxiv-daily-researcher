@@ -1,9 +1,8 @@
-"""Shared read/write operations for the lightweight modern WebUI.
+"""Shared read/write operations for the lightweight management WebUI.
 
-The Streamlit panel remains the compatibility implementation while the modern
-panel is migrated.  This module deliberately talks to the same configuration
-files, SQLite ledger and durable trigger queue instead of maintaining a second
-set of settings or background processes.
+The module deliberately uses the same configuration files, SQLite ledger, and
+durable Worker trigger queue as CLI and scheduled jobs.  It never creates a
+second settings store or background process.
 """
 
 from __future__ import annotations
@@ -62,7 +61,7 @@ from utils.webui_trigger import (
     trigger_directory,
     trigger_status_directory,
 )
-from webui.arxiv_categories import ARXIV_CATEGORIES, format_arxiv_category
+from modern_webui.arxiv_categories import ARXIV_CATEGORIES, format_arxiv_category
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -280,7 +279,7 @@ def open_store(
 
     Read-only pages deliberately keep showing their existing ``no database``
     message until the worker has produced data.  A report's in-card preference
-    controls are different: Streamlit initialises the small SQLite ledger on
+    controls are different: the UI initialises the small SQLite ledger on
     first use so an archived report can be marked before a daily run.  The
     explicit ``create`` flag keeps those two behaviours aligned without
     accidentally creating a database merely by opening a dashboard page.
@@ -312,7 +311,7 @@ def public_settings() -> dict[str, Any]:
             *builtin_extra_source_definitions(),
         ],
         # Keep both modern selectors on the same complete arXiv catalog as
-        # the Streamlit panel.  The display label is sent by the server so
+        # the old presentation layer.  The display label is sent by the server so
         # category additions cannot silently diverge between two UIs.
         "arxiv_categories": [
             {"code": code, "label": format_arxiv_category(code)}

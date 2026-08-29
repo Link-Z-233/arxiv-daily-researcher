@@ -1,9 +1,7 @@
-"""Small authentication core for the standalone modern WebUI preview.
+"""Authentication core for the standalone management WebUI.
 
-It reads the same legacy owner credentials and managed-account registry as the
-Streamlit panel, without importing Streamlit or its dependencies.  Account
-creation and password changes remain centralized in the mature Streamlit
-configuration page while the preview is developed incrementally.
+The account registry is stored in the portable environment configuration, so
+accounts remain valid across ordinary image upgrades and CLI configuration.
 """
 
 from __future__ import annotations
@@ -71,7 +69,7 @@ def _urlsafe_b64decode(value: str) -> Optional[bytes]:
 
 
 def verify_password_hash(password_hash: str, password: str) -> Optional[bool]:
-    """Verify the PBKDF2 record written by the Streamlit account manager."""
+    """Verify a PBKDF2 record stored by the account manager."""
     try:
         scheme, raw_iterations, encoded_salt, encoded_digest = password_hash.split(":", 3)
         iterations = int(raw_iterations)
@@ -170,14 +168,14 @@ def validate_username(username: object) -> str | None:
 
 
 def validate_password(password: object) -> str | None:
-    """Keep the modern panel aligned with the Streamlit six-character policy."""
+    """Apply the documented six-character minimum password policy."""
     if len(str(password or "")) < 6:
         return "密码至少需要 6 个字符。"
     return None
 
 
 def hash_password(password: str) -> str:
-    """Create the same PBKDF2 record used by the Streamlit account manager."""
+    """Create a versioned PBKDF2 record for the account manager."""
     if message := validate_password(password):
         raise ValueError(message)
     salt = secrets.token_bytes(16)

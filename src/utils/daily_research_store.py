@@ -57,7 +57,7 @@ class DailyResearchStore:
     def _paper_identity_or_none():
         """Migration-time identity helper; None in the thin WebUI image.
 
-        The Streamlit image deliberately ships no paper-source modules.  The
+        The lightweight WebUI image deliberately ships no paper-source modules.  The
         canonical-id backfill below then runs on the worker's next connect
         instead — the schema columns are still added here, so nothing
         diverges.

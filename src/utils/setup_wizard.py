@@ -1007,7 +1007,7 @@ def main():
                     "[bold green]Configuration complete![/]\n\n"
                     "Next steps:\n"
                     "  [cyan]python main.py[/]                          Run daily research\n"
-                    "  [cyan]streamlit run webui/config_panel.py[/]     Open config panel\n"
+                    "  [cyan]uvicorn src.modern_webui.app:app --host 127.0.0.1 --port 8503[/]     Open WebUI\n"
                     "  [cyan]docker compose up -d[/]                    Deploy with Docker",
                     border_style="green",
                     padding=(1, 2),

@@ -1,9 +1,11 @@
-# The WebUI is intentionally isolated from the worker's PDF/LLM stack.
-# Streamlit itself brings the data/visualisation dependencies it needs.
+# Standalone dependencies for the modern WebUI.
+# Keep this list separate from the worker's PDF/LLM stack: the ASGI server
+# and static frontend do not need pandas, pyarrow, NumPy, or Streamlit.
 json5==0.13.0
 requests==2.32.5
-streamlit>=1.37.0  # st.fragment(run_every=...) for live run status
-extra-streamlit-components==0.1.81  # signed browser session persistence for panel login
 webdavclient3>=3.14.0
-# LLM 连通性测试需要 openai 客户端（与 worker 的 requirements-core 同版本）。
+# API connection checks use the same OpenAI-compatible client as the worker.
 openai==2.15.0
+starlette==1.6.0
+uvicorn==0.52.4
+itsdangerous==2.2.0

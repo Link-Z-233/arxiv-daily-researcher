@@ -53,7 +53,6 @@ const PAGE_META = {
 // beside that layer rather than duplicating an otherwise shared translation.
 const MODERN_EN_TRANSLATIONS = Object.freeze({
   "现代管理面板": "Modern management panel",
-  "现代管理面板 · 预览": "Modern management panel · preview",
   "正在读取配置文件…": "Loading configuration files…",
   "重新加载配置": "Reload configuration",
   "重启研究容器": "Restart research container",
@@ -712,7 +711,13 @@ function pagedTable(key, columns, rows, options = {}) {
   const visible = rows.slice(entry.page * size, (entry.page + 1) * size);
   const head = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("");
   const body = visible.length ? visible.map((row) => `<tr>${columns.map((column) => `<td>${column.html ? column.html(row) : escapeHtml(column.value ? column.value(row) : row[column.key] ?? "—")}</td>`).join("")}</tr>`).join("") : `<tr><td class="empty-cell" colspan="${columns.length}">${escapeHtml(options.empty || "暂无数据")}</td></tr>`;
-  return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table><div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, rows.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div></div>`;
+  // An empty collection has nothing to page through.  Leaving the disabled
+  // page controls below an empty-state message made maintenance and
+  // diagnostic cards look like unfinished forms rather than a clear empty
+  // result.  Keep headers when they provide context, but show paging only
+  // once there are real rows to inspect.
+  const pager = rows.length ? `<div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, rows.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div>` : "";
+  return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>${pager}</div>`;
 }
 
 function nativeScrollTable(columns, rows, options = {}) {
@@ -1259,7 +1264,8 @@ function pagedItems(key, items, empty = "暂无数据") {
   const pages = Math.max(1, Math.ceil(items.length / entry.size));
   entry.page = Math.min(entry.page, pages - 1);
   const visible = items.slice(entry.page * entry.size, (entry.page + 1) * entry.size);
-  return `${visible.length ? visible.join("") : `<p class="empty-state">${escapeHtml(empty)}</p>`}<div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${entry.size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${entry.size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, items.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div>`;
+  if (!items.length) return `<p class="empty-state">${escapeHtml(empty)}</p>`;
+  return `${visible.join("")}<div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${entry.size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${entry.size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, items.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div>`;
 }
 
 function searchParamsFromState() {
@@ -2566,7 +2572,7 @@ function showAuth(auth) {
 
 async function loadSettings() {
   state.settings = await api("/api/settings");
-  $("#version-label").textContent = "现代管理面板 · 预览";
+  $("#version-label").textContent = "现代管理面板";
 }
 
 async function loginSubmit(event) {

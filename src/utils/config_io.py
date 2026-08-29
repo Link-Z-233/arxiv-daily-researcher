@@ -1,7 +1,7 @@
 """
 Config I/O module - shared read/write logic for .env and configs/config.json.
 
-Used by: src/utils/setup_wizard.py, src/webui/config_panel.py
+Used by: src/utils/setup_wizard.py, src/modern_webui/app.py
 """
 
 import errno
