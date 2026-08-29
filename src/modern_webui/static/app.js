@@ -1990,6 +1990,10 @@ function normalizeForSave() {
     }
     config.trend_sort_order = trend.sort_order === "descending" ? "descending" : "ascending";
   }
+  // The compatibility panel intentionally keeps the SQLite research ledger
+  // enabled on every save.  It is not a user-facing switch: disabling it
+  // would silently break retries, history maintenance and report metadata.
+  config.daily_research_persistence_enabled = true;
   config.score_strategy_explicit = true;
   return config;
 }
