@@ -407,10 +407,17 @@ function renderTrendForm(templates = []) {
   const selectedSkills = Array.isArray(values.skills) ? values.skills : configuredSkills;
   const categories = arxivCategories().map((item) => `<option value="${escapeAttribute(item.code)}" ${values.categories.includes(item.code) ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
   const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
+  const outputFormats = Array.isArray(config("trend_output_formats", ["markdown", "html"]))
+    ? config("trend_output_formats", ["markdown", "html"])
+    : ["markdown", "html"];
+  const outputField = (key, format, label) => {
+    const enabled = state.draft.config[key] ?? outputFormats.includes(format);
+    return `<label class="toggle-field"><span>${escapeHtml(label)}</span><input type="checkbox" data-field="${escapeAttribute(key)}" data-scope="config" ${enabled ? "checked" : ""}/><i></i></label>`;
+  };
   return {
     run: `<label class="form-field"><span>研究关键词</span><input id="trend-keywords" value="${escapeAttribute(values.keywords)}" placeholder="例如 quantum error correction" /></label>`,
     parameters: `<div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><label class="form-field"><span>arXiv 分类（可选）</span><select id="trend-categories" multiple>${categories}</select></label>`,
-    configuration: `<div class="form-grid two"><label class="form-field"><span>排序</span><select id="trend-sort"><option value="ascending" ${values.sort_order === "ascending" ? "selected" : ""}>由早到晚</option><option value="descending" ${values.sort_order === "descending" ? "selected" : ""}>由晚到早</option></select></label><label class="form-field"><span>最多结果数</span><input id="trend-max-results" type="number" min="10" max="5000" value="${escapeAttribute(values.max_results)}" /></label>${field({ label: "默认日期范围（天）", key: "trend_default_date_range_days", type: "number", min: 30, max: 3650, fallback: 365 })}${field({ label: "报告位置", key: "trend_report_position", type: "select", choices: [{ value: "beginning", label: "报告开头" }, { value: "end", label: "报告末尾" }], fallback: "end" })}${field({ label: "生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true })}${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div><div class="form-grid two">${field({ label: "输出 Markdown", key: "trend_output_md", type: "checkbox", fallback: true })}${field({ label: "输出 HTML", key: "trend_output_html", type: "checkbox", fallback: true })}</div><label class="toggle-field"><span>综合分析</span><input id="trend-skill-comprehensive" type="checkbox" ${selectedSkills.includes("comprehensive_analysis") ? "checked" : ""}/><i></i></label><div class="form-grid two"><label class="form-field"><span>已保存提示词模板</span><select id="trend-template"><option value="">不使用模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><button id="trend-template-delete" class="secondary-button" ${values.template ? "" : "disabled"}>删除当前模板</button></div></div><p class="hint-text">选择模板后，模板内容会作为本次趋势研究的深度分析提示词；不选择时使用默认分析流程。</p><details class="compact-form"><summary>保存新的提示词模板</summary><div class="form-grid two"><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="5" maxlength="8000" placeholder="填写可复用的深度分析提示词"></textarea></label></div><div class="action-row"><button id="trend-template-save" class="secondary-button">保存模板</button></div></details>`,
+    configuration: `<div class="form-grid two"><label class="form-field"><span>排序</span><select id="trend-sort"><option value="ascending" ${values.sort_order === "ascending" ? "selected" : ""}>由早到晚</option><option value="descending" ${values.sort_order === "descending" ? "selected" : ""}>由晚到早</option></select></label><label class="form-field"><span>最多结果数</span><input id="trend-max-results" type="number" min="10" max="5000" value="${escapeAttribute(values.max_results)}" /></label>${field({ label: "默认日期范围（天）", key: "trend_default_date_range_days", type: "number", min: 30, max: 3650, fallback: 365 })}${field({ label: "报告位置", key: "trend_report_position", type: "select", choices: [{ value: "beginning", label: "报告开头" }, { value: "end", label: "报告末尾" }], fallback: "end" })}${field({ label: "生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true })}${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div><h3>输出格式</h3><div class="form-grid two">${outputField("trend_output_md", "markdown", "输出 Markdown")}${outputField("trend_output_html", "html", "输出 HTML")}</div><h3>分析技能</h3><label class="toggle-field"><span>综合分析</span><input id="trend-skill-comprehensive" type="checkbox" ${selectedSkills.includes("comprehensive_analysis") ? "checked" : ""}/><i></i></label><div class="form-grid two"><label class="form-field"><span>已保存提示词模板</span><select id="trend-template"><option value="">不使用模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><button id="trend-template-delete" class="secondary-button" ${values.template ? "" : "disabled"}>删除当前模板</button></div></div><p class="hint-text">选择模板后，模板内容会作为本次趋势研究的深度分析提示词；不选择时使用默认分析流程。</p><details class="compact-form"><summary>保存新的提示词模板</summary><div class="form-grid two"><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="5" maxlength="8000" placeholder="填写可复用的深度分析提示词"></textarea></label></div><div class="action-row"><button id="trend-template-save" class="secondary-button">保存模板</button></div></details>`,
   };
 }
 
@@ -1446,9 +1453,18 @@ function normalizeForSave() {
     config.extra_source_definitions = definitions;
   }
   if (Object.prototype.hasOwnProperty.call(config, "trend_output_html") || Object.prototype.hasOwnProperty.call(config, "trend_output_md")) {
+    const configuredFormats = Array.isArray(config.trend_output_formats)
+      ? config.trend_output_formats
+      : ["markdown", "html"];
     const formats = [];
-    if (config.trend_output_md !== false) formats.push("markdown");
-    if (config.trend_output_html !== false) formats.push("html");
+    const markdownEnabled = Object.prototype.hasOwnProperty.call(config, "trend_output_md")
+      ? config.trend_output_md === true
+      : configuredFormats.includes("markdown");
+    const htmlEnabled = Object.prototype.hasOwnProperty.call(config, "trend_output_html")
+      ? config.trend_output_html === true
+      : configuredFormats.includes("html");
+    if (markdownEnabled) formats.push("markdown");
+    if (htmlEnabled) formats.push("html");
     config.trend_output_formats = formats;
     delete config.trend_output_html;
     delete config.trend_output_md;
