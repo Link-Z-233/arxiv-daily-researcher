@@ -1766,12 +1766,19 @@ def connection_test(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
                 str(values.get("api_key") or settings.get("SEMANTIC_SCHOLAR_API_KEY") or "")
             )
         elif kind == "smtp":
+            # A blank form value means the operator left the switch at its
+            # documented default.  It must not silently turn TLS off merely
+            # because optional environment fields are redacted as empty in
+            # the modern settings payload.
+            tls_value = values.get("use_tls")
+            if tls_value in (None, ""):
+                tls_value = settings.get("SMTP_USE_TLS") or "true"
             ok, message = validate_smtp_connection(
                 str(values.get("host") or settings.get("SMTP_HOST") or ""),
                 int(values.get("port") or settings.get("SMTP_PORT") or 587),
                 str(values.get("user") or settings.get("SMTP_USER") or ""),
                 str(values.get("password") or settings.get("SMTP_PASSWORD") or ""),
-                _coerce_bool(values.get("use_tls", settings.get("SMTP_USE_TLS", "true")), True),
+                _coerce_bool(tls_value, True),
             )
         else:
             raise ModernWebUIError("不支持的连接测试。")

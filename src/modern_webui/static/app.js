@@ -1354,7 +1354,7 @@ async function renderNotificationsPage(_token) {
   const root = $("#page-root");
   root.innerHTML = `${pageHeader()}${renderNotifications()}`;
   bindCommon(root);
-  $("#smtp-test", root)?.addEventListener("click", () => testConnection("smtp", { host: envValue("SMTP_HOST"), port: envValue("SMTP_PORT", "587"), user: envValue("SMTP_USER"), password: state.draft.env.SMTP_PASSWORD, use_tls: envValue("SMTP_USE_TLS", "true") }, "smtp-test-result"));
+  $("#smtp-test", root)?.addEventListener("click", () => testConnection("smtp", { host: envValue("SMTP_HOST"), port: envValue("SMTP_PORT", "587"), user: envValue("SMTP_USER"), password: state.draft.env.SMTP_PASSWORD, use_tls: booleanValue(envValue("SMTP_USE_TLS"), true) }, "smtp-test-result"));
 }
 
 function proxyNoProxyEditor() {

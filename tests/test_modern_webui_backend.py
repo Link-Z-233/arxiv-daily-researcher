@@ -358,6 +358,24 @@ class ModernBackendTests(unittest.TestCase):
             webdav_sync=client,
         )
 
+    def test_smtp_connection_test_keeps_tls_enabled_for_a_blank_optional_value(self) -> None:
+        with patch.object(backend, "read_env", return_value={}), patch.object(
+            backend, "validate_smtp_connection", return_value=(True, "连接正常")
+        ) as validate:
+            result = backend.connection_test(
+                "smtp",
+                {
+                    "host": "smtp.example.test",
+                    "port": "587",
+                    "user": "operator",
+                    "password": "secret",
+                    "use_tls": "",
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(validate.call_args.args[-1])
+
     def test_diagnostics_preserve_source_receipt_fields_for_the_ui(self) -> None:
         store = MagicMock()
         store.get_source_health_for_days.return_value = {
