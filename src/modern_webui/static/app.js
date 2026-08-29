@@ -712,6 +712,22 @@ function pagedTable(key, columns, rows, options = {}) {
   return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table><div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, rows.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div></div>`;
 }
 
+function nativeScrollTable(columns, rows, options = {}) {
+  // Use this for compact, inspection-oriented lists.  Pagination makes it
+  // unnecessarily hard to compare a small preference/cache list, while an
+  // internal native scrollbar keeps the page height stable once it grows.
+  const visibleRows = Math.max(1, Number(options.visibleRows || 10));
+  const template = `repeat(${Math.max(1, columns.length)}, minmax(0, 1fr))`;
+  const header = columns.map((column) => `<span role="columnheader">${escapeHtml(column.label)}</span>`).join("");
+  const content = rows.length
+    ? rows.map((row) => `<div class="native-scroll-table-row" role="row">${columns.map((column) => {
+      const value = column.value ? column.value(row) : row[column.key] ?? "—";
+      return `<span role="cell">${escapeHtml(value)}</span>`;
+    }).join("")}</div>`).join("")
+    : `<p class="empty-state native-scroll-empty">${escapeHtml(options.empty || "暂无数据")}</p>`;
+  return `<div class="native-scroll-table" role="table" style="--native-scroll-columns:${escapeAttribute(template)};--native-scroll-visible-rows:${visibleRows}"><div class="native-scroll-table-header" role="row">${header}</div><div class="native-scroll-table-body">${content}</div></div>`;
+}
+
 function bindPagers(root = document) {
   $$('[data-table-size]', root).forEach((element) => element.addEventListener("change", () => {
     const item = state.tables[element.dataset.tableSize]; item.size = Number(element.value); item.page = 0; renderPage();
@@ -1204,7 +1220,7 @@ async function renderFavorites(token) {
   const likedList = cards.length
     ? `<p class="hint-text">按标记时间倒序展示；点击标题可打开论文页面。</p><div class="card-list">${pagedItems("favorite-cards", cards, "暂无已收藏论文")}</div>`
     : '<p class="empty-state">暂无 👍 收藏论文。</p>';
-  root.innerHTML = `${pageHeader()}${section("收藏的论文", `${metrics([{ label: "👍 收藏", value: formatNumber(likeCount), help: "正向偏好" }, { label: "👎 不喜欢", value: formatNumber(dislikeCount), help: "负向偏好" }])}${likedList}`, { icon: "⭐" })}${divider()}${section("收藏画像", `<div class="form-grid two">${pagedTable("favorite-authors", [{ label: "收藏作者 Top", key: "name" }, { label: "收藏次数", key: "count" }], data.authors || [], { empty: "暂无收藏作者统计" })}${pagedTable("favorite-keywords", [{ label: "收藏关键词", key: "keyword" }, { label: "次数", key: "count" }], data.keywords || [], { empty: "暂无收藏关键词统计" })}</div>`, { icon: "🧩" })}`;
+  root.innerHTML = `${pageHeader()}${section("收藏的论文", `${metrics([{ label: "👍 收藏", value: formatNumber(likeCount), help: "正向偏好" }, { label: "👎 不喜欢", value: formatNumber(dislikeCount), help: "负向偏好" }])}${likedList}`, { icon: "⭐" })}${divider()}${section("收藏画像", `<div class="form-grid two"><div><p class="scroll-list-label">收藏作者 Top</p>${nativeScrollTable([{ label: "作者", key: "name" }, { label: "收藏次数", key: "count" }], data.authors || [], { empty: "暂无收藏作者统计", visibleRows: 10 })}</div><div><p class="scroll-list-label">收藏关键词</p>${nativeScrollTable([{ label: "关键词", key: "keyword" }, { label: "次数", key: "count" }], data.keywords || [], { empty: "暂无收藏关键词统计", visibleRows: 10 })}</div></div>`, { icon: "🧩" })}`;
   bindCommon(root);
 }
 
@@ -1321,7 +1337,8 @@ function extractedKeywordList(items) {
   // table.  The compatibility panel keeps the full extracted-keyword cache
   // in one compact, fixed-height box so users can scan its ordering without
   // growing the entire configuration page.
-  const height = Math.min(320, Math.max(100, 64 + items.length * 27));
+  const visibleRows = Math.min(10, items.length);
+  const height = 44 + visibleRows * 27;
   return `<div class="native-scroll-list" style="height:${height}px"><p class="hint-text">已提取 ${formatNumber(items.length)} 个关键词</p>${items.map((item) => `<div class="native-scroll-row"><span>${escapeHtml(item.keyword)}</span><small>${escapeHtml(Number(item.weight).toFixed(2))}</small></div>`).join("")}</div>`;
 }
 
@@ -1457,8 +1474,7 @@ async function renderScoring(token) {
         const value = Number(row.weight);
         return Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(2)}` : "—";
       };
-      if (host) host.innerHTML = `<div class="form-grid two"><div><p class="hint-text">学习关键词</p>${pagedTable("learned-keywords", [{ label: "关键词", key: "term" }, { label: "权重", value: signedWeight }], learned.keywords || [], { empty: "暂无学习关键词" })}</div><div><p class="hint-text">学习作者</p>${pagedTable("learned-authors", [{ label: "作者", key: "term" }, { label: "权重", value: signedWeight }], learned.authors || [], { empty: "暂无学习作者" })}</div></div><p class="hint-text">偏好项来自已保存的喜欢/不喜欢和历史记录；仅展示当前 SQLite 历史库中的结果。</p>`;
-      bindPagers(root);
+      if (host) host.innerHTML = `<div class="form-grid two"><div><p class="scroll-list-label">学习关键词</p>${nativeScrollTable([{ label: "关键词", key: "term" }, { label: "权重", value: signedWeight }], learned.keywords || [], { empty: "暂无学习关键词", visibleRows: 10 })}</div><div><p class="scroll-list-label">学习作者</p>${nativeScrollTable([{ label: "作者", key: "term" }, { label: "权重", value: signedWeight }], learned.authors || [], { empty: "暂无学习作者", visibleRows: 10 })}</div></div><p class="hint-text">偏好项来自已保存的喜欢/不喜欢和历史记录；仅展示当前 SQLite 历史库中的结果。</p>`;
     } catch (error) { /* preference library is optional */ }
   }
 }

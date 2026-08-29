@@ -252,6 +252,14 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .native-scroll-row:last-child { border-bottom: 0; }
 .native-scroll-row span { min-width: 0; overflow-wrap: anywhere; }
 .native-scroll-row small { flex: 0 0 auto; color: var(--muted); font-size: .77rem; white-space: nowrap; }
+.scroll-list-label { margin: 0 0 8px; color: var(--text-secondary); font-size: .8rem; font-weight: 750; }
+.native-scroll-table { overflow: auto; max-height: calc(39px + var(--native-scroll-visible-rows, 10) * 39px); border: 1px solid var(--line); border-radius: 10px; background: #fff; scrollbar-gutter: stable; }
+.native-scroll-table-header, .native-scroll-table-row { display: grid; grid-template-columns: var(--native-scroll-columns); min-width: 280px; }
+.native-scroll-table-header { position: sticky; z-index: 1; top: 0; background: #f7f8fc; color: var(--muted); font-size: .7rem; font-weight: 800; }
+.native-scroll-table-header span, .native-scroll-table-row span { min-width: 0; padding: 10px 11px; overflow-wrap: anywhere; }
+.native-scroll-table-row { min-height: 39px; border-top: 1px solid #ecf0f5; color: var(--text-secondary); font-size: .78rem; line-height: 1.45; }
+.native-scroll-table-row:hover { background: #fafbfe; }
+.native-scroll-empty { margin: 0; border: 0; border-radius: 0; }
 .channel-card > summary { cursor: pointer; color: var(--text-secondary); font-weight: 750; }
 .channel-card > .toggle-field, .channel-card > .form-field, .channel-card > .form-grid, .channel-card > .action-row { margin-top: 13px; }
 .stack-form { display: grid; gap: 13px; }
