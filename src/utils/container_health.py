@@ -1,4 +1,4 @@
-"""Local container readiness checks for the worker and Streamlit panel.
+"""Local container readiness checks for the Worker and WebUI.
 
 External APIs are deliberately excluded.  A DNS, arXiv, LLM or WebDAV outage
 belongs in task-level retry/status reporting and must not make Docker restart a
@@ -215,14 +215,26 @@ def _webui_checks(url: str, runtime_user: str) -> None:
     data_dir, database, directories = _webui_paths(config)
     for directory in directories:
         _check_writable_directory(directory)
+    # A fresh installation has no SQLite file yet.  The modern WebUI can be
+    # started before the Worker, so create a configured nested database parent
+    # here rather than reporting an unhealthy service until a research task
+    # happens to create it first.  This stays inside the already-validated
+    # project data path and is the same harmless directory initialization the
+    # normal application performs before opening SQLite.
+    try:
+        database.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ContainerHealthError(
+            f"database directory cannot be initialized: {database.parent}: {exc}"
+        ) from exc
     _check_sqlite(database)
     _check_writable_directory(data_dir / "run" / "webui_triggers")
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
             body = response.read(64).decode("utf-8", errors="replace").strip().lower()
-            _require(response.status == 200 and body == "ok", "Streamlit health endpoint is not ready")
+            _require(response.status == 200 and body == "ok", "WebUI health endpoint is not ready")
     except (OSError, ValueError) as exc:
-        raise ContainerHealthError(f"Streamlit health endpoint failed: {exc}") from exc
+        raise ContainerHealthError(f"WebUI health endpoint failed: {exc}") from exc
 
 
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -231,8 +243,8 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--runtime-user", default="adr")
     parser.add_argument(
         "--url",
-        default="http://127.0.0.1:8501/_stcore/health",
-        help="Streamlit health endpoint for webui mode",
+        default="http://127.0.0.1:8503/api/health",
+        help="WebUI health endpoint for webui mode",
     )
     return parser.parse_args(argv)
 
