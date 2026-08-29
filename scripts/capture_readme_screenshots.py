@@ -1,87 +1,61 @@
 #!/usr/bin/env python3
-"""Capture current, privacy-safe WebUI screenshots for the project README.
+"""Capture privacy-safe screenshots from the modern WebUI for the README.
 
-Only pages that contain no credentials or private endpoints are captured.  The
-script intentionally avoids API, notifications, and the top of data-management
-where connection fields can appear.  Review the generated files before a
-release if a local configuration has customized any labels.
+The script deliberately avoids API and notification pages. The backup image
+hides the WebDAV card before capture because a local installation can contain
+an endpoint or account name there. Credentials are accepted only through
+environment variables and are never written to an image or to stdout.
 """
 
 from __future__ import annotations
 
-import re
 import os
 import sys
-import time
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
 
-# Keep the checked-in defaults convenient for release documentation, while
-# allowing an isolated local container to be used for a privacy-safe preview.
-BASE_URL = os.environ.get(
-    "ADR_SCREENSHOT_BASE_URL", "http://127.0.0.1:8503"
-).rstrip("/")
+BASE_URL = os.environ.get("ADR_SCREENSHOT_BASE_URL", "http://127.0.0.1:8503").rstrip("/")
 OUTPUT_DIR = Path(
-    os.environ.get(
-        "ADR_SCREENSHOT_OUTPUT_DIR",
-        str(Path(__file__).resolve().parents[1] / "assets"),
-    )
+    os.environ.get("ADR_SCREENSHOT_OUTPUT_DIR", str(Path(__file__).resolve().parents[1] / "assets"))
 )
 VIEWPORT = {"width": 1440, "height": 980}
 
 
-def wait_for_streamlit(page: Page, timeout_seconds: float = 30) -> None:
-    """Wait for the app shell and pending reruns to settle."""
-    page.wait_for_load_state("domcontentloaded")
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        try:
-            if "Running" not in page.locator("body").inner_text(timeout=1000):
-                break
-        except Exception:
-            pass
-        time.sleep(0.25)
-    page.wait_for_timeout(900)
+def wait_for_modern_ui(page: Page, timeout_ms: int = 30_000) -> None:
+    """Wait for the page renderer rather than relying on network-idle."""
+
+    page.wait_for_selector("#page-root > *", timeout=timeout_ms)
+    page.wait_for_timeout(700)
 
 
 def authenticate(page: Page) -> None:
-    """Sign in when the privacy-safe capture target enables WebUI auth.
+    """Sign in when the capture target has panel authentication enabled."""
 
-    Credentials are deliberately read only from the process environment; the
-    script never prints them or puts them in a screenshot. A fresh deployment
-    must be initialized locally before automated documentation capture runs.
-    """
-    if page.get_by_text(re.compile("初始化管理员账户|Set Up the Administrator Account")).count():
-        raise RuntimeError(
-            "WebUI administrator account is not initialized. Complete local setup first."
-        )
-    if not page.get_by_text(re.compile("登录配置面板|Sign in to the configuration panel")).count():
+    if not page.locator("#auth:not([hidden])").count():
+        return
+    if page.locator("#setup-form:not([hidden])").count():
+        raise RuntimeError("WebUI administrator account is not initialized. Complete local setup first.")
+    if not page.locator("#login-form:not([hidden])").count():
         return
     username = os.environ.get("ADR_SCREENSHOT_USERNAME", "")
     password = os.environ.get("ADR_SCREENSHOT_PASSWORD", "")
     if not username or not password:
         raise RuntimeError(
-            "WebUI authentication is enabled; set ADR_SCREENSHOT_USERNAME and "
-            "ADR_SCREENSHOT_PASSWORD for screenshot capture."
+            "WebUI authentication is enabled; set ADR_SCREENSHOT_USERNAME and ADR_SCREENSHOT_PASSWORD."
         )
-    page.get_by_label(re.compile("^(用户名|Username)$")).fill(username)
-    page.get_by_label(re.compile("^(密码|Password)$")).fill(password)
-    page.get_by_role("button", name=re.compile("^(登录|Sign in)$")).click()
-    page.locator('section[data-testid="stSidebar"]').get_by_role(
-        "button", name=re.compile("每日研究|Daily Research")
-    ).wait_for(timeout=30_000)
-    wait_for_streamlit(page)
+    page.locator("#login-username").fill(username)
+    page.locator("#login-password").fill(password)
+    page.locator("#login-form button[type='submit']").click()
+    page.wait_for_selector("#app:not([hidden])", timeout=30_000)
+    wait_for_modern_ui(page)
 
 
-def show_page(page: Page, label: str) -> None:
-    """Open one sidebar workflow page in the current vertical navigation."""
-    sidebar = page.locator('section[data-testid="stSidebar"]')
-    sidebar.get_by_role("button", name=label, exact=True).click()
-    wait_for_streamlit(page)
+def show_page(page: Page, group: str, page_name: str) -> None:
+    page.goto(f"{BASE_URL}/#{group}/{page_name}", wait_until="domcontentloaded", timeout=30_000)
+    wait_for_modern_ui(page)
     page.evaluate("window.scrollTo(0, 0)")
-    page.wait_for_timeout(250)
 
 
 def capture(page: Page, filename: str) -> None:
@@ -89,47 +63,12 @@ def capture(page: Page, filename: str) -> None:
     print(f"captured {filename}")
 
 
-def scroll_to_text(page: Page, label: str) -> None:
-    target = page.get_by_text(re.compile(re.escape(label))).first
-    target.scroll_into_view_if_needed(timeout=10_000)
-    # Streamlit keeps its top chrome fixed.  A plain ``block: start`` places
-    # a section title beneath that chrome, leaving only its underline visible
-    # in the screenshot.  ``stMain`` is the actual scroll container, so move
-    # that container back a small amount after positioning the title.
-    target.evaluate(
-        """node => {
-            node.scrollIntoView({block: 'start', inline: 'nearest'});
-            const main = node.closest('section[data-testid="stMain"]');
-            if (main) main.scrollBy({top: -84, left: 0});
-        }"""
-    )
-    page.wait_for_timeout(500)
+def hide_card(page: Page, title: str) -> None:
+    """Hide a card whose content could contain local connection metadata."""
 
-
-def isolate_section(page: Page, label: str, keep_following: int) -> None:
-    """Temporarily hide unrelated Streamlit elements for a focused image."""
-    target = page.get_by_text(re.compile(re.escape(label))).first
-    target.evaluate(
-        """(node, keepFollowing) => {
-            const heading = node.closest('.stElementContainer');
-            const parent = heading && heading.parentElement;
-            if (!heading || !parent) return;
-            const children = Array.from(parent.children);
-            const index = children.indexOf(heading);
-            children.forEach((child, childIndex) => {
-                if (childIndex < index || childIndex > index + keepFollowing) {
-                    child.style.display = 'none';
-                }
-            });
-            // Hiding the preceding sections moves the retained title beneath
-            // Streamlit's fixed chrome. Preserve a little top breathing room
-            // so the title itself, rather than only its underline, remains
-            // visible in the cropped documentation image.
-            heading.style.marginTop = '84px';
-        }""",
-        keep_following,
-    )
-    page.wait_for_timeout(300)
+    card = page.locator(".section-card", has=page.get_by_role("heading", name=title)).first
+    if card.count():
+        card.evaluate("node => { node.style.display = 'none'; }")
 
 
 def main() -> int:
@@ -138,34 +77,25 @@ def main() -> int:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport=VIEWPORT, device_scale_factor=1)
         page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
-        wait_for_streamlit(page, timeout_seconds=60)
+        page.wait_for_timeout(400)
         authenticate(page)
 
-        # The current sidebar is part of the documented interface. The
-        # isolated capture profile uses no secrets, so it can remain visible.
-        show_page(page, "🚀 每日研究")
+        show_page(page, "run", "daily_research")
         capture(page, "webui_daily_push_v4.png")
 
-        show_page(page, "📊 数据分析")
-        scroll_to_text(page, "LLM 健康")
+        show_page(page, "system", "analytics")
         capture(page, "webui_analytics_v4.png")
 
-        show_page(page, "⚖️ 评分")
+        show_page(page, "configuration", "scoring")
         capture(page, "webui_scoring_v4.png")
 
-        show_page(page, "☁️ 备份与同步")
-        isolate_section(page, "数据库备份", keep_following=4)
-        scroll_to_text(page, "数据库备份")
-        page.set_viewport_size({"width": VIEWPORT["width"], "height": 540})
+        show_page(page, "system", "backup_sync")
+        hide_card(page, "WebDAV")
+        page.locator(".section-card", has=page.get_by_role("heading", name="本地备份")).scroll_into_view_if_needed()
+        page.wait_for_timeout(250)
         capture(page, "webui_data_management_v4.png")
 
-        page.set_viewport_size(VIEWPORT)
-        page.reload(wait_until="domcontentloaded", timeout=30_000)
-        wait_for_streamlit(page)
-        show_page(page, "🗂 历史维护")
-        isolate_section(page, "旧版本历史导入", keep_following=5)
-        scroll_to_text(page, "旧版本历史导入")
-        page.set_viewport_size({"width": VIEWPORT["width"], "height": 500})
+        show_page(page, "system", "history_tasks")
         capture(page, "webui_history_import_v4.png")
 
         browser.close()

@@ -9,7 +9,7 @@
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Supported-2088FF?logo=github-actions)](https://github.com/features/actions)
-[![Streamlit](https://img.shields.io/badge/Config_Panel-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](#️-streamlit-配置面板)
+[![Modern WebUI](https://img.shields.io/badge/Config_Panel-Modern_WebUI-465FD5)](#️-现代管理-webui)
 [![English](https://img.shields.io/badge/README-English-blue.svg)](README_EN.md)
 
 *面向日常文献追踪、专题研究与历史资料整理的完整研究工作流。*
@@ -28,7 +28,7 @@ v4.1 以 SQLite 保存候选论文、处理阶段、报告交付、通知发件�
 - **趋势研究模式**：围绕指定主题、时间范围和分类生成综合研究报告
 - **旧历史导入与补充报告**：默认建立 HTML 交付账本；可按需执行完整修复
 - **过去日报队列**：按日期范围补跑历史日期的完整研究流程
-- **Streamlit 配置面板**：完成配置、运行、报告阅读、数据管理与诊断
+- **现代管理 WebUI**：在四组侧栏导航和顶部页签中完成配置、运行、报告阅读与诊断
 
 ---
 
@@ -117,16 +117,16 @@ v4.1 以 SQLite 保存候选论文、处理阶段、报告交付、通知发件�
 <tr>
 <td width="50%" valign="top">
 
-### 🧙 配置向导与 WebUI
+### 🧙 配置向导与现代 WebUI
 
-CLI 配置向导覆盖 LLM、数据源、关键词、评分、通知和高级选项。Streamlit 面板提供 12 个 Tab，涵盖运行状态、报告、收藏、趋势研究、数据源、评分、数据分析、备份与 API 测试。
+CLI 配置向导覆盖 LLM、数据源、关键词、评分、通知和高级选项。现代 WebUI 以独立 ASGI 服务运行，提供运行、内容、配置、系统四组页面，配置和任务状态始终与 worker 共用同一份持久化数据。
 
 </td>
 <td width="50%" valign="top">
 
 ### 🛡️ 备份、同步与运行诊断
 
-SQLite 自动生成一致性 gzip 快照：当天保留全部副本，昨天及更早日期每天保留最新一份。WebDAV 采用内容变化时上传的增量归档；数据分析页提供 Token 用量、LLM 健康、来源健康和运行诊断。
+SQLite 自动生成一致性 gzip 快照：当天保留全部副本，昨天及更早日期每天保留最新一份。WebDAV 采用内容变化时上传的增量归档；诊断页提供运行、LLM 和来源健康，数据分析页提供可选时间段的 Token 折线趋势。
 
 </td>
 </tr>
@@ -197,7 +197,7 @@ docker compose up -d --build
 
 Docker 会以 `.env` 中的 `PUID` / `PGID` 写入 `data`、`logs`、`configs` 和 `.env`，避免 NAS 挂载目录出现 root 所有文件。升级自旧镜像且已有 root 所有文件时，可临时加入 `ADR_REPAIR_OWNERSHIP=true` 启动一次，确认权限恢复后删除该项。
 
-WebUI 默认启用单管理员登录。首次仅在本机地址完成账户初始化，密码以加盐哈希写入 `.env`；登录会在默认 8 小时无操作后失效，并对连续错误尝试限流。面板仍建议置于 VPN 或带 HTTPS 与访问控制的反向代理之后。
+WebUI 默认启用管理员登录。首次仅在本机地址完成账户初始化，密码以加盐哈希写入 `.env`；会话默认有效期为 7 天，并对连续错误尝试限流。可信内网可在首次初始化时选择跳过登录；面板仍建议置于 VPN 或带 HTTPS 与访问控制的反向代理之后。
 
 <details>
 <summary><b>手动配置</b></summary>
@@ -267,7 +267,7 @@ python main.py --mode trend_research --keywords "quantum error correction"
 
 ## 🛠️ 配置工具
 
-项目提供两种主要配置方式：**CLI 配置向导**与 **Streamlit 配置面板**。
+项目提供两种主要配置方式：**CLI 配置向导**与 **现代管理 WebUI**。
 
 ### 🧙 交互式配置向导
 
@@ -290,53 +290,44 @@ python src/utils/setup_wizard.py
 
 ---
 
-### 🖥️ Streamlit 配置面板
+### 🖥️ 现代管理 WebUI
 
 #### 启动方式
 
 ~~~bash
 # 本地运行
-streamlit run src/webui/config_panel.py
+uvicorn src.modern_webui.app:app --host 127.0.0.1 --port 8503
 
 # Docker 运行
 docker compose up -d config-panel
 ~~~
 
-Docker 面板地址：<http://127.0.0.1:8503><br>
-本地 Streamlit 默认地址：<http://127.0.0.1:8501>
+Docker 与本地面板地址：<http://127.0.0.1:8503>
 
-WebUI 与 worker 共享 <code>.env</code>、<code>configs/</code>、<code>data/</code> 和 <code>logs/</code>。保存后的配置会在下一次任务加载；修改运行时间后可通过侧栏按钮重启 worker 以重装 cron。
+WebUI 与 worker 共享 <code>.env</code>、<code>configs/</code>、<code>data/</code> 和 <code>logs/</code>。左侧一级导航分为运行、内容、配置、系统；二级页面保留在顶部，避免在长配置页中丢失上下文。保存后的配置会在下一次任务加载；修改运行时间后可通过侧栏按钮重启 worker 以重装 cron。
 
-#### 12 个 Tab 页详解
+#### 18 个页面与导航分组
 
-|   #   | Tab                | 功能                                                                                                                                                              |
-| :---: | :----------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|   1   | **每日推送**       | 启动每日研究；每日研究设置；状态面板、自动刷新、队列深度与 800px 原生日志查看；过去日报日期范围队列与开始运行按钮                                                 |
-|   2   | **报告查看**       | 每日研究、补充报告、过去日报、趋势研究和关键词趋势报告的分类浏览、时间戳排序、HTML 预览与论文标记                                                               |
-|   3   | **收藏与检索**     | 收藏论文时间线、喜欢/不喜欢标记、兴趣画像、关键词统计、作者 Top 和 SQLite 全库论文检索                                                                          |
-|   4   | **趋势分析**       | 关键词、日期范围、分类、排序、结果上限、TLDR、输出格式与自定义综合分析提示词                                                                                     |
-|   5   | **关键词**         | 研究背景、主关键词、参考文献 PDF 关键词提取、已提取关键词滚动展示与权重分组                                                                                     |
-|   6   | **数据源**         | ArXiv 开关、分类和抓取设置；额外来源开关、内置来源与声明式来源定义                                                                                               |
-|   7   | **评分**           | 三种评分策略的中英名称、资格逻辑说明、阈值、权重、作者加分与实时预览                                                                                             |
-|   8   | **数据分析**       | Token 用量、关键词趋势、LLM 健康、数据源健康、扫描收据、运行诊断与通知积压                                                                                       |
-|   9   | **通知**           | 全局开关、成功/失败/附件设置，以及邮件、企业微信、钉钉、Telegram、Slack、Webhook 配置                                                                           |
-|  10   | **数据管理**       | 配置导入导出、SQLite 导入导出、自动备份、WebDAV、旧版本历史导入、补充积压状态                                                                                    |
-|  11   | **API**            | CHEAP_LLM、SMART_LLM、MinerU、OpenAlex、Semantic Scholar 的开关、测试连接与官方控制台链接                                                                       |
-|  12   | **高级设置**       | PDF 解析器、并发与重试、关键词维护、日志保留、更新检查、网络代理、运行锁与路径配置                                                                               |
+| 分组 | 顶部页面 | 功能 |
+| :--- | :------- | :--- |
+| **运行** | **每日研究**、**过去日报**、**趋势任务** | 启动研究、查看状态与队列；过去日报按日期范围逐日执行；趋势任务可独立设置关键词、时间段、分类和分析配置 |
+| **内容** | **报告**、**收藏**、**检索** | 分类浏览 HTML 报告与预览、在报告内标记 👍/👎、查看收藏画像，并检索 SQLite 全库论文与来源变体 |
+| **配置** | **关键词**、**数据源**、**评分**、**API**、**通知**、**高级设置**、**账户** | 管理研究主题、来源、评分策略、LLM/PDF/第三方 API、通知、运行参数和管理员账户 |
+| **系统** | **备份与同步**、**历史维护**、**诊断**、**数据分析**、**日志** | 管理导出、WebDAV 与本地备份；执行旧历史维护；检查运行/LLM/来源健康、Token 折线图和原生日志 |
 
 ### 🖼️ WebUI 界面预览
 
 <table>
   <tr>
     <td align="center" width="33%">
-      <img src="assets/webui_daily_push_v4.png" alt="每日推送与过去日报队列" width="100%" />
+      <img src="assets/webui_daily_push_v4.png" alt="每日研究状态与队列" width="100%" />
       <br />
-      <sub>每日推送、状态面板与过去日报</sub>
+      <sub>每日研究、状态面板与队列</sub>
     </td>
     <td align="center" width="33%">
-      <img src="assets/webui_analytics_v4.png" alt="数据分析与 LLM 健康" width="100%" />
+      <img src="assets/webui_analytics_v4.png" alt="数据分析与 Token 用量趋势" width="100%" />
       <br />
-      <sub>数据分析、LLM 健康与来源健康</sub>
+      <sub>Token 用量、时间段与折线趋势</sub>
     </td>
     <td align="center" width="33%">
       <img src="assets/webui_scoring_v4.png" alt="评分策略" width="100%" />
@@ -348,7 +339,7 @@ WebUI 与 worker 共享 <code>.env</code>、<code>configs/</code>、<code>data/<
     <td align="center" width="50%">
       <img src="assets/webui_data_management_v4.png" alt="数据库备份" width="100%" />
       <br />
-      <sub>数据库备份与保留期设置</sub>
+      <sub>本地备份与保留期设置</sub>
     </td>
     <td align="center" width="50%" colspan="2">
       <img src="assets/webui_history_import_v4.png" alt="旧版本历史导入" width="100%" />
@@ -361,12 +352,12 @@ WebUI 与 worker 共享 <code>.env</code>、<code>configs/</code>、<code>data/<
 截图使用脱敏测试配置生成，未展示 API Key、密码、Webhook、邮箱、内网地址或本机路径。
 
 <details>
-<summary><b>配置向导与配置面板如何选择？</b></summary>
+<summary><b>配置向导与 WebUI 如何选择？</b></summary>
 
 | 工具                             | 适用场景                    | 特点                                                   |
 | :------------------------------- | :-------------------------- | :----------------------------------------------------- |
 | **配置向导** (<code>setup_wizard.py</code>) | 首次部署、SSH、无浏览器环境 | 按步骤完成初始化，适合键盘操作与配置复核               |
-| **配置面板** (<code>config_panel.py</code>) | 日常调参、运行观察、报告阅读 | 12 个 Tab，提供状态、队列、报告、备份和连接测试        |
+| **现代 WebUI** (<code>src/modern_webui/</code>) | 日常调参、运行观察、报告阅读 | 四组侧栏、18 个顶部页面，提供状态、队列、报告、备份、诊断和连接测试 |
 
 首次安装可从配置向导开始；长期运行时使用面板管理日常任务会更直观。
 
@@ -381,7 +372,7 @@ WebUI 与 worker 共享 <code>.env</code>、<code>configs/</code>、<code>data/<
 Docker Compose 启动两个服务：
 
 - <code>arxiv-daily-researcher</code>：worker、cron、队列监听和研究任务
-- <code>config-panel</code>：仅监听本机 <code>127.0.0.1:8503</code> 的 Streamlit 面板
+- <code>config-panel</code>：仅监听本机 <code>127.0.0.1:8503</code> 的现代管理 WebUI
 
 #### 从源码构建
 
@@ -463,7 +454,7 @@ CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
 CHEAP_LLM__MODEL_NAME=qwen2.5:7b
 ~~~
 
-WebUI 使用桥接网络；反向代理、VPN 或本地服务地址应按部署网络拓扑配置。
+worker 与 WebUI 都使用宿主机网络，以相同方式访问宿主机上的本地 LLM、代理和 DNS。面板仅绑定 <code>127.0.0.1:8503</code>；反向代理、VPN 或本地服务地址应按部署网络拓扑配置。
 
 </details>
 
@@ -533,11 +524,11 @@ crontab -e
 
 | 模式                          | 入口与条件                                      | 结果                                                |
 | :---------------------------- | :---------------------------------------------- | :-------------------------------------------------- |
-| <code>legacy_import</code>    | 数据管理页“读取旧历史”，等待其他任务空闲        | 默认仅登记旧 HTML 的 arXiv 交付；完整修复读取 JSON，并仅为同一 HTML 报告补齐缺失关键词后执行维护 |
-| <code>history_data_repair</code> | 数据管理页“检查并补全历史数据”                | 以 SQLite 为依据补全评分、TL;DR、译文或深度分析，并回写原报告 |
-| <code>history_omission_scan</code> | 数据管理页“扫描遗漏并生成补充报告”            | 扫描 SQLite 覆盖的 arXiv 时间范围，按 ISO 自然周和单次上限生成补充报告 |
+| <code>legacy_import</code>    | 系统 → 历史维护“读取旧历史”，等待其他任务空闲 | 默认仅登记旧 HTML 的论文交付；完整修复读取兼容 JSON，并仅为同一 HTML 报告补齐缺失关键词后执行维护 |
+| <code>history_data_repair</code> | 系统 → 历史维护“补全历史数据”                | 以 SQLite 为依据补全评分、TL;DR、译文或深度分析，并回写原报告 |
+| <code>history_omission_scan</code> | 系统 → 历史维护“扫描历史遗漏”                | 扫描 SQLite 覆盖的各来源时间范围，按自然周和单次上限生成补充报告 |
 | <code>supplement_run</code>   | 导入自动衔接或 CLI 手动运行                      | 处理补充积压并生成补充报告                          |
-| <code>backfill_run</code>     | 每日推送页选择过去日期范围，或 CLI 传入范围      | 按天写入持久队列，生成过去日期对应的每日研究报告    |
+| <code>backfill_run</code>     | 运行 → 过去日报选择日期范围，或 CLI 传入范围      | 按天写入持久队列，生成过去日期对应的每日研究报告    |
 
 ### 📅 每日研究流水线
 
@@ -578,7 +569,7 @@ V1 及格线的配置形式为：
 及格线 = base_score + weight_coefficient × Σ(关键词权重)
 ~~~
 
-V2 的阈值、强匹配条件与排序信号都在“评分”页配置。评分结果会保留非敏感审计证据，便于在报告和数据分析页复核。
+V2 的阈值、强匹配条件与排序信号都在“配置 → 评分”页配置。评分结果会保留非敏感审计证据，便于在报告和“系统 → 诊断”复核。
 
 ### 📡 数据源与扫描收据
 
@@ -586,7 +577,7 @@ V2 的阈值、强匹配条件与排序信号都在“评分”页配置。评�
 - **额外来源**：通过独立开关启用内置来源与声明式来源定义
 - **OpenAlex**：用于额外期刊数据；配置 API Key 可使用官方配额
 - **Semantic Scholar**：提供可选 TLDR、引用等增强数据
-- **来源健康**：每次扫描生成终态收据，数据分析页展示最近状态、成功率、候选数量与错误摘要
+- **来源健康**：每次扫描生成终态收据，系统 → 诊断展示最近状态、成功率、候选数量与错误摘要
 
 扫描完成并安全交付后，水位线才会推进。短暂网络问题会通过重试、退避和后续恢复窗口处理。
 
@@ -670,7 +661,7 @@ MinerU 连接测试和官方 API 控制台链接位于 WebUI API 页。任务在
 | 保留期           | WebUI 可设置任意非负整数；默认 7 天，<code>0</code> 表示永久保留      |
 | WebDAV 归档      | 数据库内容变化时增量上传；远端快照持续保留                           |
 | 同步范围         | 配置、SQLite 历史库、关键词和报告可按范围选择                       |
-| 恢复             | 数据管理页支持 zip、gz、db 导入导出，并在导入前校验归档              |
+| 恢复             | 系统 → 备份与同步支持 zip、gz、db 导入导出，并在导入前校验归档     |
 
 恢复前请停止写入 SQLite 的任务，并先生成当前数据导出包。
 
@@ -684,7 +675,7 @@ arxiv-daily-researcher/
 ├── VERSION                       # 发布版本号
 ├── .env.example                  # 环境变量模板
 ├── requirements-core.txt         # worker / CLI 依赖
-├── requirements-webui.txt        # Streamlit WebUI 依赖
+├── requirements-webui.txt        # 现代 ASGI WebUI 依赖
 ├── docker-compose.yml            # worker + config-panel 编排
 ├── docker/
 │   ├── Dockerfile                # worker / webui 多阶段镜像
@@ -700,7 +691,7 @@ arxiv-daily-researcher/
 │   ├── notifications/            # 多渠道通知与 SQLite outbox
 │   ├── keyword_tracker/          # 关键词标准化与趋势
 │   ├── utils/                    # SQLite、队列、锁、备份、同步、健康检查
-│   └── webui/                    # Streamlit 面板与 i18n
+│   └── modern_webui/             # 现代 ASGI WebUI、静态前端与 i18n
 ├── .github/workflows/            # Actions 研究、测试与镜像发布工作流
 ├── data/                         # SQLite、报告、队列、备份（运行时生成）
 ├── logs/                         # 系统与每次任务日志（运行时生成）
@@ -751,7 +742,7 @@ docker compose up -d --force-recreate
 
 旧历史导入以独占方式访问 SQLite。每日研究、趋势研究、关键词维护、补充运行或过去日报执行期间，导入请求会保存在触发队列中；worker 空闲后自动认领。
 
-可在“每日推送 → 状态面板 / 运行日志”查看队列状态和 <code>legacy_import_*.log</code>。独立维护任务分别写入 <code>history_data_repair_*.log</code> 与 <code>history_omission_scan_*.log</code>。同一时间保留一个同类请求即可。
+可在“系统 → 历史维护”的状态面板或“系统 → 日志”查看队列状态和 <code>legacy_import_*.log</code>。独立维护任务分别写入 <code>history_data_repair_*.log</code> 与 <code>history_omission_scan_*.log</code>。同一时间保留一个同类请求即可。
 </details>
 
 <details>
@@ -780,10 +771,10 @@ docker compose up -d --force-recreate
 恢复步骤：
 
 1. 停止每日研究、导入和补充任务
-2. 在数据管理页导出当前 zip 作为保护副本
+2. 在“系统 → 备份与同步”导出当前 zip 作为保护副本
 3. 导入目标 zip、gz 或 db，并阅读校验结果
 4. 根据需要恢复报告目录、关键词和配置
-5. 重启 worker，确认数据分析页和队列状态
+5. 重启 worker，确认“系统 → 诊断”和队列状态
 </details>
 
 <details>
@@ -795,7 +786,7 @@ worker 使用宿主机网络，Linux/NAS 上的本地 OpenAI 兼容服务可使�
 CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
 ~~~
 
-请让模型服务的监听地址、反向代理规则和防火墙策略与部署拓扑一致。WebUI 与 worker 的网络模式不同，因此外部 API 地址建议先通过“API → 测试连接”验证。
+请让模型服务的监听地址、反向代理规则和防火墙策略与部署拓扑一致。worker 与 WebUI 共享宿主机网络语义；外部 API 地址建议先通过“配置 → API → 测试连接”验证。
 </details>
 
 <details>
@@ -825,7 +816,7 @@ docker compose up -d --no-build --force-recreate
 docker compose ps
 ~~~
 
-升级后查看数据分析页、队列和最近日志，确认新版本与现有配置兼容。
+升级后查看“系统 → 诊断”、队列和最近日志，确认新版本与现有配置兼容。
 </details>
 
 ---
@@ -873,7 +864,7 @@ docker compose ps
 
 - 感谢 [ArXiv](https://arxiv.org/)、[OpenAlex](https://openalex.org/)、[Semantic Scholar](https://www.semanticscholar.org/) 提供学术数据服务
 - 感谢 [MinerU](https://mineru.net/) 提供 PDF 解析服务
-- 感谢开源社区提供 Python、Docker、Streamlit 与相关工具
+- 感谢开源社区提供 Python、Docker、Starlette、Uvicorn 与相关工具
 
 ---
 
@@ -885,7 +876,7 @@ docker compose ps
 
 <table>
 <tr><th>版本</th><th>日期</th><th>类型</th><th>亮点</th></tr>
-<tr><td><b>v4.1</b></td><td>2026-08-26</td><td>✨ 增强 + 🐛 修复</td><td>旧历史关键词改为 HTML 报告优先、旧缓存按论文精确补位，关键词标准化统一由当前 SQLite 管理；报告预览与数据分析升级至 Streamlit 原生 iframe。</td></tr>
+<tr><td><b>v4.1</b></td><td>2026-08-30</td><td>✨ 增强 + 🐛 修复</td><td>旧历史关键词改为 HTML 报告优先、旧缓存按论文精确补位，关键词标准化统一由当前 SQLite 管理；现代管理 WebUI 成为默认面板，提供四组侧栏、18 个顶部页面、Token 折线图和细化的任务维护界面。</td></tr>
 <tr><td><b>v4.0</b></td><td>2026-08-25</td><td>🚀 重大更新</td><td>SQLite 日报历史、持久化候选与重试队列、完整扫描收据、核心相关性 V2、收藏偏好、旧历史导入与自动补充报告、过去日报日期范围队列、SQLite 备份与 WebDAV 增量归档、LLM 健康面板、多平台大型任务通知、GHCR AMD64/ARM64 镜像与完整发布回归。</td></tr>
 <tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ 增强 + 🐛 修复</td><td>网络代理、WebDAV 数据同步、配置导出、Docker 更新通知、每日推送 Tab、Markdown/HTML 报告开关、趋势分析输出设置。</td></tr>
 <tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ 增强 + 🐛 修复</td><td>运行管理、日志查看、趋势分析 Tab、报告查看增强、ArXiv 超时守卫与运行锁改进。</td></tr>

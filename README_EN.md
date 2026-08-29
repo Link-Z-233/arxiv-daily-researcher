@@ -9,7 +9,7 @@
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-Supported-2088FF?logo=github-actions)](https://github.com/features/actions)
-[![Streamlit](https://img.shields.io/badge/Config_Panel-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](#️-streamlit-configuration-panel)
+[![Modern WebUI](https://img.shields.io/badge/Config_Panel-Modern_WebUI-465FD5)](#️-modern-management-webui)
 [![中文文档](https://img.shields.io/badge/README-中文-blue.svg)](README.md)
 
 *A complete workflow for daily literature tracking, focused research, and historical-data organization.*
@@ -28,7 +28,7 @@ The current release includes:
 - **Trend research**: topic, date-range, and category-based research reports
 - **Legacy import and supplement reports**: indexes legacy HTML deliveries by default, with an optional complete repair path
 - **Past daily-report queues**: replays full daily workflows over a selected date range
-- **Streamlit configuration panel**: configuration, execution, reports, data management, and diagnostics
+- **Modern management WebUI**: configuration, execution, reports, and diagnostics through four sidebar groups and top-level page tabs
 
 ---
 
@@ -117,16 +117,16 @@ Supports **email, WeCom, DingTalk, Telegram, Slack, and generic webhooks**. Dail
 <tr>
 <td width="50%" valign="top">
 
-### 🧙 Setup Wizard and WebUI
+### 🧙 Setup Wizard and Modern WebUI
 
-The CLI wizard covers LLMs, sources, keywords, scoring, notifications, and advanced settings. The Streamlit panel has 12 tabs for run status, reports, favorites, trends, sources, scoring, analytics, backups, and API tests.
+The CLI wizard covers LLMs, sources, keywords, scoring, notifications, and advanced settings. The modern WebUI runs as a standalone ASGI service with Run, Content, Configuration, and System groups, all backed by the same persistent worker data.
 
 </td>
 <td width="50%" valign="top">
 
 ### 🛡️ Backups, Sync, and Diagnostics
 
-SQLite automatically creates consistent gzip snapshots: all copies from today are retained, while older dates retain the newest copy per day. WebDAV uses content-change uploads, and Analytics provides token usage, LLM health, source health, and run diagnostics.
+SQLite automatically creates consistent gzip snapshots: all copies from today are retained, while older dates retain the newest copy per day. WebDAV uses content-change uploads; Diagnostics provides run, LLM, and source health, while Analytics provides token line trends for selectable time ranges.
 
 </td>
 </tr>
@@ -197,7 +197,7 @@ Open <http://127.0.0.1:8503> and configure LLMs, sources, keywords, scoring, not
 
 Docker writes `data`, `logs`, `configs`, and `.env` as the `PUID` / `PGID` in `.env`, preventing root-owned files on NAS bind mounts. When upgrading from an old root-running image, set `ADR_REPAIR_OWNERSHIP=true` for one start, verify ownership, then remove it.
 
-The WebUI enables single-administrator login by default. Initialize the account from the local address on first use; the password is written to `.env` only as a salted hash. Sessions expire after eight idle hours by default and repeated failed attempts are rate-limited. Keep the panel behind a VPN or an HTTPS reverse proxy with access control as well.
+The WebUI enables administrator login by default. Initialize the account from the local address on first use; the password is written to `.env` only as a salted hash. Sessions are valid for seven days by default and repeated failed attempts are rate-limited. A trusted LAN installation can skip login during first setup; keep the panel behind a VPN or an HTTPS reverse proxy with access control as well.
 
 <details>
 <summary><b>Manual configuration</b></summary>
@@ -267,7 +267,7 @@ Runtime data is stored in:
 
 ## 🛠️ Configuration Tools
 
-The project offers two primary configuration paths: the **CLI setup wizard** and the **Streamlit configuration panel**.
+The project offers two primary configuration paths: the **CLI setup wizard** and the **modern management WebUI**.
 
 ### 🧙 Interactive Setup Wizard
 
@@ -290,53 +290,44 @@ The wizard shows a configuration summary before writing and creates a backup for
 
 ---
 
-### 🖥️ Streamlit Configuration Panel
+### 🖥️ Modern Management WebUI
 
 #### Start the panel
 
 ~~~bash
 # Local
-streamlit run src/webui/config_panel.py
+uvicorn src.modern_webui.app:app --host 127.0.0.1 --port 8503
 
 # Docker
 docker compose up -d config-panel
 ~~~
 
-Docker panel: <http://127.0.0.1:8503><br>
-Local Streamlit default: <http://127.0.0.1:8501>
+Docker and local panel: <http://127.0.0.1:8503>
 
-The WebUI and worker share <code>.env</code>, <code>configs/</code>, <code>data/</code>, and <code>logs/</code>. A saved configuration is loaded by the next task. After changing the run time, use the sidebar worker-restart control to reinstall cron.
+The WebUI and worker share <code>.env</code>, <code>configs/</code>, <code>data/</code>, and <code>logs/</code>. The primary sidebar groups pages as Run, Content, Configuration, and System; the secondary pages remain in the top bar, retaining context on long configuration pages. A saved configuration is loaded by the next task. After changing the run time, use the sidebar worker-restart control to reinstall cron.
 
-#### The 12 WebUI tabs
+#### 18 pages and navigation groups
 
-| # | Tab | Functionality |
-| :---: | :--- | :------------- |
-| 1 | **Daily Push** | Start daily research; daily settings; status panel, auto-refresh, queue depth, and an 800px native log viewer; past-date range queue and start button |
-| 2 | **Report Viewer** | Browse daily, supplement, past-daily, trend, and keyword-trend reports by category and timestamp; HTML preview and paper marks |
-| 3 | **Favorites & Search** | Favorite timeline, like/dislike marks, interest profile, keyword statistics, author Top list, and full SQLite archive search |
-| 4 | **Trend Analysis** | Keywords, date range, categories, ordering, result cap, TLDR, output formats, and custom synthesis prompts |
-| 5 | **Keywords** | Research context, primary keywords, reference-PDF extraction, scrollable extracted keywords, and weight groups |
-| 6 | **Data Sources** | ArXiv switch, categories, and fetch settings; additional-source switch, built-in sources, and declarative source definitions |
-| 7 | **Scoring** | Localized policy names, qualification descriptions, thresholds, weights, author bonus, and live preview |
-| 8 | **Analytics** | Token usage, keyword trends, LLM health, source health, scan receipts, run diagnostics, and notification backlog |
-| 9 | **Notifications** | Global controls, success/failure/attachment settings, and email, WeCom, DingTalk, Telegram, Slack, and webhook configuration |
-| 10 | **Data Management** | Configuration import/export, SQLite import/export, automatic backup, WebDAV, legacy-history import, and supplement backlog status |
-| 11 | **API** | CHEAP_LLM, SMART_LLM, MinerU, OpenAlex, and Semantic Scholar switches, connection tests, and provider-console links |
-| 12 | **Advanced** | PDF parser, concurrency and retries, keyword maintenance, log retention, update checks, proxy, run locks, and path settings |
+| Group | Top pages | Functionality |
+| :--- | :-------- | :------------ |
+| **Run** | **Daily Research**, **Past Daily Reports**, **Trend Tasks** | Launch research and inspect status and queues; replay past dates one day at a time; configure trend keywords, ranges, categories, and analysis independently |
+| **Content** | **Reports**, **Favorites**, **Search** | Browse and preview HTML reports, mark papers 👍/👎 inside a report, review preference profiles, and search the SQLite archive with source variants |
+| **Configuration** | **Keywords**, **Data Sources**, **Scoring**, **API**, **Notifications**, **Advanced**, **Accounts** | Manage research topics, sources, scoring, LLM/PDF/third-party APIs, notifications, runtime controls, and administrator accounts |
+| **System** | **Backup & Sync**, **History Maintenance**, **Diagnostics**, **Analytics**, **Logs** | Manage exports, WebDAV, and local backups; run legacy maintenance; inspect run/LLM/source health, token line trends, and native log views |
 
 ### 🖼️ WebUI Screenshots
 
 <table>
   <tr>
     <td align="center" width="33%">
-      <img src="assets/webui_daily_push_v4.png" alt="Daily Push and past daily reports" width="100%" />
+      <img src="assets/webui_daily_push_v4.png" alt="Daily research status and queue" width="100%" />
       <br />
-      <sub>Daily Push, status panel, and past daily reports</sub>
+      <sub>Daily research, status panel, and queue</sub>
     </td>
     <td align="center" width="33%">
-      <img src="assets/webui_analytics_v4.png" alt="Analytics and LLM health" width="100%" />
+      <img src="assets/webui_analytics_v4.png" alt="Analytics and token usage trends" width="100%" />
       <br />
-      <sub>Analytics, LLM health, and source health</sub>
+      <sub>Token usage, range controls, and line trends</sub>
     </td>
     <td align="center" width="33%">
       <img src="assets/webui_scoring_v4.png" alt="Scoring policies" width="100%" />
@@ -348,7 +339,7 @@ The WebUI and worker share <code>.env</code>, <code>configs/</code>, <code>data/
     <td align="center" width="50%">
       <img src="assets/webui_data_management_v4.png" alt="Database backups" width="100%" />
       <br />
-      <sub>Database backup and retention settings</sub>
+      <sub>Local backup and retention settings</sub>
     </td>
     <td align="center" width="50%" colspan="2">
       <img src="assets/webui_history_import_v4.png" alt="Legacy history import" width="100%" />
@@ -366,7 +357,7 @@ Screenshots use redacted test configuration. They contain no API keys, passwords
 | Tool | Best for | Characteristics |
 | :--- | :------- | :-------------- |
 | **Setup Wizard** (<code>setup_wizard.py</code>) | First deployment, SSH, and headless environments | Step-by-step initialization and configuration review |
-| **Configuration Panel** (<code>config_panel.py</code>) | Daily tuning, run observation, and report reading | 12 tabs for state, queues, reports, backups, and connection tests |
+| **Modern WebUI** (<code>src/modern_webui/</code>) | Daily tuning, run observation, and report reading | Four sidebar groups and 18 top pages for status, queues, reports, backups, diagnostics, and connection tests |
 
 The wizard is a convenient starting point, while the panel offers a practical daily operations view.
 
@@ -381,7 +372,7 @@ The wizard is a convenient starting point, while the panel offers a practical da
 Docker Compose starts two services:
 
 - <code>arxiv-daily-researcher</code>: worker, cron, queue watcher, and research tasks
-- <code>config-panel</code>: Streamlit panel bound to <code>127.0.0.1:8503</code>
+- <code>config-panel</code>: modern management WebUI bound to <code>127.0.0.1:8503</code>
 
 #### Build from source
 
@@ -463,7 +454,7 @@ CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
 CHEAP_LLM__MODEL_NAME=qwen2.5:7b
 ~~~
 
-The WebUI uses a bridged network. Configure reverse proxies, VPNs, and local service addresses to match the deployment topology.
+The worker and WebUI both use host-network semantics, so they reach host-local LLMs, proxies, and DNS through the same addresses. The panel itself listens only on <code>127.0.0.1:8503</code>; configure reverse proxies and VPN access for the deployment topology.
 
 </details>
 
@@ -533,11 +524,11 @@ Use one project directory for the worker, WebUI, SQLite database, reports, and l
 
 | Mode | Entry and coordination | Result |
 | :--- | :--------------------- | :----- |
-| <code>legacy_import</code> | Data Management → Read Legacy History; waits for related work to become idle | By default indexes existing arXiv HTML deliveries; complete repair reads JSON, fills only missing keywords for the same HTML report, and runs follow-up maintenance |
-| <code>history_data_repair</code> | Data Management → Check and Repair History | Uses SQLite to fill missing scores, TLDRs, translations, or deep analyses and patches original reports |
-| <code>history_omission_scan</code> | Data Management → Scan Omissions and Build Supplements | Scans the SQLite-covered ArXiv period and creates capped supplements by ISO calendar week |
+| <code>legacy_import</code> | System → History Maintenance → Read Legacy History; waits for related work to become idle | By default indexes existing HTML deliveries; complete repair reads compatible JSON, fills missing fields, and schedules follow-up maintenance |
+| <code>history_data_repair</code> | System → History Maintenance → Repair Historical Data | Uses SQLite to fill missing scores, TLDRs, translations, or deep analyses and patches original reports |
+| <code>history_omission_scan</code> | System → History Maintenance → Scan Historical Omissions | Scans source-aware SQLite coverage and creates capped supplements by calendar week |
 | <code>supplement_run</code> | Automatically after import or manually through CLI | Processes supplement backlog and produces supplement reports |
-| <code>backfill_run</code> | Daily Push date range or CLI date range | Queues one complete daily workflow per past date |
+| <code>backfill_run</code> | Run → Past Daily Reports date range or CLI date range | Queues one complete daily workflow per past date |
 
 ### 📅 Daily Research Pipeline
 
@@ -670,7 +661,7 @@ Large workflows send one consolidated outcome notification. Partial completion, 
 | Retention | Any non-negative number in WebUI; default 7 days, with <code>0</code> for permanent retention |
 | WebDAV archive | Incremental upload when database content changes; remote snapshots remain available |
 | Sync scope | Configuration, SQLite history, keywords, and reports can be selected independently |
-| Restore | Data Management imports/exports zip, gz, and db archives after validation |
+| Restore | System → Backup & Sync imports/exports zip, gz, and db archives after validation |
 
 Stop SQLite-writing tasks and create a current export before restoring a historical archive.
 
@@ -684,7 +675,7 @@ arxiv-daily-researcher/
 ├── VERSION                       # Release version
 ├── .env.example                  # Environment-variable template
 ├── requirements-core.txt         # worker / CLI dependencies
-├── requirements-webui.txt        # Streamlit WebUI dependencies
+├── requirements-webui.txt        # modern ASGI WebUI dependencies
 ├── docker-compose.yml            # worker + config-panel composition
 ├── docker/
 │   ├── Dockerfile                # worker / webui multi-stage images
@@ -700,7 +691,7 @@ arxiv-daily-researcher/
 │   ├── notifications/            # multi-channel delivery and SQLite outbox
 │   ├── keyword_tracker/          # keyword normalization and trends
 │   ├── utils/                    # SQLite, queues, locks, backups, sync, health checks
-│   └── webui/                    # Streamlit panel and i18n
+│   └── modern_webui/             # modern ASGI WebUI, static client, and i18n
 ├── .github/workflows/            # research, test, and image-publication workflows
 ├── data/                         # SQLite, reports, queues, backups (runtime generated)
 ├── logs/                         # system and per-task logs (runtime generated)
@@ -715,7 +706,7 @@ arxiv-daily-researcher/
 <details>
 <summary><b>1. How should I handle empty LLM responses, timeouts, or papers in the retry queue?</b></summary>
 
-Open **Analytics → LLM Health** to review recent final outcomes, consecutive failures, success rate, last success time, and redacted error summaries.
+Open **System → Diagnostics → LLM Health** to review recent final outcomes, consecutive failures, success rate, last success time, and redacted error summaries.
 
 - 401, 403, 404, and 400: verify API key, base URL, model name, and gateway compatibility
 - 429, 5xx, timeouts, and empty responses: the shared retry/backoff policy retains incomplete stages
@@ -751,7 +742,7 @@ For a fixed DNS policy, create a local <code>docker-compose.override.yml</code> 
 
 Legacy import takes exclusive SQLite access. During daily research, trend research, keyword maintenance, supplement runs, or past daily reports, the request stays in the trigger queue and the worker claims it after related work becomes idle.
 
-Check **Daily Push → Status Panel / Run Logs** and <code>legacy_import_*.log</code>. Independent maintenance tasks use <code>history_data_repair_*.log</code> and <code>history_omission_scan_*.log</code>. One request of each kind is sufficient.
+Check **System → History Maintenance** or **System → Logs** and <code>legacy_import_*.log</code>. Independent maintenance tasks use <code>history_data_repair_*.log</code> and <code>history_omission_scan_*.log</code>. One request of each kind is sufficient.
 </details>
 
 <details>
@@ -780,10 +771,10 @@ Today’s local snapshots provide recent-run recovery, while older dates retain 
 Recommended steps:
 
 1. stop daily, import, and supplement tasks
-2. export a current zip from Data Management as a protection copy
+2. export a current zip from System → Backup & Sync as a protection copy
 3. import the target zip, gz, or db archive and review validation results
 4. restore reports, keywords, and configuration as required
-5. restart the worker and inspect Analytics and queue state
+5. restart the worker and inspect System → Diagnostics and queue state
 </details>
 
 <details>
@@ -795,7 +786,7 @@ The worker uses the host network, so a local Linux/NAS OpenAI-compatible service
 CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
 ~~~
 
-Align model-service listening addresses, reverse-proxy rules, and firewall policy with the deployment topology. The WebUI and worker have different network modes, so verify external API addresses with **API → Test Connection**.
+Align model-service listening addresses, reverse-proxy rules, and firewall policy with the deployment topology. The WebUI and worker share host-network semantics; verify external API addresses with **Configuration → API → Test Connection**.
 </details>
 
 <details>
@@ -873,7 +864,7 @@ Review each provider’s current policy, quota, and account requirements before 
 
 - [ArXiv](https://arxiv.org/), [OpenAlex](https://openalex.org/), and [Semantic Scholar](https://www.semanticscholar.org/) for academic-data services
 - [MinerU](https://mineru.net/) for PDF parsing services
-- The open-source communities behind Python, Docker, Streamlit, and related tools
+- The open-source communities behind Python, Docker, Starlette, Uvicorn, and related tools
 
 ---
 
@@ -885,7 +876,7 @@ See **[CHANGELOG.md](CHANGELOG.md)** for the complete version history.
 
 <table>
 <tr><th>Version</th><th>Date</th><th>Type</th><th>Highlights</th></tr>
-<tr><td><b>v4.1</b></td><td>2026-08-26</td><td>✨ Enhancements + fixes</td><td>Legacy keywords are HTML-report-first, with an old cache used only as a paper-scoped fallback; the current SQLite owns normalization. Report previews and analytics use Streamlit's native iframe.</td></tr>
+<tr><td><b>v4.1</b></td><td>2026-08-30</td><td>✨ Enhancements + fixes</td><td>Modern WebUI is the default panel: four navigation groups, 18 focused pages, native selectors, contextual settings, and precise Token line trends. Legacy import and SQLite maintenance remain available under System → History Maintenance.</td></tr>
 <tr><td><b>v4.0</b></td><td>2026-08-25</td><td>🚀 Major release</td><td>SQLite daily-history system, durable candidate and retry queues, complete scan receipts, Core Relevance V2, favorites, legacy import with automatic supplement reports, past-daily date-range queues, SQLite backups with incremental WebDAV archive, LLM health, workflow notifications, GHCR AMD64/ARM64 images, and release regression.</td></tr>
 <tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ Enhancements + fixes</td><td>Network proxy, WebDAV data sync, configuration export, Docker update notifications, Daily Push tab, Markdown/HTML output switches, and trend-analysis output settings.</td></tr>
 <tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ Enhancements + fixes</td><td>Run management, log viewer, Trend Analysis tab, report-view improvements, ArXiv timeout guard, and run-lock improvements.</td></tr>
