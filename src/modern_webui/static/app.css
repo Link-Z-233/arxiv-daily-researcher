@@ -291,7 +291,8 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .table-wrap tr:last-child td { border-bottom: 0; }
 .table-wrap td small { display: block; margin-top: 3px; color: var(--muted); }
 .empty-cell { padding: 22px !important; color: var(--muted); text-align: center !important; }
-.pager { position: sticky; left: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; min-width: 540px; padding: 8px; border-top: 1px solid var(--line); background: #fbfcff; color: var(--muted); font-size: .72rem; }
+.pager { position: sticky; left: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; padding: 8px; border-top: 1px solid var(--line); background: #fbfcff; color: var(--muted); font-size: .72rem; }
+.table-wrap .pager { min-width: 540px; }
 .pager label { display: flex; align-items: center; gap: 4px; }
 .pager select { min-height: 27px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; color: var(--text-secondary); font-size: .72rem; }
 
@@ -322,6 +323,7 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .favorite-card, .list-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .favorite-card { display: grid; grid-template-columns: 145px 1fr; }
 .favorite-card span, .favorite-card small { color: var(--muted); font-size: .72rem; }
+.favorite-card strong { min-width: 0; overflow-wrap: anywhere; }
 .favorite-card small { grid-column: 2; }
 .paper-card { margin-bottom: 9px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow-xs); }
 .paper-card > summary { display: grid; grid-template-columns: auto 1fr; gap: 9px; padding: 12px; cursor: pointer; }
@@ -394,5 +396,5 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
   .report-frame { height: 620px; }
   .log-viewer { height: 620px; }
   .status-card { padding: 16px; }
-  .table-wrap table, .pager { min-width: 500px; }
+  .table-wrap table, .table-wrap .pager { min-width: 500px; }
 }
