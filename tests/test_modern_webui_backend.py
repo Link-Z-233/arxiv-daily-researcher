@@ -320,6 +320,64 @@ class ModernBackendTests(unittest.TestCase):
         self.assertEqual(status["active_locks"], [])
         self.assertFalse(status["can_start"])
 
+    def test_daily_status_shows_other_operational_work_that_blocks_launch(self) -> None:
+        backfill_lock = {"name": "backfill_run.lock", "pid": 42}
+        with patch.object(backend, "flat_config", return_value={}), patch.object(
+            backend, "active_locks", return_value=[backfill_lock]
+        ), patch.object(backend, "task_records", return_value=[]), patch.object(
+            backend, "open_store", return_value=None
+        ), patch.object(backend, "_live_log_tail", return_value=None):
+            status = backend.run_status("daily")
+
+        self.assertTrue(status["is_active"])
+        self.assertFalse(status["can_start"])
+        self.assertEqual(status["task"]["label"], "过去日报")
+        self.assertEqual(status["active_locks"], [backfill_lock])
+        self.assertEqual(status["relevant_locks"], [])
+
+    def test_past_daily_can_queue_behind_an_active_worker(self) -> None:
+        daily_lock = {"name": "daily_research.lock", "pid": 42}
+        running_daily = {
+            "request_id": "daily-running",
+            "mode": "daily_research",
+            "state": "running",
+            "created_at": "2026-08-29T00:00:00+00:00",
+            "started_at": "2026-08-29T00:00:01+00:00",
+            "updated_at": "2026-08-29T00:00:02+00:00",
+            "issue": "",
+            "args": {},
+        }
+        with patch.object(backend, "flat_config", return_value={}), patch.object(
+            backend, "active_locks", return_value=[daily_lock]
+        ), patch.object(backend, "task_records", return_value=[running_daily]), patch.object(
+            backend, "open_store", return_value=None
+        ):
+            status = backend.run_status("past")
+
+        self.assertTrue(status["can_start"])
+
+    def test_daily_status_uses_the_active_backfill_progress(self) -> None:
+        store = MagicMock()
+        store.active_run_progress.return_value = {
+            "run_kind": "backfill",
+            "phase": "analyze",
+            "current": 2,
+            "total": 5,
+        }
+        store.count_pending_papers.return_value = {"total": 0, "failed_retry": 0}
+        store.backfill_queue_summary.return_value = {}
+        store.get_recent_runs.return_value = []
+        with patch.object(backend, "flat_config", return_value={}), patch.object(
+            backend, "active_locks", return_value=[{"name": "backfill_run.lock", "pid": 42}]
+        ), patch.object(backend, "task_records", return_value=[]), patch.object(
+            backend, "open_store", return_value=store
+        ), patch.object(backend, "_live_log_tail", return_value=None):
+            status = backend.run_status("daily")
+
+        self.assertTrue(status["is_active"])
+        self.assertEqual(status["task"]["label"], "过去日报")
+        self.assertEqual(status["task"]["current"], 2)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

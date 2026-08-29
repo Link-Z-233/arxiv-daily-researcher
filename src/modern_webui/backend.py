@@ -103,12 +103,16 @@ _LIVE_LOG_PREFIXES = {
     "backfill_run.lock": ("backfill_run_", "backfill_"),
 }
 MODE_LABELS = {
+    "daily": "每日研究",
     "daily_research": "每日研究",
+    "backfill": "过去日报",
     "backfill_run": "过去日报",
+    "trend": "趋势任务",
     "trend_research": "趋势任务",
     "legacy_import": "旧版本历史导入",
     "history_data_repair": "历史数据补全",
     "history_omission_scan": "历史遗漏扫描",
+    "supplement": "补充报告",
     "supplement_run": "补充报告",
 }
 PHASE_LABELS = {
@@ -603,6 +607,26 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         if row["state"] in {"queued", "starting", "running"}
     ]
     relevant_locks = _locks_for_kind(locks, kind)
+    # The Streamlit daily landing page is an operational overview.  It keeps
+    # idle-time history work out of sight, but it does show another active
+    # research task (for example a past-date run) when that task prevents a
+    # new daily run from starting.  Without this broader visible set the
+    # modern page could misleadingly say “空闲” while its start button was
+    # disabled.
+    visible_locks = (
+        [lock for lock in locks if not _is_history_lock(lock)]
+        if kind == "daily"
+        else relevant_locks
+    )
+    visible_live_records = (
+        [
+            row
+            for row in all_live_records
+            if row["mode"] not in HISTORY_MODES
+        ]
+        if kind == "daily"
+        else live_records
+    )
     store = open_store(flat)
     progress = None
     queue: dict[str, Any] = {}
@@ -620,7 +644,10 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
 
     progress_kind = str((progress or {}).get("run_kind") or "")
     progress_matches = (
-        (kind == "daily" and progress_kind in {"daily", "daily_research", "supplement", "supplement_run"})
+        # Match Streamlit's daily operational card: an active ordinary run
+        # remains visible there even when it is a queued past-date or trend
+        # task.  History maintenance stays on its dedicated page.
+        (kind == "daily" and progress_kind not in HISTORY_MODES and bool(progress_kind))
         or (kind == "past" and progress_kind in {"backfill", "backfill_run"})
         or (kind == "history" and progress_kind in HISTORY_MODES)
         or (kind == "trend" and progress_kind in {"trend", "trend_research"})
@@ -642,8 +669,8 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
                 "failed": int(progress.get("failed") or 0),
             },
         }
-    elif live_records:
-        latest = live_records[0]
+    elif visible_live_records:
+        latest = visible_live_records[0]
         task = {
             "state": latest["state"],
             "label": MODE_LABELS.get(latest["mode"], latest["mode"]),
@@ -653,8 +680,8 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
             "total": None,
             "started_at": latest.get("created_at") or "",
         }
-    elif relevant_locks:
-        primary = relevant_locks[0]
+    elif visible_locks:
+        primary = visible_locks[0]
         task = {
             "state": "running",
             "label": _label_for_lock(str(primary.get("name") or "")),
@@ -686,9 +713,15 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
                 "total": None,
                 "started_at": "",
             }
-    active = bool(live_records or progress_matches or relevant_locks)
+    active = bool(visible_live_records or progress_matches or visible_locks)
     if kind == "past":
-        can_start = not bool(all_live_records)
+        # A date range is a durable queue request.  As in the Streamlit
+        # panel, it may be placed behind an already-running worker task; only
+        # the short trigger hand-off window is held back to avoid writing a
+        # confusing burst of requests before the watcher has claimed one.
+        can_start = not any(
+            row["state"] in {"queued", "starting"} for row in all_live_records
+        )
     elif kind in {"daily", "trend"}:
         can_start = not bool(locks or all_live_records)
     else:
@@ -716,7 +749,7 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         "active_locks": display_locks,
         "relevant_locks": relevant_locks,
         "has_relevant_lock": bool(relevant_locks),
-        "live_log": _live_log_tail(relevant_locks) if active else None,
+        "live_log": _live_log_tail(visible_locks) if active else None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
