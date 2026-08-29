@@ -22,6 +22,8 @@
   --warning: #ad6800;
   --control-height: 42px;
   --control-radius: 10px;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m6.5 8.25 3.5 3.5 3.5-3.5' stroke='%236b778d' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --select-chevron-active: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m6.5 8.25 3.5 3.5 3.5-3.5' stroke='%23465fd5' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --shadow-xs: 0 1px 2px rgba(21, 32, 55, .035);
   --shadow-sm: 0 5px 16px rgba(21, 32, 55, .045);
   --shadow-md: 0 16px 36px rgba(26, 39, 73, .07);
@@ -262,6 +264,17 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
   background-position: right 15px center, right top;
   background-size: 16px 16px, 46px 100%;
 }
+/* Native controls use the same compact chevron shape as custom selectors. */
+.form-field select:not([multiple]), .stack-form select:not([multiple]), .pager select {
+  background-image: var(--select-chevron), linear-gradient(90deg, #fafbff, #f1f4fc);
+  background-position: right 14px center, right top;
+  background-size: 20px 20px, 48px 100%;
+}
+.form-field select:not([multiple]):hover, .stack-form select:not([multiple]):hover, .pager select:hover {
+  background-image: var(--select-chevron-active), linear-gradient(90deg, #f4f6ff, #eaf0ff);
+  background-position: right 14px center, right top;
+  background-size: 20px 20px, 48px 100%;
+}
 .form-field select::-ms-expand, .stack-form select::-ms-expand, .pager select::-ms-expand { display: none; }
 .form-field input:hover, .form-field textarea:hover, .form-field select:hover, .stack-form input:hover, .stack-form select:hover { border-color: #c0cadb; }
 .form-field input:focus, .form-field textarea:focus, .form-field select:focus, .stack-form input:focus, .stack-form select:focus { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
@@ -450,6 +463,42 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .scroll-select[open] { z-index: 4; }
 .scroll-select[open] > summary { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
 .scroll-select[open] > summary > i { transform: rotate(180deg); }
+.tag-select-dropdown > summary > .dropdown-chevron,
+.scroll-select > summary > .dropdown-chevron {
+  display: grid;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 0;
+  font-style: normal;
+  transform: none;
+  transition: border-color .15s ease, color .15s ease, background .15s ease;
+}
+.dropdown-chevron::after {
+  width: 7px;
+  height: 7px;
+  border-right: 1.8px solid currentColor;
+  border-bottom: 1.8px solid currentColor;
+  content: "";
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform .15s ease;
+}
+.tag-select-dropdown:hover > summary > .dropdown-chevron,
+.tag-select-dropdown[open] > summary > .dropdown-chevron,
+.scroll-select > summary:hover > .dropdown-chevron,
+.scroll-select[open] > summary > .dropdown-chevron {
+  border-color: var(--brand-line);
+  background: var(--brand-soft);
+  color: var(--brand);
+  transform: none;
+}
+.tag-select-dropdown[open] > summary > .dropdown-chevron::after,
+.scroll-select[open] > summary > .dropdown-chevron::after { transform: translateY(2px) rotate(225deg); }
 .scroll-select.is-empty { color: var(--muted-light); cursor: default; }
 .scroll-select-options { position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; left: 0; display: grid; max-height: 196px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; box-shadow: var(--shadow-md); scrollbar-gutter: stable; }
 .scroll-select-options button { min-height: 38px; padding: 8px 10px; border: 0; border-bottom: 1px solid #edf0f5; background: #fff; color: var(--text-secondary); text-align: left; font-size: .78rem; line-height: 1.4; overflow-wrap: anywhere; }
@@ -532,6 +581,8 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
   --danger: #ff8e8e;
   --danger-soft: #43282e;
   --warning: #ffc26b;
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m6.5 8.25 3.5 3.5 3.5-3.5' stroke='%23c6d0e2' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --select-chevron-active: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none'%3E%3Cpath d='m6.5 8.25 3.5 3.5 3.5-3.5' stroke='%238fa5ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, .24);
   --shadow-sm: 0 7px 20px rgba(0, 0, 0, .2);
   --shadow-md: 0 18px 42px rgba(0, 0, 0, .28);
@@ -574,6 +625,18 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
     url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDE2IDE2IiBmaWxsPSJub25lIj48cGF0aCBkPSJtNCA2IDQgNCA0LTQiIHN0cm9rZT0iI2M2ZDBlMiIgc3Ryb2tlLXdpZHRoPSIxLjciIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvc3ZnPg=="),
     linear-gradient(90deg, #1d293d, #263653);
 }
+:root[data-theme="dark"] .form-field select:not([multiple]),
+:root[data-theme="dark"] .stack-form select:not([multiple]),
+:root[data-theme="dark"] .pager select {
+  background-image: var(--select-chevron), linear-gradient(90deg, #1d293d, #263653);
+  background-position: right 14px center, right top;
+  background-size: 20px 20px, 48px 100%;
+}
+:root[data-theme="dark"] .form-field select:not([multiple]):hover,
+:root[data-theme="dark"] .stack-form select:not([multiple]):hover,
+:root[data-theme="dark"] .pager select:hover {
+  background-image: var(--select-chevron-active), linear-gradient(90deg, #202d42, #2a3955);
+}
 :root[data-theme="dark"] .tag-select-dropdown,
 :root[data-theme="dark"] .tag-select-complete { background: #202d42; }
 :root[data-theme="dark"] .tag-select-dropdown > summary > i { background: #2a3955; }
@@ -581,6 +644,12 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 :root[data-theme="dark"] .tag-select-dropdown[open] > summary { background: #263451; }
 :root[data-theme="dark"] .tag-select-options button,
 :root[data-theme="dark"] .scroll-select-options button { border-color: #2d3a50; }
+:root[data-theme="dark"] .tag-select-dropdown > summary > .dropdown-chevron,
+:root[data-theme="dark"] .scroll-select > summary > .dropdown-chevron { background: #2a3955; }
+:root[data-theme="dark"] .tag-select-dropdown:hover > summary > .dropdown-chevron,
+:root[data-theme="dark"] .tag-select-dropdown[open] > summary > .dropdown-chevron,
+:root[data-theme="dark"] .scroll-select > summary:hover > .dropdown-chevron,
+:root[data-theme="dark"] .scroll-select[open] > summary > .dropdown-chevron { background: var(--brand-soft); }
 :root[data-theme="dark"] .mini-card,
 :root[data-theme="dark"] .subsection,
 :root[data-theme="dark"] .channel-card,

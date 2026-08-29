@@ -1203,7 +1203,7 @@ function scrollSelect({ id, rows, selected, label, placeholder = "—", optionAt
   }
   const active = rows.find((item) => item.id === selected);
   const selectedLabel = active ? label(active) : placeholder;
-  return `<details class="scroll-select" data-scroll-select="${escapeAttribute(id)}"><summary><span>${escapeHtml(selectedLabel)}</span><i aria-hidden="true">⌄</i></summary><div class="scroll-select-options" role="listbox">${rows.map((item) => `<button type="button" role="option" aria-selected="${item.id === selected ? "true" : "false"}" class="${item.id === selected ? "is-selected" : ""}" ${escapeAttribute(optionAttribute)}="${escapeAttribute(id)}" ${escapeAttribute(valueAttribute)}="${escapeAttribute(item.id)}">${escapeHtml(label(item))}</button>`).join("")}</div></details>`;
+  return `<details class="scroll-select" data-scroll-select="${escapeAttribute(id)}"><summary><span>${escapeHtml(selectedLabel)}</span><i class="dropdown-chevron" aria-hidden="true"></i></summary><div class="scroll-select-options" role="listbox">${rows.map((item) => `<button type="button" role="option" aria-selected="${item.id === selected ? "true" : "false"}" class="${item.id === selected ? "is-selected" : ""}" ${escapeAttribute(optionAttribute)}="${escapeAttribute(id)}" ${escapeAttribute(valueAttribute)}="${escapeAttribute(item.id)}">${escapeHtml(label(item))}</button>`).join("")}</div></details>`;
 }
 
 function reportPicker(title, icon, type, rows, selected) {
@@ -1664,7 +1664,7 @@ function tagMultiSelect({ id, label, selected, choices, addLabel, emptyLabel, he
     : `<span class="tag-select-placeholder">${escapeHtml(emptyLabel)}</span>`;
   const available = choices.filter((item) => !selectedSet.has(String(item.value)));
   const picker = available.length
-    ? `<details class="tag-select-dropdown" data-tag-selector="${escapeAttribute(id)}"><summary><span>${escapeHtml(addLabel)}</span><i aria-hidden="true">⌄</i></summary><div class="tag-select-options" role="listbox" aria-label="${escapeAttribute(label)}">${available.map((item) => `<button type="button" role="option" data-tag-add="${escapeAttribute(id)}" data-tag-value="${escapeAttribute(item.value)}">${escapeHtml(item.label)}</button>`).join("")}</div></details>`
+    ? `<details class="tag-select-dropdown" data-tag-selector="${escapeAttribute(id)}"><summary><span>${escapeHtml(addLabel)}</span><i class="dropdown-chevron" aria-hidden="true"></i></summary><div class="tag-select-options" role="listbox" aria-label="${escapeAttribute(label)}">${available.map((item) => `<button type="button" role="option" data-tag-add="${escapeAttribute(id)}" data-tag-value="${escapeAttribute(item.value)}">${escapeHtml(item.label)}</button>`).join("")}</div></details>`
     : `<div class="tag-select-complete">${escapeHtml(localeText("已全部选择", "All selected"))}</div>`;
   return `<div class="form-field tag-select-field"><span>${escapeHtml(label)}${help ? `<span class="field-help">${escapeHtml(help)}</span>` : ""}</span><div class="tag-select-box"><div class="tag-select-chips">${chips}</div>${picker}</div></div>`;
 }
