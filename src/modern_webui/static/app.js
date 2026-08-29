@@ -628,53 +628,31 @@ function normalizeReportText(value) {
   return String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
 }
 
-function buildReportMarkButton(documentNode, preference, current) {
-  const button = documentNode.createElement("button");
-  button.type = "button";
-  button.className = `adr-report-mark-btn${preference === current ? " active" : ""}`;
-  button.dataset.preference = preference;
-  button.title = preference === "like" ? "喜欢" : "不感兴趣";
-  button.textContent = preference === "like" ? "👍" : "👎";
-  return button;
+function appendReportMarkup(rawHtml, markup, closingTag) {
+  const source = String(rawHtml || "");
+  const pattern = new RegExp(`</${closingTag}\\s*>`, "i");
+  return pattern.test(source)
+    ? source.replace(pattern, `${markup}</${closingTag}>`)
+    : `${source}${markup}`;
 }
 
 function buildMarkedReportHtml(rawHtml, papers) {
-  const parser = new DOMParser();
-  const documentNode = parser.parseFromString(String(rawHtml || ""), "text/html");
-  documentNode.querySelectorAll(".revision-label").forEach((node) => {
-    const text = normalizeReportText(node.textContent);
-    if (/^v\d+$/.test(text) || text === "↻ 重试") node.remove();
-  });
-  const candidates = Array.isArray(papers) ? papers.filter((paper) => paper?.title && paper?.paper_id && paper?.source) : [];
-  const used = new Set();
-  let injected = 0;
-  documentNode.querySelectorAll(".card.pass, .card.fail").forEach((card) => {
-    const cardText = normalizeReportText(card.textContent);
-    const matchIndex = candidates.findIndex((paper, index) => !used.has(index) && cardText.includes(normalizeReportText(paper.title)));
-    if (matchIndex < 0) return;
-    const field = card.querySelector(".field");
-    if (!field) return;
-    const paper = candidates[matchIndex];
-    used.add(matchIndex);
-    const current = ["like", "dislike"].includes(paper.preference) ? paper.preference : "none";
-    const bar = documentNode.createElement("div");
-    bar.className = "adr-report-mark-bar";
-    bar.dataset.source = String(paper.source);
-    bar.dataset.paperId = String(paper.paper_id);
-    bar.dataset.current = current;
-    bar.append(buildReportMarkButton(documentNode, "like", current), buildReportMarkButton(documentNode, "dislike", current));
-    field.insertBefore(bar, field.firstChild);
-    injected += 1;
-  });
-  if (injected) {
-    const style = documentNode.createElement("style");
-    style.textContent = ".adr-report-mark-bar{float:right;display:flex;gap:4px;margin-left:12px}.adr-report-mark-btn{border:1px solid rgba(127,127,127,.45);border-radius:8px;background:rgba(255,255,255,.78);cursor:pointer;font-size:13px;line-height:1;padding:4px 7px;color:inherit}.adr-report-mark-btn:hover{background:rgba(255,255,255,.95)}.adr-report-mark-btn.active[data-preference=like]{background:#16a34a;border-color:#16a34a;color:#fff}.adr-report-mark-btn.active[data-preference=dislike]{background:#dc2626;border-color:#dc2626;color:#fff}";
-    (documentNode.head || documentNode.documentElement).appendChild(style);
-    const script = documentNode.createElement("script");
-    script.textContent = "(function(){if(window.__adrReportMarks)return;window.__adrReportMarks=true;function set(bar,pref){pref=pref==='like'||pref==='dislike'?pref:'none';bar.dataset.current=pref;bar.querySelectorAll('.adr-report-mark-btn').forEach(function(button){button.classList.toggle('active',button.dataset.preference===pref);});}window.addEventListener('message',function(event){var data=event.data||{};if(data.type==='adr-report-mark-state'){document.querySelectorAll('.adr-report-mark-bar').forEach(function(bar){if(bar.dataset.source===String(data.source||'')&&bar.dataset.paperId===String(data.paper_id||'')){set(bar,data.preference);}});}});document.addEventListener('click',function(event){var button=event.target&&event.target.closest?event.target.closest('.adr-report-mark-btn'):null;if(!button)return;event.preventDefault();var bar=button.closest('.adr-report-mark-bar');if(!bar)return;var wanted=button.dataset.preference===(bar.dataset.current||'none')?'none':button.dataset.preference;set(bar,wanted);parent.postMessage({type:'adr-report-mark',source:bar.dataset.source,paper_id:bar.dataset.paperId,preference:wanted},'*');});})();";
-    (documentNode.body || documentNode.documentElement).appendChild(script);
-  }
-  return { html: `<!doctype html>${documentNode.documentElement.outerHTML}`, injected };
+  // Reports can be several hundred KB.  Parsing one with DOMParser, mutating
+  // it and serialising it again keeps the main application thread busy for a
+  // noticeable time on lower-power NAS clients.  Keep the report document
+  // intact and let its sandboxed iframe perform the small decoration after
+  // the browser has parsed it in the iframe context instead.
+  const candidates = Array.isArray(papers)
+    ? papers.filter((paper) => paper?.title && paper?.paper_id && paper?.source)
+    : [];
+  if (!candidates.length) return { html: String(rawHtml || ""), injected: false };
+  const serializedCandidates = JSON.stringify(candidates).replaceAll("<", "\\u003c");
+  const style = '<style id="adr-report-mark-style">.adr-report-mark-bar{float:right;display:flex;gap:4px;margin-left:12px}.adr-report-mark-btn{border:1px solid rgba(127,127,127,.45);border-radius:8px;background:rgba(255,255,255,.78);cursor:pointer;font-size:13px;line-height:1;padding:4px 7px;color:inherit}.adr-report-mark-btn:hover{background:rgba(255,255,255,.95)}.adr-report-mark-btn.active[data-preference=like]{background:#16a34a;border-color:#16a34a;color:#fff}.adr-report-mark-btn.active[data-preference=dislike]{background:#dc2626;border-color:#dc2626;color:#fff}</style>';
+  const script = `<script>(function(){if(window.__adrReportMarks)return;window.__adrReportMarks=true;var candidates=${serializedCandidates};function normalize(value){return String(value||'').replace(/\\s+/g,' ').trim().toLocaleLowerCase();}function button(preference,current){var item=document.createElement('button');item.type='button';item.className='adr-report-mark-btn'+(preference===current?' active':'');item.dataset.preference=preference;item.title=preference==='like'?'喜欢':'不感兴趣';item.textContent=preference==='like'?'👍':'👎';return item;}function set(bar,pref){pref=pref==='like'||pref==='dislike'?pref:'none';bar.dataset.current=pref;bar.querySelectorAll('.adr-report-mark-btn').forEach(function(item){item.classList.toggle('active',item.dataset.preference===pref);});}document.querySelectorAll('.revision-label').forEach(function(node){var text=normalize(node.textContent);if(/^v\\d+$/.test(text)||text==='↻ 重试')node.remove();});var used={};document.querySelectorAll('.card.pass,.card.fail').forEach(function(card){var cardText=normalize(card.textContent);var index=-1;for(var i=0;i<candidates.length;i+=1){if(!used[i]&&cardText.indexOf(normalize(candidates[i].title))!==-1){index=i;break;}}if(index<0)return;var field=card.querySelector('.field');if(!field)return;var paper=candidates[index];used[index]=true;var current=paper.preference==='like'||paper.preference==='dislike'?paper.preference:'none';var bar=document.createElement('div');bar.className='adr-report-mark-bar';bar.dataset.source=String(paper.source);bar.dataset.paperId=String(paper.paper_id);bar.dataset.current=current;bar.append(button('like',current),button('dislike',current));field.insertBefore(bar,field.firstChild);});window.addEventListener('message',function(event){var data=event.data||{};if(data.type!=='adr-report-mark-state')return;document.querySelectorAll('.adr-report-mark-bar').forEach(function(bar){if(bar.dataset.source===String(data.source||'')&&bar.dataset.paperId===String(data.paper_id||''))set(bar,data.preference);});});document.addEventListener('click',function(event){var item=event.target&&event.target.closest?event.target.closest('.adr-report-mark-btn'):null;if(!item)return;event.preventDefault();var bar=item.closest('.adr-report-mark-bar');if(!bar)return;var wanted=item.dataset.preference===(bar.dataset.current||'none')?'none':item.dataset.preference;set(bar,wanted);parent.postMessage({type:'adr-report-mark',source:bar.dataset.source,paper_id:bar.dataset.paperId,preference:wanted},'*');});})();</script>`;
+  return {
+    html: appendReportMarkup(appendReportMarkup(rawHtml, style, "head"), script, "body"),
+    injected: true,
+  };
 }
 
 async function fetchReportHtml(reportId) {
