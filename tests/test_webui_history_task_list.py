@@ -39,6 +39,16 @@ class HistoryTaskListTests(unittest.TestCase):
             )
         )
 
+    def test_unfinished_view_hides_failure_replaced_by_retry(self):
+        records = [
+            {"state": "failed", "request_id": "failed", "retry_of": ""},
+            {"state": "queued", "request_id": "retry", "retry_of": "failed"},
+        ]
+        with patch.object(data_management, "_read_history_task_records", return_value=records):
+            visible = data_management._unfinished_history_tasks({})
+
+        self.assertEqual([item["request_id"] for item in visible], ["retry"])
+
     def test_task_list_reads_queued_and_failed_receipts_with_sanitized_issue(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"

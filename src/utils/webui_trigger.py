@@ -416,6 +416,12 @@ def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "mode": mode,
         "args": {},
     }
+    # A retry remains an ordinary durable request, but retaining the previous
+    # request ID lets the history-maintenance UI replace a resolved failure
+    # with its retry instead of leaving a permanent stale error row behind.
+    retry_of = payload.get("retry_of")
+    if retry_of not in (None, ""):
+        normalized["retry_of"] = _validate_request_id(retry_of)
 
     if mode in _NO_ARGS_MODES:
         if args:
@@ -522,7 +528,12 @@ def validate_trigger_payload(payload: Mapping[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def build_trigger_payload(mode: str, **args: Any) -> Dict[str, Any]:
+def build_trigger_payload(
+    mode: str,
+    *,
+    retry_of: str | None = None,
+    **args: Any,
+) -> Dict[str, Any]:
     """Create a normalized request payload for the Streamlit container."""
     payload: Dict[str, Any] = {
         "schema_version": TRIGGER_SCHEMA_VERSION,
@@ -531,12 +542,20 @@ def build_trigger_payload(mode: str, **args: Any) -> Dict[str, Any]:
         "mode": mode,
         "args": args,
     }
+    if retry_of:
+        payload["retry_of"] = retry_of
     return validate_trigger_payload(payload)
 
 
-def enqueue_trigger(data_dir: Path, mode: str, **args: Any) -> Path:
+def enqueue_trigger(
+    data_dir: Path,
+    mode: str,
+    *,
+    retry_of: str | None = None,
+    **args: Any,
+) -> Path:
     """Atomically enqueue one validated worker request and return its path."""
-    payload = build_trigger_payload(mode, **args)
+    payload = build_trigger_payload(mode, retry_of=retry_of, **args)
     queue_dir = trigger_directory(Path(data_dir))
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     request_path = queue_dir / f"{timestamp}_{payload['request_id']}.json"
@@ -619,6 +638,8 @@ def _write_status(data_dir: Path, payload: Mapping[str, Any], state: str, **deta
         "updated_at": datetime.now(timezone.utc).isoformat(),
         **safe_details,
     }
+    if payload.get("retry_of"):
+        status_payload["retry_of"] = payload["retry_of"]
     status_path = trigger_status_directory(data_dir) / f"{payload['request_id']}.json"
     _atomic_write_json(status_path, status_payload)
     # Rotation follows the atomic replacement so the current receipt is never

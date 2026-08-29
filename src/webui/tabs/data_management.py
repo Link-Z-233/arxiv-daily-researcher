@@ -528,6 +528,7 @@ def _read_history_task_records(
                 "completed_at": completed_at,
                 "issue": issue,
                 "args": payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                "retry_of": str(payload.get("retry_of") or "").strip(),
                 "sort_at": payload.get("updated_at") or payload.get("created_at") or "",
             }
         )
@@ -553,9 +554,10 @@ def _read_history_task_records(
                     "created_at": payload.get("created_at"),
                     "started_at": "",
                     "completed_at": "",
-                    "issue": "",
-                    "args": payload.get("args") if isinstance(payload.get("args"), dict) else {},
-                    "sort_at": payload.get("created_at") or "",
+                "issue": "",
+                "args": payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                "retry_of": str(payload.get("retry_of") or "").strip(),
+                "sort_at": payload.get("created_at") or "",
                 },
                 # The live queue is newer authority than a status file that
                 # was written during watcher hand-off.
@@ -583,10 +585,17 @@ def _history_task_state_label(task: dict) -> str:
 
 def _unfinished_history_tasks(config_values: dict, *, store=None) -> list[dict]:
     """Return only live or actionable history jobs, never the completed audit."""
+    rows = _read_history_task_records(config_values, store=store)
+    retried_request_ids = {
+        str(task.get("retry_of") or "").strip()
+        for task in rows
+        if str(task.get("retry_of") or "").strip()
+    }
     return [
         task
-        for task in _read_history_task_records(config_values, store=store)
+        for task in rows
         if str(task.get("state") or "") != "succeeded"
+        and str(task.get("request_id") or "") not in retried_request_ids
     ]
 
 
@@ -810,13 +819,17 @@ def _retry_history_task(task: dict, config_values: dict) -> None:
                     config_values.get("legacy_import_full_repair_enabled", False),
                 )
             )
-        _enqueue_legacy_import(full_repair)
+        _enqueue_legacy_import(full_repair, retry_of=str(task.get("request_id") or ""))
         return
     if mode == "history_data_repair":
-        _enqueue_history_task(mode, "dm_history_repair_queued")
+        _enqueue_history_task(
+            mode, "dm_history_repair_queued", retry_of=str(task.get("request_id") or "")
+        )
         return
     if mode == "history_omission_scan":
-        _enqueue_history_task(mode, "dm_history_omission_queued")
+        _enqueue_history_task(
+            mode, "dm_history_omission_queued", retry_of=str(task.get("request_id") or "")
+        )
 
 
 # ``t()`` returns its key for unknown values. Keep state labels explicit so a
@@ -897,14 +910,16 @@ def _render_legacy_import_section(config_values: dict) -> None:
             _enqueue_history_task("history_omission_scan", "dm_history_omission_queued")
 
 
-def _enqueue_legacy_import(full_repair: bool) -> None:
+def _enqueue_legacy_import(full_repair: bool, *, retry_of: str | None = None) -> None:
     """Queue the selected lightweight or complete legacy-import workflow."""
     mode = "legacy_import"
     queued_key = "dm_legacy_queued"
     main_py = _PROJECT_ROOT / "main.py"
     if not main_py.exists():
         try:
-            enqueue_trigger(_PROJECT_ROOT / "data", mode, full_repair=full_repair)
+            enqueue_trigger(
+                _PROJECT_ROOT / "data", mode, retry_of=retry_of, full_repair=full_repair
+            )
         except Exception as e:
             st.error(f"{t('dm_legacy_failed')}: {e}")
             return
@@ -936,14 +951,16 @@ def _enqueue_legacy_import(full_repair: bool) -> None:
         st.error(f"{t('dm_legacy_failed')}: {e}")
 
 
-def _enqueue_history_task(mode: str, queued_key: str) -> None:
+def _enqueue_history_task(
+    mode: str, queued_key: str, *, retry_of: str | None = None
+) -> None:
     """Queue one independent SQLite maintenance task through the same worker."""
     if mode not in {"history_data_repair", "history_omission_scan"}:
         raise ValueError(f"unsupported history task: {mode}")
     main_py = _PROJECT_ROOT / "main.py"
     try:
         if not main_py.exists():
-            enqueue_trigger(_PROJECT_ROOT / "data", mode)
+            enqueue_trigger(_PROJECT_ROOT / "data", mode, retry_of=retry_of)
         else:
             logs_dir = _PROJECT_ROOT / "logs"
             logs_dir.mkdir(parents=True, exist_ok=True)

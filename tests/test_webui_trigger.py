@@ -44,6 +44,19 @@ class _OutputProcess(_CompletedProcess):
 
 
 class WebUITriggerTests(unittest.TestCase):
+    def test_retry_reference_survives_trigger_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = enqueue_trigger(
+                Path(directory),
+                "legacy_import",
+                retry_of="a" * 32,
+                full_repair=True,
+            )
+            payload = read_trigger_payload(path)
+
+        self.assertEqual(payload["retry_of"], "a" * 32)
+        self.assertEqual(payload["args"], {"full_repair": True})
+
     def test_daily_request_is_atomic_and_has_no_arguments(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
