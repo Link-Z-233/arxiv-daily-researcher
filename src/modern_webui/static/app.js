@@ -56,6 +56,7 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "正在读取配置文件…": "Loading configuration files…",
   "重新加载配置": "Reload configuration",
   "重启研究容器": "Restart research container",
+  "已发送研究容器重启请求，正在刷新面板状态。": "Restart requested; refreshing panel status.",
   "状态自动刷新": "Auto refresh status",
   "显示非 arXiv 来源报告": "Show non-arXiv source reports",
   "每行一个关键词": "One keyword per line",
@@ -3216,7 +3217,19 @@ async function initialize() {
   $("#logout-button").addEventListener("click", logout);
   $("#save-button").addEventListener("click", () => saveAll(true));
   $("#reload-button").addEventListener("click", async () => { try { await loadSettings(); state.draft = { config: {}, env: {}, clearEnv: new Set() }; state.configurationDirty = false; state.pageData.sources = undefined; updateConfigurationDirtyIndicator(); toast("配置已重新加载。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); } });
-  $("#restart-worker-button").addEventListener("click", async () => { if (!window.confirm("确认请求重启研究容器？正在运行的任务会由容器重启策略处理。")) return; try { await api("/api/system/restart-worker", { method: "POST", body: {} }); toast("已发送研究容器重启请求。", "success"); } catch (error) { toast(error.message, "error"); } });
+  $("#restart-worker-button").addEventListener("click", async (event) => {
+    if (!window.confirm("确认请求重启研究容器？正在运行的任务会由容器重启策略处理。")) return;
+    try {
+      event.currentTarget.disabled = true;
+      await api("/api/system/restart-worker", { method: "POST", body: {} });
+      toast("已发送研究容器重启请求，正在刷新面板状态。", "success");
+      clearTimers();
+      window.setTimeout(() => window.location.reload(), 650);
+    } catch (error) {
+      event.currentTarget.disabled = false;
+      toast(error.message, "error");
+    }
+  });
   window.addEventListener("hashchange", () => { readLocation(); renderNavigation(); renderPage(); });
   try {
     applyTheme();
