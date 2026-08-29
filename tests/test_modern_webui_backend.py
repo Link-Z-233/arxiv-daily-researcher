@@ -366,7 +366,6 @@ class ModernBackendTests(unittest.TestCase):
         }
         store.count_pending_papers.return_value = {"total": 0, "failed_retry": 0}
         store.backfill_queue_summary.return_value = {}
-        store.get_recent_runs.return_value = []
         with patch.object(backend, "flat_config", return_value={}), patch.object(
             backend, "active_locks", return_value=[{"name": "backfill_run.lock", "pid": 42}]
         ), patch.object(backend, "task_records", return_value=[]), patch.object(

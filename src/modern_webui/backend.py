@@ -631,14 +631,11 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
     progress = None
     queue: dict[str, Any] = {}
     backfill: dict[str, Any] = {}
-    last_run: dict[str, Any] | None = None
     if store is not None:
         try:
             progress = store.active_run_progress()
             queue = store.count_pending_papers()
             backfill = store.backfill_queue_summary()
-            recent = store.get_recent_runs(limit=1)
-            last_run = recent[0] if recent else None
         except Exception:
             progress = None
 
@@ -745,7 +742,6 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
             "retry": int(queue.get("failed_retry") or 0),
         },
         "backfill": backfill,
-        "last_run": last_run,
         "active_locks": display_locks,
         "relevant_locks": relevant_locks,
         "has_relevant_lock": bool(relevant_locks),

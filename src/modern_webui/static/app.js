@@ -350,7 +350,6 @@ async function renderDaily(token) {
   root.innerHTML = `${pageHeader()}${section("每日研究", `<div class="action-row"><button class="primary-button" data-start-task="daily_research" ${status.can_start ? "" : "disabled"}>开始每日研究 <span>→</span></button></div>${launchHint}`, { icon: "🚀" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，仅在任务运行或刚提交等待接手时每 5 秒刷新状态、队列和日志尾部。</small></span><input id="daily-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label>${statusCard(status, { kind: "daily", refresh: false })}${divider()}<h3>每日研究队列</h3>${metrics([
     { label: "待处理论文", value: formatNumber(status.queue?.pending), help: "会在后续每日研究中处理" },
     { label: "待重试论文", value: formatNumber(status.queue?.retry), help: "保留阶段状态与问题摘要" },
-    { label: "最近一次运行", value: formatNumber(status.last_run?.total_papers), help: status.last_run ? `${status.last_run.status || "已记录"} · ${formatTime(status.last_run.completed_at)}` : "尚无记录" },
   ])}`, { icon: "📊" })}${divider()}${renderDailySettings()}`;
   bindCommon(root);
   $("#daily-auto-refresh", root)?.addEventListener("change", (event) => {
