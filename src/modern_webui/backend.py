@@ -719,8 +719,19 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
         can_start = not any(
             row["state"] in {"queued", "starting"} for row in all_live_records
         )
-    elif kind in {"daily", "trend"}:
+    elif kind == "daily":
         can_start = not bool(locks or all_live_records)
+    elif kind == "trend":
+        # Trend analysis uses its own parameterized lock and only shares the
+        # legacy-import activity gate with the daily workflow.  It therefore
+        # remains valid to queue a trend request while an ordinary daily or
+        # past-date run is executing (the trigger watcher keeps FIFO order).
+        # Match the Streamlit guard: hold the button only during a short
+        # trigger hand-off, or while a trend job itself is already active.
+        trigger_handoff_pending = any(
+            row["state"] in {"queued", "starting"} for row in all_live_records
+        )
+        can_start = not bool(trigger_handoff_pending or relevant_locks or live_records)
     else:
         # History maintenance is intentionally allowed to enter the durable
         # idle-time queue behind normal research, but duplicate history work
