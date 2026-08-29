@@ -304,6 +304,7 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .report-select-field { display: grid; gap: 6px; color: var(--text-secondary); font-size: .77rem; font-weight: 750; }
 .report-select-field small { color: var(--muted); font-weight: 500; }
 .report-select-field select { width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: #fff; color: var(--text); font-size: .79rem; font-weight: 450; }
+.report-select-field select[size] { height: 9.9rem; min-height: 9.9rem; overflow-y: auto; scrollbar-gutter: stable; }
 .report-select-field select:focus { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
 .report-preview-button { width: 100%; margin-top: 8px; }
 .report-link { border: 0; background: transparent; color: var(--brand); text-align: left; font-size: inherit; }
@@ -342,6 +343,7 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .log-selector-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .log-select-field { display: grid; gap: 7px; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--card); color: var(--text-secondary); font-size: .79rem; font-weight: 750; box-shadow: var(--shadow-xs); }
 .log-select-field select { width: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: #fff; color: var(--text); font-size: .77rem; font-weight: 450; }
+.log-select-field select[size] { height: 9.9rem; min-height: 9.9rem; overflow-y: auto; scrollbar-gutter: stable; }
 .log-select-field select:focus { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
 .log-content { margin-top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: var(--shadow-sm); }
 .log-content .toolbar { align-items: flex-start; margin-bottom: 14px; }

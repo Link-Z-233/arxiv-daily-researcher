@@ -1023,7 +1023,10 @@ function reportPicker(title, icon, type, rows, selected) {
     const sourceLabel = type === "keyword_trend"
       ? "关键词趋势"
       : String(groupRows[0].source_label || source);
-    return `<div class="report-picker-group"><label class="report-select-field"><span>${escapeHtml(sourceLabel)} <small>(${groupRows.length})</small></span><select data-report-select="${escapeAttribute(groupKey)}">${groupRows.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === selectedHere ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label><button class="secondary-button compact-button report-preview-button" data-preview-group="${escapeAttribute(groupKey)}">${localeText("预览", "Preview")}</button></div>`;
+    // Keep long report histories usable without expanding the picker card
+    // indefinitely.  A native listbox preserves keyboard selection and shows
+    // exactly five report rows before its own scrollbar takes over.
+    return `<div class="report-picker-group"><label class="report-select-field"><span>${escapeHtml(sourceLabel)} <small>(${groupRows.length})</small></span><select data-report-select="${escapeAttribute(groupKey)}" size="5">${groupRows.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === selectedHere ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label><button class="secondary-button compact-button report-preview-button" data-preview-group="${escapeAttribute(groupKey)}">${localeText("预览", "Preview")}</button></div>`;
   }).join("");
   return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">${reportCountLabel(rows.length)}</p>${body}</div>`;
 }
@@ -2142,7 +2145,11 @@ async function renderLogs(token) {
   if (!selected || !items.some((item) => item.id === selected)) selected = nonSystemLogs[0]?.id || "";
   state.pageData.selectedLog = selected;
   const logLabel = (item) => `${item.name}  [${formatTime(item.modified_at).slice(5, 16)}  ${Math.round(Number(item.size_bytes) / 1024)} KB]`;
-  const selector = (id, title, rows) => `<label class="log-select-field"><span>${escapeHtml(title)}</span><select id="${escapeAttribute(id)}" ${rows.length ? "" : "disabled"}><option value="">—</option>${rows.map((item) => `<option value="${escapeAttribute(item.id)}" ${selected === item.id ? "selected" : ""}>${escapeHtml(logLabel(item))}</option>`).join("")}</select></label>`;
+  // ``size=5`` intentionally makes the native selector a compact scrollable
+  // list.  It avoids a browser-dependent popup whose height cannot be
+  // constrained reliably, while retaining native keyboard and screen-reader
+  // behaviour for long log histories.
+  const selector = (id, title, rows) => `<label class="log-select-field"><span>${escapeHtml(title)}</span><select id="${escapeAttribute(id)}" size="5" ${rows.length ? "" : "disabled"}><option value="">—</option>${rows.map((item) => `<option value="${escapeAttribute(item.id)}" ${selected === item.id ? "selected" : ""}>${escapeHtml(logLabel(item))}</option>`).join("")}</select></label>`;
   root.innerHTML = `${pageHeader()}<div class="log-selector-grid">${selector("log-system-select", "📌 系统日志", systemLogs)}${selector("log-run-select", "📀 运行日志", runLogs)}${selector("log-other-select", "📄 其他日志", otherLogs)}</div>${selected && !state.pageData.logClosed ? '<div id="log-content" class="loading">正在读取日志内容…</div>' : '<p class="empty-state">选择一个日志文件后可在这里查看内容。</p>'}`;
   ["#log-system-select", "#log-run-select", "#log-other-select"].forEach((selectorId) => $(selectorId, root)?.addEventListener("change", (event) => {
     if (!event.target.value) return;
