@@ -1294,8 +1294,13 @@ function mineruSection() {
 }
 
 function thirdPartySection() {
-  const openAlexEnabled = String(envValue("ENABLE_OPENALEX", "true")).toLowerCase() !== "false";
-  const semanticEnabled = String(envValue("ENABLE_SEMANTIC_SCHOLAR_TLDR", "true")).toLowerCase() !== "false";
+  // Environment values are text.  Use the shared boolean parser rather than
+  // treating every value except the literal string "false" as enabled: older
+  // hand-written .env files commonly use 0, no, or off as well.  This matches
+  // the Streamlit panel's _env_toggle behaviour and keeps the hidden fields
+  // consistent with what the worker will actually call.
+  const openAlexEnabled = booleanValue(envValue("ENABLE_OPENALEX"), true);
+  const semanticEnabled = booleanValue(envValue("ENABLE_SEMANTIC_SCHOLAR_TLDR"), true);
   return `${divider()}${section("第三方 API 密钥", `<p class="hint-text">开启来源后才会调用对应服务；关闭时会隐藏其配置，已保存的密钥不会被清除。</p><div class="subsection"><h3>📚 OpenAlex</h3><label class="toggle-field"><span>启用 OpenAlex 来源<span class="field-help">关闭后不会请求 OpenAlex。开启后，还需在“数据源 → 额外数据源”中选择期刊来源。</span></span><input id="openalex-enabled" type="checkbox" ${openAlexEnabled ? "checked" : ""}/><i></i></label>${openAlexEnabled ? `<p class="hint-text">免费 API Key 可将每日 API 额度提高到匿名使用的 10 倍，并可查看用量。</p>${field({ label: "OpenAlex API Key", key: "OPENALEX_API_KEY", scope: "env", type: "secret" })}<div class="action-row"><button class="secondary-button" data-test-third="openalex">测试 OpenAlex 连接</button><a href="https://openalex.org/settings/api" target="_blank" rel="noreferrer">打开 OpenAlex API 控制台 ↗</a><span id="openalex-test-result" class="inline-result"></span></div>` : ""}</div><div class="subsection"><h3>🧠 Semantic Scholar</h3><label class="toggle-field"><span>启用 Semantic Scholar TL;DR 增强<span class="field-help">关闭后不会请求 Semantic Scholar，也不会把其 TL;DR 用于后续处理。</span></span><input id="semantic-enabled" type="checkbox" ${semanticEnabled ? "checked" : ""}/><i></i></label>${semanticEnabled ? `<p class="hint-text">用于可选 TL;DR 增强。匿名额度由所有用户共享；API Key 初始限额为每秒 1 次，应用会自动按此节奏请求。</p>${field({ label: "Semantic Scholar API Key", key: "SEMANTIC_SCHOLAR_API_KEY", scope: "env", type: "secret" })}<div class="action-row"><button class="secondary-button" data-test-third="semantic_scholar">测试 Semantic Scholar 连接</button><a href="https://www.semanticscholar.org/product/api#api-key-form" target="_blank" rel="noreferrer">打开 Semantic Scholar API 申请页 ↗</a><span id="semantic_scholar-test-result" class="inline-result"></span></div>` : ""}</div>`, { icon: "🔑" })}`;
 }
 
