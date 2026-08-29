@@ -1,6 +1,7 @@
 import logging
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -43,7 +44,6 @@ class LoggerReliabilityTests(unittest.TestCase):
             for handler in list(test_logger.handlers):
                 test_logger.removeHandler(handler)
                 handler.close()
-
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(
             logger_module, "LOG_DIR", Path(temp_dir)
         ):
@@ -66,6 +66,27 @@ class LoggerReliabilityTests(unittest.TestCase):
             for handler in list(test_logger.handlers):
                 test_logger.removeHandler(handler)
                 handler.close()
+
+    def test_run_log_forwards_standard_workflow_progress_to_console(self):
+        logger_name = "test_standard_workflow_progress"
+        workflow_logger = logging.getLogger(logger_name)
+        for handler in list(workflow_logger.handlers):
+            workflow_logger.removeHandler(handler)
+            handler.close()
+        workflow_logger.setLevel(logging.INFO)
+        workflow_logger.propagate = True
+
+        output = StringIO()
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            logger_module, "LOG_DIR", Path(temp_dir)
+        ), patch.object(logger_module.sys, "stdout", output):
+            log_path = logger_module.setup_run_log("legacy_import")
+            self.assertIsNotNone(log_path)
+            workflow_logger.info("imported report 3/12")
+            self.assertIn("imported report 3/12", output.getvalue())
+
+        logger_module._clear_active_run_handlers()
+        workflow_logger.handlers.clear()
 
 
 if __name__ == "__main__":

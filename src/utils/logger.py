@@ -23,6 +23,14 @@ except ImportError:
 # root, while the useful pipeline stage messages stay in ``system.log``.
 _CONFIGURED_LOGGER_NAMES: set[str] = set()
 _ACTIVE_RUN_HANDLERS: list[logging.Handler] = []
+# ``setup_logger`` owns console handlers for the main named loggers, while
+# many workflow modules intentionally use ordinary ``logging.getLogger``.
+# Keep one run-scoped root console handler for the latter so WebUI-triggered
+# jobs write useful progress into their watcher/manual log as well as the
+# dedicated per-run file.  It is deliberately separate from
+# ``_ACTIVE_RUN_HANDLERS``: attaching it to non-propagating named loggers
+# would duplicate their existing console output.
+_ACTIVE_RUN_ROOT_CONSOLE_HANDLER: Optional[logging.Handler] = None
 
 
 def _attach_active_run_handlers(logger: logging.Logger) -> None:
@@ -34,8 +42,7 @@ def _attach_active_run_handlers(logger: logging.Logger) -> None:
 
 def _clear_active_run_handlers() -> None:
     """Detach tracked per-run handlers before a later run in the same process."""
-    if not _ACTIVE_RUN_HANDLERS:
-        return
+    global _ACTIVE_RUN_ROOT_CONSOLE_HANDLER
     targets = [logging.getLogger()]
     targets.extend(logging.getLogger(name) for name in _CONFIGURED_LOGGER_NAMES)
     for handler in _ACTIVE_RUN_HANDLERS:
@@ -47,6 +54,15 @@ def _clear_active_run_handlers() -> None:
         except Exception:
             pass
     _ACTIVE_RUN_HANDLERS.clear()
+    if _ACTIVE_RUN_ROOT_CONSOLE_HANDLER is not None:
+        root = logging.getLogger()
+        if _ACTIVE_RUN_ROOT_CONSOLE_HANDLER in root.handlers:
+            root.removeHandler(_ACTIVE_RUN_ROOT_CONSOLE_HANDLER)
+        try:
+            _ACTIVE_RUN_ROOT_CONSOLE_HANDLER.close()
+        except Exception:
+            pass
+        _ACTIVE_RUN_ROOT_CONSOLE_HANDLER = None
 
 
 def _get_log_config():
@@ -162,6 +178,7 @@ def setup_run_log(mode: str = "daily_research") -> Optional[Path]:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    global _ACTIVE_RUN_ROOT_CONSOLE_HANDLER
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(log_file, encoding="utf-8")
@@ -177,6 +194,15 @@ def setup_run_log(mode: str = "daily_research") -> Optional[Path]:
         root.setLevel(logging.INFO)
         root.addHandler(handler)
         _ACTIVE_RUN_HANDLERS.append(handler)
+        # The root logger has no default handler in production.  Without
+        # this stream handler, workflow modules that use a standard logger
+        # only reach the dedicated file, leaving the WebUI watcher log with
+        # just a couple of Main lines and a generic failure receipt.
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        console_handler.setLevel(logging.INFO)
+        root.addHandler(console_handler)
+        _ACTIVE_RUN_ROOT_CONSOLE_HANDLER = console_handler
         for logger_name in _CONFIGURED_LOGGER_NAMES:
             _attach_active_run_handlers(logging.getLogger(logger_name))
     except OSError as exc:
