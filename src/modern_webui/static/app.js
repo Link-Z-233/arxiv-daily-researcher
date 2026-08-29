@@ -1840,8 +1840,12 @@ async function renderLogs(token) {
   const systemLogs = group("system");
   const runLogs = group("run");
   const otherLogs = group("other");
+  // The compatibility panel opens the newest non-system log regardless of
+  // whether it belongs to a daily/backfill run or a trend task.  Preserving
+  // the API's global mtime order avoids silently preferring an older run log.
+  const nonSystemLogs = items.filter((item) => (item.category || "other") !== "system");
   let selected = state.pageData.selectedLog;
-  if (!selected || !items.some((item) => item.id === selected)) selected = runLogs[0]?.id || otherLogs[0]?.id || "";
+  if (!selected || !items.some((item) => item.id === selected)) selected = nonSystemLogs[0]?.id || "";
   state.pageData.selectedLog = selected;
   const logLabel = (item) => `${item.name}  [${formatTime(item.modified_at).slice(5, 16)}  ${Math.round(Number(item.size_bytes) / 1024)} KB]`;
   const selector = (id, title, rows) => `<label class="log-select-field"><span>${escapeHtml(title)}</span><select id="${escapeAttribute(id)}" ${rows.length ? "" : "disabled"}><option value="">—</option>${rows.map((item) => `<option value="${escapeAttribute(item.id)}" ${selected === item.id ? "selected" : ""}>${escapeHtml(logLabel(item))}</option>`).join("")}</select></label>`;
@@ -1858,7 +1862,7 @@ async function renderLogs(token) {
       const selectedItem = items.find((item) => item.id === selected);
       const logHost = $("#log-content", root);
       if (logHost) logHost.outerHTML = `<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · 修改时间：${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? " · 仅显示最后 300 行" : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`;
-      $("#log-refresh-latest", root)?.addEventListener("click", () => { state.pageData.selectedLog = runLogs[0]?.id || otherLogs[0]?.id || ""; state.pageData.logClosed = false; renderPage(); });
+      $("#log-refresh-latest", root)?.addEventListener("click", () => { state.pageData.selectedLog = nonSystemLogs[0]?.id || ""; state.pageData.logClosed = false; renderPage(); });
       $("#log-close", root)?.addEventListener("click", () => { state.pageData.logClosed = true; renderPage(); });
     } catch (error) { const logHost = $("#log-content", root); if (logHost) logHost.outerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
   }
