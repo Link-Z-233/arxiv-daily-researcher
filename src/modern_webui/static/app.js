@@ -197,6 +197,13 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "删除当前模板": "Delete Current Template",
   "选择模板后，模板内容会作为本次趋势研究的深度分析提示词；不选择时使用默认分析流程。": "A selected template is used as the deep-analysis prompt for this run; otherwise the default analysis flow is used.",
   "保存新的提示词模板": "Save a New Prompt Template",
+  "提示词模板": "Prompt template",
+  "新建或自定义模板": "New or custom template",
+  "新建模板": "New template",
+  "恢复内置模板": "Restore built-in template",
+  "填写趋势研究的深度分析要求": "Describe the deep-analysis requirements for trend research",
+  "模板会作为本次趋势研究的深度分析要求。编辑内置模板后保存即可覆盖本机副本；恢复会重新使用内置内容。": "The template supplies the deep-analysis requirements for this trend run. Saving an edited built-in template overrides its local copy; restoring it uses the built-in text again.",
+  "已恢复内置提示词模板。": "Built-in prompt template restored.",
   "模板名称": "Template name",
   "模板内容": "Template content",
   "保存模板": "Save Template",
@@ -971,7 +978,8 @@ function renderTrendForm(templates = []) {
   const values = state.pageData.trend || { keywords: "", date_from: defaultFrom, date_to: today, categories: [], max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"), analysis_prompt: configuredPrompt, template: matchingTemplate, skills: configuredSkills };
   const selectedSkills = Array.isArray(values.skills) ? values.skills : configuredSkills;
   const categoryChoices = arxivCategories().map((item) => ({ value: item.code, label: item.label }));
-  const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
+  const selectedTemplate = templates.find((item) => item.name === values.template) || null;
+  const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(item.name)}${item.builtin ? "（内置）" : ""}</option>`).join("");
   const outputFormats = Array.isArray(config("trend_output_formats", ["markdown", "html"]))
     ? config("trend_output_formats", ["markdown", "html"])
     : ["markdown", "html"];
@@ -981,11 +989,14 @@ function renderTrendForm(templates = []) {
     const enabled = state.draft.config[key] ?? outputFormats.includes(format);
     return `<label class="toggle-field"><span>${escapeHtml(label)}</span><input type="checkbox" data-field="${escapeAttribute(key)}" data-scope="config" ${enabled ? "checked" : ""}/><i></i></label>`;
   };
-  const tldrSettings = `${field({ label: "生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true, redraw: true })}${generateTldr ? `<div class="trend-dependent-fields">${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div>` : ""}`;
-  const analysisSettings = `<h3>分析技能</h3><label class="toggle-field"><span>综合分析</span><input id="trend-skill-comprehensive" type="checkbox" ${analysisEnabled ? "checked" : ""}/><i></i></label>${analysisEnabled ? `<div class="trend-dependent-fields"><div class="form-grid two"><label class="form-field"><span>已保存提示词模板</span><select id="trend-template"><option value="">不使用模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><button id="trend-template-delete" class="secondary-button" ${values.template ? "" : "disabled"}>删除当前模板</button></div></div><p class="hint-text">选择模板后，模板内容会作为本次趋势研究的深度分析提示词；不选择时使用默认分析流程。</p><details class="compact-form"><summary>保存新的提示词模板</summary><div class="form-grid two"><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="5" maxlength="8000" placeholder="填写可复用的深度分析提示词"></textarea></label></div><div class="action-row"><button id="trend-template-save" class="secondary-button">保存模板</button></div></details></div>` : '<p class="hint-text trend-disabled-hint">关闭综合分析后，不会发送深度分析提示词；已保存模板会保留，重新开启后可继续使用。</p>'}`;
+  const templateName = selectedTemplate?.name || String(values.template_name || "");
+  const templateText = String(values.analysis_prompt || selectedTemplate?.text || "");
+  const templateEditor = `<div class="trend-template-editor"><div class="form-grid two"><label class="form-field"><span>提示词模板</span><select id="trend-template"><option value="">新建或自定义模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><div class="template-action-buttons"><button id="trend-template-new" type="button" class="secondary-button">新建模板</button><button id="trend-template-delete" type="button" class="secondary-button" ${selectedTemplate && (!selectedTemplate.builtin || selectedTemplate.overridden) ? "" : "disabled"}>${selectedTemplate?.builtin ? "恢复内置模板" : "删除当前模板"}</button></div></div></div><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" ${selectedTemplate ? "readonly" : ""} value="${escapeAttribute(templateName)}" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="8" maxlength="8000" placeholder="填写趋势研究的深度分析要求">${escapeHtml(templateText)}</textarea></label><p class="hint-text">模板会作为本次趋势研究的深度分析要求。编辑内置模板后保存即可覆盖本机副本；恢复会重新使用内置内容。</p><div class="action-row"><button id="trend-template-save" type="button" class="secondary-button">保存模板</button><span id="trend-template-result" class="inline-result"></span></div></div>`;
+  const tldrSettings = `${field({ label: "为每篇趋势论文生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true, help: "用简短文字概括每篇入选论文的研究问题、方法和结论；关闭后趋势报告只保留标题、摘要和综合分析。" })}<div id="trend-tldr-dependent" class="trend-dependent-fields" ${generateTldr ? "" : "hidden"}>${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div>`;
+  const analysisSettings = `<h3>分析技能</h3><label class="toggle-field"><span>综合分析</span><input id="trend-skill-comprehensive" type="checkbox" ${analysisEnabled ? "checked" : ""}/><i></i></label><div id="trend-analysis-dependent" class="trend-dependent-fields" ${analysisEnabled ? "" : "hidden"}>${templateEditor}</div><p id="trend-analysis-disabled-hint" class="hint-text trend-disabled-hint" ${analysisEnabled ? "hidden" : ""}>关闭综合分析后，不会发送深度分析提示词；已保存模板会保留，重新开启后可继续使用。</p>`;
   return {
     run: `<label class="form-field"><span>研究关键词</span><input id="trend-keywords" value="${escapeAttribute(values.keywords)}" placeholder="例如 quantum error correction" /></label>`,
-    parameters: `<div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div>${tagMultiSelect({ id: "trend-categories", label: "arXiv 分类（可选）", selected: values.categories, choices: categoryChoices, addLabel: localeText("添加分类", "Add category"), emptyLabel: localeText("不限制 arXiv 分类", "No arXiv category limit") })}`,
+    parameters: `<div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><div id="trend-categories-host">${tagMultiSelect({ id: "trend-categories", label: "arXiv 分类（可选）", selected: values.categories, choices: categoryChoices, addLabel: localeText("添加分类", "Add category"), emptyLabel: localeText("不限制 arXiv 分类", "No arXiv category limit") })}</div>`,
     configuration: `<div class="form-grid two"><label class="form-field"><span>排序</span><select id="trend-sort"><option value="ascending" ${values.sort_order === "ascending" ? "selected" : ""}>由早到晚</option><option value="descending" ${values.sort_order === "descending" ? "selected" : ""}>由晚到早</option></select></label><label class="form-field"><span>最多结果数</span><input id="trend-max-results" type="number" min="10" max="5000" value="${escapeAttribute(values.max_results)}" /></label>${field({ label: "默认日期范围（天）", key: "trend_default_date_range_days", type: "number", min: 30, max: 3650, fallback: 365 })}${field({ label: "报告位置", key: "trend_report_position", type: "select", choices: [{ value: "beginning", label: "报告开头" }, { value: "end", label: "报告末尾" }], fallback: "end" })}</div><div class="trend-settings-block">${tldrSettings}</div><h3>输出格式</h3><div class="form-grid two">${outputField("trend_output_md", "markdown", "输出 Markdown")}${outputField("trend_output_html", "html", "输出 HTML")}</div>${analysisSettings}`,
   };
 }
@@ -1035,7 +1046,7 @@ async function renderTrend(token) {
   root.innerHTML = `${pageHeader()}<div class="loading">正在读取趋势任务状态…</div>`;
   const [status, templateData] = await Promise.all([fetchStatus("trend"), api("/api/trend/templates")]);
   if (token !== state.renderToken) return;
-  const templates = templateData.items || [];
+  let templates = Array.isArray(templateData.items) ? templateData.items : [];
   const form = renderTrendForm(templates);
   root.innerHTML = `${pageHeader()}${section("趋势研究", `${form.run}<div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button></div>${statusCard(status, { kind: "trend", refresh: false })}`, { icon: "📈" })}${divider()}${section("分析参数", form.parameters, { icon: "🔍" })}${divider()}${section("趋势研究配置", form.configuration, { icon: "⚙️", hint: "输出格式会在保存时转换为兼容配置。" })}`;
   bindCommon(root);
@@ -1046,40 +1057,118 @@ async function renderTrend(token) {
       keywords: $("#trend-keywords").value, date_from: $("#trend-from").value, date_to: $("#trend-to").value,
       categories: Array.isArray(prior.categories) ? [...prior.categories] : [], sort_order: $("#trend-sort").value,
       max_results: Number($("#trend-max-results").value), template: templateControl?.value ?? String(prior.template || ""),
-      analysis_prompt: templates.find((item) => item.name === (templateControl?.value ?? prior.template))?.text || String(prior.analysis_prompt || ""),
+      template_name: $("#trend-template-name")?.value ?? String(prior.template_name || ""),
+      analysis_prompt: $("#trend-template-text")?.value ?? String(prior.analysis_prompt || ""),
       skills: $("#trend-skill-comprehensive").checked ? ["comprehensive_analysis"] : [],
     };
   };
-  ["#trend-keywords", "#trend-from", "#trend-to", "#trend-sort", "#trend-max-results", "#trend-template"].forEach((selector) => $(selector)?.addEventListener("change", preserveTrend));
-  $("#trend-keywords")?.addEventListener("input", preserveTrend);
-  $("#trend-skill-comprehensive")?.addEventListener("change", () => {
-    preserveTrend(); renderPage();
-  });
-  bindTagSelector(root, "trend-categories", (value) => {
+  const templateOptions = (selected) => `<option value="">新建或自定义模板</option>${templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${item.name === selected ? "selected" : ""}>${escapeHtml(item.name)}${item.builtin ? "（内置）" : ""}</option>`).join("")}`;
+  const selectedTemplate = () => templates.find((item) => item.name === $("#trend-template")?.value) || null;
+  const updateTemplateAction = () => {
+    const item = selectedTemplate();
+    const button = $("#trend-template-delete");
+    if (!button) return;
+    button.disabled = !item || Boolean(item.builtin && !item.overridden);
+    button.textContent = item?.builtin ? "恢复内置模板" : "删除当前模板";
+  };
+  const selectTemplate = (name) => {
+    const item = templates.find((candidate) => candidate.name === name) || null;
+    const selector = $("#trend-template");
+    const nameInput = $("#trend-template-name");
+    const textInput = $("#trend-template-text");
+    if (selector) selector.value = item?.name || "";
+    if (nameInput) {
+      nameInput.value = item?.name || "";
+      nameInput.readOnly = Boolean(item);
+    }
+    if (textInput) textInput.value = item?.text || "";
+    updateTemplateAction();
+    preserveTrend();
+  };
+  const refreshTemplateOptions = (selected) => {
+    const selector = $("#trend-template");
+    if (!selector) return;
+    selector.innerHTML = templateOptions(selected);
+    selector.value = selected || "";
+  };
+  const trendCategoryChoices = () => arxivCategories().map((item) => ({ value: item.code, label: item.label }));
+  const renderTrendCategories = () => {
+    const host = $("#trend-categories-host", root);
+    if (!host) return;
+    const selected = state.pageData.trend?.categories || [];
+    host.innerHTML = tagMultiSelect({
+      id: "trend-categories",
+      label: "arXiv 分类（可选）",
+      selected,
+      choices: trendCategoryChoices(),
+      addLabel: localeText("添加分类", "Add category"),
+      emptyLabel: localeText("不限制 arXiv 分类", "No arXiv category limit"),
+    });
+    bindTrendCategories();
+    applyLocale(host);
+  };
+  const bindTrendCategories = () => bindTagSelector(root, "trend-categories", (value) => {
     preserveTrend();
     if (!value || state.pageData.trend.categories.includes(value)) return;
-    state.pageData.trend.categories.push(value); renderPage();
+    state.pageData.trend.categories.push(value);
+    renderTrendCategories();
   }, (value) => {
     preserveTrend();
     state.pageData.trend.categories = state.pageData.trend.categories.filter((item) => item !== value);
-    renderPage();
+    renderTrendCategories();
+  });
+  ["#trend-keywords", "#trend-from", "#trend-to"].forEach((selector) => $(selector)?.addEventListener("change", preserveTrend));
+  ["#trend-sort", "#trend-max-results", "#trend-template-name", "#trend-template-text"].forEach((selector) => $(selector)?.addEventListener("change", () => {
+    preserveTrend(); markConfigurationDirty();
+  }));
+  $("#trend-keywords")?.addEventListener("input", preserveTrend);
+  ["#trend-template-name", "#trend-template-text"].forEach((selector) => $(selector)?.addEventListener("input", () => {
+    preserveTrend(); markConfigurationDirty();
+  }));
+  $("#trend-skill-comprehensive")?.addEventListener("change", () => {
+    $("#trend-analysis-dependent", root).hidden = !$("#trend-skill-comprehensive", root).checked;
+    $("#trend-analysis-disabled-hint", root).hidden = $("#trend-skill-comprehensive", root).checked;
+    preserveTrend(); markConfigurationDirty();
+  });
+  $('[data-field="trend_generate_tldr"]', root)?.addEventListener("change", (event) => {
+    $("#trend-tldr-dependent", root).hidden = !event.target.checked;
+  });
+  $("#trend-template", root)?.addEventListener("change", (event) => {
+    selectTemplate(event.target.value);
+    markConfigurationDirty();
+  });
+  $("#trend-template-new", root)?.addEventListener("click", () => {
+    selectTemplate("");
+    markConfigurationDirty();
   });
   $("#trend-template-save")?.addEventListener("click", async () => {
     const name = $("#trend-template-name").value.trim();
     const text = $("#trend-template-text").value.trim();
     try {
-      await api("/api/trend/templates", { method: "PUT", body: { name, text } });
-      preserveTrend(); state.pageData.trend.template = name; state.pageData.trend.analysis_prompt = text;
-      toast("提示词模板已保存。", "success"); renderPage();
+      const result = await api("/api/trend/templates", { method: "PUT", body: { name, text } });
+      templates = Array.isArray(result.items) ? result.items : templates;
+      refreshTemplateOptions(name);
+      selectTemplate(name);
+      markConfigurationDirty();
+      $("#trend-template-result", root).textContent = "模板已保存。";
+      $("#trend-template-result", root).className = "inline-result success";
+      toast("提示词模板已保存。", "success");
     } catch (error) { toast(error.message, "error"); }
   });
   $("#trend-template-delete")?.addEventListener("click", async () => {
     const name = $("#trend-template").value;
-    if (!name || !window.confirm(`确认删除提示词模板“${name}”？`)) return;
+    const item = selectedTemplate();
+    if (!name || !item) return;
+    const action = item.builtin ? "恢复" : "删除";
+    if (!window.confirm(`确认${action}提示词模板“${name}”？`)) return;
     try {
-      await api("/api/trend/templates/delete", { method: "POST", body: { name } });
-      preserveTrend(); state.pageData.trend.template = ""; state.pageData.trend.analysis_prompt = "";
-      toast("提示词模板已删除。", "success"); renderPage();
+      const result = await api("/api/trend/templates/delete", { method: "POST", body: { name } });
+      templates = Array.isArray(result.items) ? result.items : templates;
+      const nextName = item.builtin ? name : "";
+      refreshTemplateOptions(nextName);
+      selectTemplate(nextName);
+      markConfigurationDirty();
+      toast(item.builtin ? "已恢复内置提示词模板。" : "提示词模板已删除。", "success");
     } catch (error) { toast(error.message, "error"); }
   });
   $("#trend-start").addEventListener("click", async () => {

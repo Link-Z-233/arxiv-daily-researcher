@@ -309,6 +309,9 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .trend-settings-block { margin-top: 22px; padding: 17px 18px; border: 1px solid #e2e7ef; border-radius: 13px; background: var(--card-soft); }
 .trend-settings-block .toggle-field + .trend-dependent-fields { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
 .trend-dependent-fields { margin-top: 20px; }
+.trend-template-editor { display: grid; gap: 18px; }
+.template-action-buttons { display: flex; flex-wrap: wrap; gap: 9px; }
+.trend-template-editor .action-row { margin-top: 0; }
 .form-grid + h3, .trend-settings-block + h3 { margin-top: 26px; }
 .trend-disabled-hint { margin: 16px 0 0; padding: 11px 13px; border: 1px dashed #cfd7e5; border-radius: 9px; background: #fbfcff; }
 .narrow-field { width: min(225px, 100%); margin-bottom: 14px; }

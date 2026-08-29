@@ -70,6 +70,17 @@ DEFAULT_REPORTS_DIR = DEFAULT_DATA_DIR / "reports"
 DEFAULT_DB_RELATIVE_PATH = Path("daily_research") / "daily_research.db"
 LOGS_DIR = PROJECT_ROOT / "logs"
 TREND_PROMPT_TEMPLATES_PATH = DEFAULT_DATA_DIR / "trend_prompt_templates.json"
+BUILTIN_TREND_PROMPT_TEMPLATES: dict[str, str] = {
+    "研究脉络综述": """请基于本次收集到的论文，写一份面向研究者的趋势综述。
+
+按以下结构组织：研究问题与范围、关键进展（按主题或时间线）、代表性方法与结果、不同路线之间的联系、已知局限，以及下一步值得跟踪的问题。只使用论文中可核实的信息；证据不足时明确说明，不要补充未给出的实验结果、结论或引用。""",
+    "方法与证据比较": """请比较本次论文采用的方法与证据强度，帮助研究者快速判断每条路线的成熟度。
+
+说明每类方法解决的核心问题、使用的理论/实验/数据证据、主要优势和局限、可复现性或验证条件，以及不同论文之间可直接比较与不可直接比较的部分。最后给出简洁的对比结论。仅依据已提供的论文信息，不推断未报告的指标。""",
+    "前沿机会与风险": """请提炼本次论文反映出的研究机会、技术瓶颈和潜在风险。
+
+先概括共识与分歧，再区分近期可验证的问题和中长期方向；对每项机会或风险说明它对应的论文证据、依赖条件和不确定性。最后给出不超过五条优先跟踪建议。避免把推测写成事实，也不要添加论文未支持的应用前景。""",
+}
 HISTORY_MODES = frozenset({"legacy_import", "history_data_repair", "history_omission_scan"})
 OPERATING_MODES = frozenset({"daily_research", "backfill_run", "trend_research"})
 LOCK_NAMES = (
@@ -1211,11 +1222,31 @@ def _read_trend_prompt_templates() -> dict[str, str]:
     }
 
 
-def list_trend_prompt_templates() -> list[dict[str, str]]:
-    return [
-        {"name": name, "text": text}
-        for name, text in sorted(_read_trend_prompt_templates().items(), key=lambda item: item[0].casefold())
-    ]
+def list_trend_prompt_templates() -> list[dict[str, Any]]:
+    """Return built-ins followed by saved templates and built-in overrides."""
+    stored = _read_trend_prompt_templates()
+    rows: list[dict[str, Any]] = []
+    for name, default_text in BUILTIN_TREND_PROMPT_TEMPLATES.items():
+        overridden = name in stored
+        rows.append(
+            {
+                "name": name,
+                "text": stored.get(name, default_text),
+                "builtin": True,
+                "overridden": overridden,
+            }
+        )
+    rows.extend(
+        {
+            "name": name,
+            "text": text,
+            "builtin": False,
+            "overridden": False,
+        }
+        for name, text in sorted(stored.items(), key=lambda item: item[0].casefold())
+        if name not in BUILTIN_TREND_PROMPT_TEMPLATES
+    )
+    return rows
 
 
 def _write_trend_prompt_templates(templates: Mapping[str, str]) -> None:
@@ -1240,7 +1271,7 @@ def _write_trend_prompt_templates(templates: Mapping[str, str]) -> None:
         raise ModernWebUIError(f"保存趋势提示词模板失败：{exc}") from exc
 
 
-def save_trend_prompt_template(name: object, text: object) -> list[dict[str, str]]:
+def save_trend_prompt_template(name: object, text: object) -> list[dict[str, Any]]:
     safe_name = str(name or "").strip()
     safe_text = str(text or "").strip()
     if not safe_name:
@@ -1252,16 +1283,27 @@ def save_trend_prompt_template(name: object, text: object) -> list[dict[str, str
     if len(safe_text) > 8_000 or "\x00" in safe_text:
         raise ModernWebUIError("模板内容长度或格式无效。")
     templates = _read_trend_prompt_templates()
-    if safe_name not in templates and len(templates) >= 50:
+    custom_templates = [name for name in templates if name not in BUILTIN_TREND_PROMPT_TEMPLATES]
+    if (
+        safe_name not in templates
+        and safe_name not in BUILTIN_TREND_PROMPT_TEMPLATES
+        and len(custom_templates) >= 50
+    ):
         raise ModernWebUIError("最多保存 50 个趋势提示词模板。")
     templates[safe_name] = safe_text
     _write_trend_prompt_templates(templates)
     return list_trend_prompt_templates()
 
 
-def delete_trend_prompt_template(name: object) -> list[dict[str, str]]:
+def delete_trend_prompt_template(name: object) -> list[dict[str, Any]]:
     safe_name = str(name or "").strip()
     templates = _read_trend_prompt_templates()
+    if safe_name in BUILTIN_TREND_PROMPT_TEMPLATES:
+        if safe_name not in templates:
+            raise ModernWebUIError("该内置模板尚未修改，无需恢复。")
+        del templates[safe_name]
+        _write_trend_prompt_templates(templates)
+        return list_trend_prompt_templates()
     if safe_name not in templates:
         raise ModernWebUIError("未找到该趋势提示词模板。")
     del templates[safe_name]

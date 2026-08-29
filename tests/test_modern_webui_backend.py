@@ -277,12 +277,27 @@ class ModernBackendTests(unittest.TestCase):
             path = Path(directory) / "trend_prompt_templates.json"
             with patch.object(backend, "TREND_PROMPT_TEMPLATES_PATH", path):
                 rows = backend.save_trend_prompt_template("量子计算", "关注实验进展")
-                self.assertEqual(rows, [{"name": "量子计算", "text": "关注实验进展"}])
-                self.assertEqual(
-                    backend.list_trend_prompt_templates(),
-                    [{"name": "量子计算", "text": "关注实验进展"}],
-                )
-                self.assertEqual(backend.delete_trend_prompt_template("量子计算"), [])
+                custom = next(item for item in rows if item["name"] == "量子计算")
+                self.assertEqual(custom, {
+                    "name": "量子计算",
+                    "text": "关注实验进展",
+                    "builtin": False,
+                    "overridden": False,
+                })
+                self.assertEqual(len([item for item in rows if item["builtin"]]), 3)
+                after_delete = backend.delete_trend_prompt_template("量子计算")
+                self.assertFalse(any(item["name"] == "量子计算" for item in after_delete))
+
+                builtin_name = next(iter(backend.BUILTIN_TREND_PROMPT_TEMPLATES))
+                edited = backend.save_trend_prompt_template(builtin_name, "本机自定义内容")
+                overridden = next(item for item in edited if item["name"] == builtin_name)
+                self.assertTrue(overridden["builtin"])
+                self.assertTrue(overridden["overridden"])
+                self.assertEqual(overridden["text"], "本机自定义内容")
+                restored = backend.delete_trend_prompt_template(builtin_name)
+                default = next(item for item in restored if item["name"] == builtin_name)
+                self.assertFalse(default["overridden"])
+                self.assertEqual(default["text"], backend.BUILTIN_TREND_PROMPT_TEMPLATES[builtin_name])
                 with self.assertRaisesRegex(backend.ModernWebUIError, "名称不能为空"):
                     backend.save_trend_prompt_template("", "内容")
 
