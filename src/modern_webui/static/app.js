@@ -1486,6 +1486,16 @@ function renderStrategyFields(strategy) {
 
 function legacyStrategyFields() { return `<div class="form-grid three">${field({ label: "基础分", key: "passing_score_base", type: "number", min: 0, max: 100, step: 0.5, fallback: 5 })}${field({ label: "权重系数", key: "passing_score_weight_coefficient", type: "number", min: 0, max: 20, step: 0.5, fallback: 3 })}${field({ label: "每个关键词最高得分", key: "max_score_per_keyword", type: "number", min: 1, max: 100, fallback: 10 })}</div>`; }
 
+function legacyFormulaMarkup(count, weight, base, coefficient) {
+  const totalWeight = count * weight;
+  const passing = base + coefficient * totalWeight;
+  if (state.language === "en") {
+    const noun = count === 1 ? "primary keyword" : "primary keywords";
+    return `With ${count} ${noun} at weight ${weight}: passing score = ${base} + ${coefficient} × ${totalWeight.toFixed(1)} = <strong>${passing.toFixed(1)}</strong>`;
+  }
+  return `共 ${count} 个主关键词，权重 ${weight}：通过分数 = ${base} + ${coefficient} × ${totalWeight.toFixed(1)} = <strong>${passing.toFixed(1)}</strong>`;
+}
+
 function legacyFormulaPreview(strategy) {
   if (strategy === "core_relevance_v2") return "";
   const primary = configValue("primary_keywords", []);
@@ -1493,9 +1503,11 @@ function legacyFormulaPreview(strategy) {
   const weight = Number(configValue("primary_keyword_weight", 1));
   const base = Number(configValue("passing_score_base", 5));
   const coefficient = Number(configValue("passing_score_weight_coefficient", 3));
-  const totalWeight = count * (Number.isFinite(weight) ? weight : 1);
-  const passing = (Number.isFinite(base) ? base : 5) + (Number.isFinite(coefficient) ? coefficient : 3) * totalWeight;
-  return `<p id="legacy-formula-preview" class="info-box">共 ${count} 个主关键词，权重 ${Number.isFinite(weight) ? weight : 1}：通过分数 = ${Number.isFinite(base) ? base : 5} + ${Number.isFinite(coefficient) ? coefficient : 3} × ${totalWeight.toFixed(1)} = <strong>${passing.toFixed(1)}</strong></p>`;
+  // Keep the number formatting and interactive preview identical in both
+  // languages.  The legacy policy is one of the few UI messages assembled
+  // from live form values, so the generic static catalogue cannot translate
+  // it after rendering.
+  return `<p id="legacy-formula-preview" class="info-box">${legacyFormulaMarkup(count, Number.isFinite(weight) ? weight : 1, Number.isFinite(base) ? base : 5, Number.isFinite(coefficient) ? coefficient : 3)}</p>`;
 }
 
 function bindLegacyFormulaPreview(root, strategy) {
@@ -1513,8 +1525,9 @@ function bindLegacyFormulaPreview(root, strategy) {
     const normalizedWeight = Number.isFinite(weight) ? weight : 1;
     const normalizedBase = Number.isFinite(base) ? base : 5;
     const normalizedCoefficient = Number.isFinite(coefficient) ? coefficient : 3;
-    const totalWeight = count * normalizedWeight;
-    preview.innerHTML = `共 ${count} 个主关键词，权重 ${normalizedWeight}：通过分数 = ${normalizedBase} + ${normalizedCoefficient} × ${totalWeight.toFixed(1)} = <strong>${(normalizedBase + normalizedCoefficient * totalWeight).toFixed(1)}</strong>`;
+    preview.innerHTML = legacyFormulaMarkup(
+      count, normalizedWeight, normalizedBase, normalizedCoefficient,
+    );
   };
   $$('[data-field="passing_score_base"], [data-field="passing_score_weight_coefficient"]', root).forEach((element) => element.addEventListener("input", update));
 }
@@ -1756,16 +1769,16 @@ function importSummary(summary) {
   if (!summary) return '<p class="empty-state">尚无旧历史导入记录。</p>';
   const metric = (label, key, fallback = 0) => ({ label, value: formatNumber(summary[key] ?? fallback), help: "" });
   const missingParts = [
-    ["报告卡", "missing_cards"], ["TL;DR", "missing_tldr"],
-    ["翻译", "missing_translation"], ["分析", "missing_analysis"],
+    [localeText("报告卡", "report cards"), "missing_cards"], ["TL;DR", "missing_tldr"],
+    [localeText("翻译", "translations"), "missing_translation"], [localeText("分析", "analyses"), "missing_analysis"],
   ].map(([label, key]) => [label, Number(summary[key] || 0)]).filter(([, value]) => value > 0);
   const sources = summary.source_breakdown && typeof summary.source_breakdown === "object"
-    ? Object.entries(summary.source_breakdown).filter(([name, value]) => name && Number.isFinite(Number(value))).map(([name, value]) => `${escapeHtml(name)}：${formatNumber(value)}`).join(" · ")
+    ? Object.entries(summary.source_breakdown).filter(([name, value]) => name && Number.isFinite(Number(value))).map(([name, value]) => `${escapeHtml(name)}${localeText("：", ": ")}${formatNumber(value)}`).join(" · ")
     : "";
   const missing = missingParts.length
-    ? `<p class="issue-box">待补全：${missingParts.map(([label, value]) => `${escapeHtml(label)} ${formatNumber(value)}`).join(" · ")}。可运行“补全历史数据”。</p>`
+    ? `<p class="issue-box">${localeText("待补全：", "Missing data: ")}${missingParts.map(([label, value]) => `${escapeHtml(label)} ${formatNumber(value)}`).join(" · ")}${localeText("。可运行“补全历史数据”。", ". Run “Repair historical data” to fill it.")}</p>`
     : "";
-  return `<p class="hint-text">完成时间：${escapeHtml(formatTime(summary.finished_at))} · ${summary.full_repair_enabled ? "完整导入流程" : "仅导入已有 HTML 论文"}</p>${metrics([metric("扫描报告", "reports_scanned"), metric("导入论文卡", "cards_selected", summary.cards_found), metric("写入投递记录", "delivered_ledger_rows"), metric("补充任务", "backlog_queued")])}${missing}${sources ? `<p class="hint-text">来源分布：${sources}</p>` : ""}`;
+  return `<p class="hint-text">${localeText("完成时间：", "Completed: ")}${escapeHtml(formatTime(summary.finished_at))} · ${summary.full_repair_enabled ? localeText("完整导入流程", "Full import workflow") : localeText("仅导入已有 HTML 论文", "Imported existing HTML papers only")}</p>${metrics([metric("扫描报告", "reports_scanned"), metric("导入论文卡", "cards_selected", summary.cards_found), metric("写入投递记录", "delivered_ledger_rows"), metric("补充任务", "backlog_queued")])}${missing}${sources ? `<p class="hint-text">${localeText("来源分布：", "Source breakdown: ")}${sources}</p>` : ""}`;
 }
 
 function historyTaskStateLabel(value) {
@@ -2101,7 +2114,10 @@ async function renderAnalytics(token) {
   const lastThirty = (data.heatmap_daily || []).filter((row) => new Date(`${row.date}T00:00:00`) >= recentCutoff).reduce((sum, row) => sum + Number(row.total || 0), 0);
   const promptTotal = (data.daily || []).reduce((sum, row) => sum + Number(row.prompt || 0), 0);
   const completionTotal = (data.daily || []).reduce((sum, row) => sum + Number(row.completion || 0), 0);
-  root.innerHTML = `${pageHeader()}${section("LLM Token 用量", metrics([{ label: "当日输入 tokens", value: formatNumber(today.prompt), help: "" }, { label: "当日输出 tokens", value: formatNumber(today.completion), help: "" }, { label: "近30天累计用量", value: formatNumber(lastThirty), help: "" }]), { icon: "📊" })}${divider()}${section("每日用量热力图（近一年）", tokenHeatmap(data.heatmap_daily || []), { icon: "🗓" })}${divider()}${section("用量趋势", `${control}${tokenTrendChart(data.daily || [])}<p class="hint-text">所选区间 · 输入 ${formatNumber(promptTotal)} · 输出 ${formatNumber(completionTotal)} · 合计 ${formatNumber(totals)} tokens</p>`, { icon: "📈" })}${divider()}${section("按模型汇总", pagedTable("analytics-models", [{ label: "模型", key: "model" }, { label: "输入 tokens", value: (row) => formatNumber(row.prompt) }, { label: "输出 tokens", value: (row) => formatNumber(row.completion) }, { label: "总 tokens", value: (row) => formatNumber(row.total) }], data.models || [], { empty: "暂无模型使用记录。" }), { icon: "🧠" })}`;
+  const usageSummary = state.language === "en"
+    ? `Selected range · input ${formatNumber(promptTotal)} · output ${formatNumber(completionTotal)} · total ${formatNumber(totals)} tokens`
+    : `所选区间 · 输入 ${formatNumber(promptTotal)} · 输出 ${formatNumber(completionTotal)} · 合计 ${formatNumber(totals)} tokens`;
+  root.innerHTML = `${pageHeader()}${section("LLM Token 用量", metrics([{ label: "当日输入 tokens", value: formatNumber(today.prompt), help: "" }, { label: "当日输出 tokens", value: formatNumber(today.completion), help: "" }, { label: "近30天累计用量", value: formatNumber(lastThirty), help: "" }]), { icon: "📊" })}${divider()}${section("每日用量热力图（近一年）", tokenHeatmap(data.heatmap_daily || []), { icon: "🗓" })}${divider()}${section("用量趋势", `${control}${tokenTrendChart(data.daily || [])}<p class="hint-text">${usageSummary}</p>`, { icon: "📈" })}${divider()}${section("按模型汇总", pagedTable("analytics-models", [{ label: "模型", key: "model" }, { label: "输入 tokens", value: (row) => formatNumber(row.prompt) }, { label: "输出 tokens", value: (row) => formatNumber(row.completion) }, { label: "总 tokens", value: (row) => formatNumber(row.total) }], data.models || [], { empty: "暂无模型使用记录。" }), { icon: "🧠" })}`;
   bindCommon(root);
   $("#analytics-range", root).addEventListener("change", (event) => { state.pageData.analyticsRange = event.target.value; renderPage(); });
 }
@@ -2137,7 +2153,7 @@ async function renderLogs(token) {
       const log = await api(`/api/logs/${encodeURIComponent(selected)}`); if (token !== state.renderToken) return;
       const selectedItem = items.find((item) => item.id === selected);
       const logHost = $("#log-content", root);
-      if (logHost) logHost.outerHTML = `<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · 修改时间：${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? " · 仅显示最后 300 行" : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`;
+      if (logHost) logHost.outerHTML = `<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · ${localeText("修改时间：", "Modified: ")}${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? ` · ${localeText("仅显示最后 300 行", "last 300 lines only")}` : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`;
       $("#log-refresh-latest", root)?.addEventListener("click", () => { state.pageData.selectedLog = nonSystemLogs[0]?.id || ""; state.pageData.logClosed = false; renderPage(); });
       $("#log-close", root)?.addEventListener("click", () => { state.pageData.logClosed = true; renderPage(); });
     } catch (error) { const logHost = $("#log-content", root); if (logHost) logHost.outerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
