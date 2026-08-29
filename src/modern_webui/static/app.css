@@ -199,6 +199,7 @@ h3 { margin: 0 0 10px; font-size: .92rem; line-height: 1.45; }
 .compact-button { min-height: 31px; padding: 0 9px; border-radius: 7px; font-size: .73rem; }
 .icon-danger { width: 29px; height: 29px; border: 0; border-radius: 8px; background: #fff0ef; color: var(--danger); font-size: 1.05rem; }
 .action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 16px; }
+.history-maintenance-actions { margin-top: 8px; }
 .inline-result { color: var(--muted); font-size: .79rem; line-height: 1.45; }
 .inline-result.success { color: var(--success); }
 .inline-result.error { color: var(--danger); }
