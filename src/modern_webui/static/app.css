@@ -479,9 +479,10 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .segmented-button.is-active { border-color: var(--brand-line); background: #fff; box-shadow: var(--shadow-xs); color: #344bb9; }
 .analytics-custom-range { margin-top: 3px; }
 .analytics-custom-action { margin-top: 0; }
-.usage-summary-table { max-width: 420px; }
+.usage-summary-table { max-width: 680px; }
 .usage-summary-table table { min-width: 0; }
-.usage-summary-table th { width: 62%; }
+.usage-summary-table th { width: 25%; white-space: nowrap; }
+.usage-summary-table td { width: 25%; font-variant-numeric: tabular-nums; }
 .trend-chart-block { padding-top: 3px; }
 .trend-chart { overflow-x: auto; padding: 2px 0; }
 .trend-chart svg { display: block; width: 100%; min-width: 680px; height: auto; }

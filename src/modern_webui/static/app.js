@@ -2550,17 +2550,15 @@ function analyticsRangeControl(values) {
 
 function usageSummaryTable(summary) {
   const rows = [
-    ["输入 Token", formatNumber(summary.prompt)],
-    ["输出 Token", formatNumber(summary.completion)],
-    ["合计 Token", formatNumber(summary.total)],
-    ["涉及运行", formatNumber(summary.runs)],
+    [["输入 Token", formatNumber(summary.prompt)], ["输出 Token", formatNumber(summary.completion)]],
+    [["合计 Token", formatNumber(summary.total)], ["涉及运行", formatNumber(summary.runs)]],
   ];
-  return `<div class="table-wrap usage-summary-table"><table><tbody>${rows.map(([label, value]) => `<tr><th scope="row">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap usage-summary-table"><table><tbody>${rows.map((metrics) => `<tr>${metrics.map(([label, value]) => `<th scope="row">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
 async function renderAnalytics(token) {
   const root = $("#page-root");
-  const fallback = { range: "30d", date_from: relativeLocalDateKey(-29), date_to: relativeLocalDateKey(0) };
+  const fallback = { range: "7d", date_from: relativeLocalDateKey(-6), date_to: relativeLocalDateKey(0) };
   const values = { ...fallback, ...(state.pageData.analytics || {}) };
   const params = new URLSearchParams({ range: values.range });
   if (values.range === "custom") {
