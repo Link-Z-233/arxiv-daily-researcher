@@ -1208,12 +1208,54 @@ async function renderHistory(token) {
   if (isLive && autoRefresh) scheduleRefresh("history", () => renderPage(), 5000);
 }
 
+function healthStatusLabel(status) {
+  return String(status || "").toLowerCase() === "succeeded" ? "成功" : "失败";
+}
+
+function diagnosticRunStatusLabel(status) {
+  return ({ completed: "已完成", failed: "失败", running: "运行中" })[String(status || "").toLowerCase()] || "未知";
+}
+
+function diagnosticTaskKindLabel(kind) {
+  return ({
+    daily: "每日研究", daily_research: "每日研究",
+    backfill: "过去日报", backfill_run: "过去日报",
+    history_import: "旧历史导入", legacy_history_import: "旧历史导入",
+    history_data_repair: "历史数据补全", history_omission_scan: "历史遗漏扫描",
+    supplement: "补充报告", trend_research: "趋势研究",
+  })[String(kind || "").toLowerCase()] || String(kind || "—");
+}
+
+function healthFailureDetail(row) {
+  if (!row?.last_error) return "—";
+  const timestamp = formatTime(row.last_error_at);
+  return timestamp === "—" ? String(row.last_error) : `${timestamp} · ${row.last_error}`;
+}
+
+function healthSuccessRate(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${Math.round(number * 100)}%` : "—";
+}
+
 function healthTable(key, kind, rows) {
   if (kind === "llm") return pagedTable(key, [
-    { label: "模型", key: "model" }, { label: "角色", value: (row) => (row.roles || []).join(" / ") || "—" }, { label: "最近状态", key: "last_status" }, { label: "最近事件", value: (row) => formatTime(row.last_event_at) }, { label: "成功率", value: (row) => formatPercent(row.success_rate) }, { label: "最近失败信息", value: (row) => row.last_error || "—" },
+    { label: "模型", key: "model" },
+    { label: "用途", value: (row) => (row.roles || []).map((role) => ({ cheap: "低成本 LLM", smart: "高性能 LLM" })[String(role).toLowerCase()] || role).join(" / ") || "—" },
+    { label: "最近调用", value: (row) => formatTime(row.last_event_at) },
+    { label: "最新状态", value: (row) => healthStatusLabel(row.last_status) },
+    { label: "成功/调用", value: (row) => `${formatNumber(row.succeeded_in_window)}/${formatNumber(row.events_in_window)}` },
+    { label: "成功率", value: (row) => healthSuccessRate(row.success_rate) },
+    { label: "最近失败信息（已脱敏）", value: healthFailureDetail },
   ], rows, { empty: "所选范围内没有 LLM 调用记录。" });
   return pagedTable(key, [
-    { label: "来源", value: (row) => row.name || row.source }, { label: "最近状态", key: "last_status" }, { label: "最近事件", value: (row) => formatTime(row.last_event_at) }, { label: "成功率", value: (row) => formatPercent(row.success_rate) }, { label: "最近失败信息", value: (row) => row.last_error || "—" },
+    { label: "来源", value: (row) => row.name || row.source },
+    { label: "最近请求", value: (row) => formatTime(row.last_event_at) },
+    { label: "最新状态", value: (row) => healthStatusLabel(row.last_status) },
+    { label: "最近任务", value: (row) => diagnosticTaskKindLabel(row.last_task_kind) },
+    { label: "成功/请求", value: (row) => `${formatNumber(row.succeeded)}/${formatNumber(row.events)}` },
+    { label: "成功率", value: (row) => healthSuccessRate(row.success_rate) },
+    { label: "最近新增", value: (row) => Number.isInteger(row.last_new_candidates) ? formatNumber(row.last_new_candidates) : "—" },
+    { label: "最近失败信息（已脱敏）", value: healthFailureDetail },
   ], rows, { empty: "所选范围内没有数据源请求记录。" });
 }
 
@@ -1231,7 +1273,7 @@ async function renderDiagnostics(token) {
     api(`/api/diagnostics?days=${ranges.sources}`),
   ]);
   if (token !== state.renderToken) return;
-  root.innerHTML = `${pageHeader()}${section("运行诊断", `${diagnosticsRangeControl("diagnostics-range", ranges.runs)}<p class="hint-text">仅显示每日研究和过去日报最近运行；旧历史导入状态位于“历史维护”。</p>${pagedTable("operational-runs", [{ label: "类型", value: (row) => row.run_kind === "backfill" || row.run_kind === "backfill_run" ? "过去日报" : "每日研究" }, { label: "开始", value: (row) => formatTime(row.started_at) }, { label: "完成", value: (row) => formatTime(row.completed_at) }, { label: "状态", key: "status" }, { label: "论文数", key: "total_papers" }, { label: "问题摘要", value: (row) => row.error_summary || "—" }], runData.runs || [], { empty: "所选范围内没有每日研究或过去日报运行记录。" })}`, { icon: "🩺" })}${divider()}${section("LLM 健康", `${diagnosticsRangeControl("llm-range", ranges.llm)}<p class="hint-text">覆盖所有任务中的真实 LLM 调用，包括旧历史导入。</p>${healthTable("llm-health", "llm", llmData.llm || [])}`, { icon: "🧠" })}${divider()}${section("数据源健康", `${diagnosticsRangeControl("source-range", ranges.sources)}<p class="hint-text">覆盖所有任务中的真实数据源请求，包括旧历史导入。</p>${healthTable("source-health", "source", sourceData.sources || [])}`, { icon: "🌐" })}`;
+  root.innerHTML = `${pageHeader()}${section("运行诊断", `${diagnosticsRangeControl("diagnostics-range", ranges.runs)}<p class="hint-text">显示所选时间范围内的每日研究与过去日报；旧历史维护任务请在“系统 → 历史维护”查看。</p>${pagedTable("operational-runs", [{ label: "任务", value: (row) => diagnosticTaskKindLabel(row.run_kind) }, { label: "状态", value: (row) => diagnosticRunStatusLabel(row.status) }, { label: "开始时间", value: (row) => formatTime(row.started_at) }, { label: "完成时间", value: (row) => formatTime(row.completed_at) }, { label: "论文数", key: "total_papers" }, { label: "问题摘要", value: (row) => row.error_summary || "—" }], runData.runs || [], { empty: "尚无每日研究或过去日报运行记录。" })}`, { icon: "🩺" })}${divider()}${section("LLM 健康", `${diagnosticsRangeControl("llm-range", ranges.llm)}<p class="hint-text">汇总所有真实任务（含历史维护）的 LLM 调用；查看不会发送探针请求，也不会额外消耗 Token。</p>${healthTable("llm-health", "llm", llmData.llm || [])}`, { icon: "🧠" })}${divider()}${section("数据源健康", `${diagnosticsRangeControl("source-range", ranges.sources)}<p class="hint-text">汇总所有真实任务（含历史维护）的数据源请求；查看不会发送探针请求。</p>${healthTable("source-health", "source", sourceData.sources || [])}`, { icon: "🌐" })}`;
   bindCommon(root);
   [["#diagnostics-range", "runs"], ["#llm-range", "llm"], ["#source-range", "sources"]].forEach(([selector, key]) => $(selector, root).addEventListener("change", (event) => {
     state.pageData.diagnosticsRanges = { ...ranges, [key]: event.target.value };

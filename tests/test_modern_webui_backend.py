@@ -230,6 +230,35 @@ class ModernBackendTests(unittest.TestCase):
             webdav_sync=webdav_client,
         )
 
+    def test_diagnostics_preserve_source_receipt_fields_for_the_ui(self) -> None:
+        store = MagicMock()
+        store.get_source_health_for_days.return_value = {
+            "arxiv": {
+                "last_status": "failed",
+                "last_scan_at": "2026-08-29T10:00:00",
+                "last_task_kind": "history_omission_scan",
+                "scans_in_window": 4,
+                "succeeded_in_window": 3,
+                "success_rate": 0.75,
+                "last_new_candidates": 8,
+                "last_error": "temporary request failure",
+                "last_error_at": "2026-08-29T09:59:00",
+            }
+        }
+        store.get_llm_health_by_model.return_value = []
+        store.get_recent_operational_runs.return_value = []
+        with patch.object(backend, "open_store", return_value=store), patch.object(
+            backend, "flat_config", return_value={"extra_source_definitions": []}
+        ):
+            payload = backend.diagnostics(7)
+
+        row = payload["sources"][0]
+        self.assertEqual(row["last_event_at"], "2026-08-29T10:00:00")
+        self.assertEqual(row["last_task_kind"], "history_omission_scan")
+        self.assertEqual(row["events"], 4)
+        self.assertEqual(row["succeeded"], 3)
+        self.assertEqual(row["last_new_candidates"], 8)
+
     def test_history_status_exposes_progress_timing_and_retry_metadata(self) -> None:
         store = MagicMock()
         store.get_app_state.return_value = ""

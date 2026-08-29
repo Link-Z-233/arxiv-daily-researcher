@@ -1047,7 +1047,16 @@ def diagnostics(days: int | None) -> dict[str, Any]:
     if store is None:
         return {"available": False, "llm": [], "sources": [], "runs": []}
     try:
-        source_labels = source_display_names(flat_config().get("extra_source_definitions", []))
+        try:
+            source_labels = source_display_names(
+                flat_config().get("extra_source_definitions", [])
+            )
+        except (TypeError, ValueError):
+            # A hand-edited legacy source declaration must not make the
+            # read-only diagnostics page unavailable.  This matches the
+            # compatibility-panel fallback while preserving the raw source
+            # receipt for operators to inspect.
+            source_labels = source_display_names()
         sources = store.get_source_health_for_days(days)
         source_rows = []
         for source, value in sources.items():
@@ -1056,10 +1065,15 @@ def diagnostics(days: int | None) -> dict[str, Any]:
                     "source": source,
                     "name": source_labels.get(source, source),
                     "last_status": value.get("last_status"),
-                    "last_event_at": value.get("last_event_at"),
-                    "last_success_at": value.get("last_success_at"),
-                    "events": value.get("events_in_window", 0),
+                    # Source receipts use scan-specific names in the shared
+                    # SQLite store.  Expose a stable generic API field to the
+                    # modern UI rather than silently rendering an empty time.
+                    "last_event_at": value.get("last_scan_at"),
+                    "last_task_kind": value.get("last_task_kind"),
+                    "events": value.get("scans_in_window", 0),
+                    "succeeded": value.get("succeeded_in_window", 0),
                     "success_rate": value.get("success_rate"),
+                    "last_new_candidates": value.get("last_new_candidates"),
                     "last_error": value.get("last_error"),
                     "last_error_at": value.get("last_error_at"),
                 }
