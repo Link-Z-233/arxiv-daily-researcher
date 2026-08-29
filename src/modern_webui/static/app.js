@@ -21,8 +21,8 @@ const NAVIGATION = [
   { id: "system", label: "系统", pages: [
     ["backup_sync", "☁️ 备份与同步"],
     ["history_tasks", "🗂 历史维护"],
-    ["diagnostics", "🩺 诊断"],
-    ["analytics", "📊 数据分析"],
+    ["diagnostics", "🩺 运行诊断"],
+    ["analytics", "📊 用量统计"],
     ["logs", "📜 日志"],
   ] },
 ];
@@ -43,8 +43,8 @@ const PAGE_META = {
   accounts: ["配置 / 账户", "账户管理", "管理本地面板账户与密码。"],
   backup_sync: ["系统 / 备份与同步", "备份与同步", "导出配置、配置 WebDAV 和管理 SQLite 本地备份。"],
   history_tasks: ["系统 / 历史维护", "历史维护", "导入旧版本历史、补全缺失字段并扫描遗漏论文。"],
-  diagnostics: ["系统 / 诊断", "运行诊断", "查看正常每日研究、过去日报，以及所有任务的 LLM 与数据源健康记录。"],
-  analytics: ["系统 / 数据分析", "数据分析", "查看已记录的 LLM Token 使用情况。"],
+  diagnostics: ["系统 / 运行诊断", "运行诊断", "查看每日研究、过去日报，以及所有任务的 LLM 与数据源健康记录。"],
+  analytics: ["系统 / 用量统计", "用量统计", "查看已记录的 LLM Token 使用情况。"],
   logs: ["系统 / 日志", "运行日志", "按任务分组读取最近的本地运行日志。"],
 };
 
@@ -59,7 +59,10 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "状态自动刷新": "Auto refresh status",
   "显示非 arXiv 来源报告": "Show non-arXiv source reports",
   "每行一个关键词": "One keyword per line",
-  "主关键词权重": "Primary keyword weight",
+  "深色模式": "Dark mode",
+  "浅色模式": "Light mode",
+  "有未保存修改": "Unsaved changes",
+  "有未保存的修改，保存后生效。": "You have unsaved changes. Save to apply them.",
   "最多关键词数量": "Maximum keyword count",
   "启动 arXiv 来源": "Enable arXiv source",
   "启动额外数据源": "Enable extra data sources",
@@ -126,11 +129,11 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "系统 / 历史维护": "System / History Maintenance",
   "历史维护": "History Maintenance",
   "导入旧版本历史、补全缺失字段并扫描遗漏论文。": "Import legacy history, repair missing fields, and scan for omitted papers.",
-  "系统 / 诊断": "System / Diagnostics",
+  "系统 / 运行诊断": "System / Run Diagnostics",
   "运行诊断": "Run Diagnostics",
   "查看正常每日研究、过去日报，以及所有任务的 LLM 与数据源健康记录。": "Review daily and past-report runs, plus LLM and data-source health from every task.",
-  "系统 / 数据分析": "System / Analytics",
-  "数据分析": "Analytics",
+  "系统 / 用量统计": "System / Usage Statistics",
+  "用量统计": "Usage Statistics",
   "查看已记录的 LLM Token 使用情况。": "Review recorded LLM token usage.",
   "系统 / 日志": "System / Logs",
   "运行日志": "Run Logs",
@@ -146,7 +149,6 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "保留阶段状态与问题摘要": "Stage state and issue summary are retained",
   "每日研究队列": "Daily Research Queue",
   "每日研究设置": "Daily Research Settings",
-  "修改后点击侧边栏的“保存所有更改”生效。": "Use “Save All Changes” in the sidebar to apply changes.",
   "生成 HTML 报告": "Generate HTML reports",
   "生成 Markdown 报告": "Generate Markdown reports",
   "报告包含全部论文": "Include all papers in reports",
@@ -175,7 +177,8 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "报告位置": "Report placement",
   "报告开头": "Beginning of report",
   "报告末尾": "End of report",
-  "生成 TL;DR": "Generate TL;DR",
+  "为每篇趋势论文生成 TL;DR": "Generate a TL;DR for each trend paper",
+  "用简短文字概括每篇入选论文的研究问题、方法和结论；关闭后趋势报告只保留标题、摘要和综合分析。": "Create a short summary of each selected paper's question, method, and findings. When disabled, trend reports keep titles, abstracts, and the overall analysis only.",
   "TL;DR 批大小": "TL;DR batch size",
   "输出格式": "Output Formats",
   "分析技能": "Analysis Skills",
@@ -210,7 +213,6 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "最低分数": "Minimum score",
   "仅收藏论文": "Favorites only",
   "搜索": "Search",
-  "填写条件后开始搜索。": "Set filters, then start a search.",
   "研究背景会用于评分和参考文献关键词提取。": "Research context is used for scoring and reference-keyword extraction.",
   "主关键词": "Primary Keywords",
   "主关键词参与资格判定与排序。": "Primary keywords take part in qualification and ranking.",
@@ -334,6 +336,8 @@ const state = {
   pageData: {},
   renderToken: 0,
   language: window.localStorage.getItem("adr-modern-language") === "en" ? "en" : "zh",
+  theme: window.localStorage.getItem("adr-modern-theme") === "dark" ? "dark" : "light",
+  configurationDirty: false,
   translationIndex: new Map(),
   originalText: new WeakMap(),
   originalAttributes: new WeakMap(),
@@ -405,6 +409,22 @@ function renderLanguageButton() {
   if (button) button.textContent = state.language === "en" ? "中文" : "English";
 }
 
+function applyTheme() {
+  const theme = state.theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+  const color = theme === "dark" ? "#111827" : "#f7f9fc";
+  $("meta[name='theme-color']")?.setAttribute("content", color);
+  const button = $("#theme-button");
+  if (button) button.textContent = theme === "dark" ? localeText("浅色模式", "Light mode") : localeText("深色模式", "Dark mode");
+}
+
+function toggleTheme() {
+  state.theme = state.theme === "dark" ? "light" : "dark";
+  window.localStorage.setItem("adr-modern-theme", state.theme);
+  applyTheme();
+}
+
 function applyLocale(root = document) {
   localizeRoot(root);
   renderLanguageButton();
@@ -446,6 +466,7 @@ function toggleLanguage() {
     showAuth(state.auth || { enabled: true, configured: false });
   }
   applyLocale(document);
+  applyTheme();
 }
 
 function escapeHtml(value) {
@@ -500,6 +521,34 @@ function pageGroup(page) {
 
 function configValue(key, fallback = "") {
   return state.draft.config[key] ?? state.settings?.config?.[key] ?? fallback;
+}
+
+function hasUnsavedConfiguration() {
+  return state.configurationDirty
+    || Object.keys(state.draft.config).length > 0
+    || Object.keys(state.draft.env).length > 0
+    || state.draft.clearEnv.size > 0;
+}
+
+function updateConfigurationDirtyIndicator() {
+  const dirty = hasUnsavedConfiguration();
+  const saveButton = $("#save-button");
+  if (saveButton) {
+    saveButton.classList.toggle("has-unsaved", dirty);
+    saveButton.textContent = dirty
+      ? localeText("保存所有更改 · 有未保存修改", "Save All Changes · Unsaved")
+      : localeText("保存所有更改", "Save All Changes");
+  }
+  const status = $("#file-status");
+  if (status) status.textContent = dirty
+    ? localeText("配置有未保存修改", "Configuration has unsaved changes")
+    : localeText(".env 与 config.json 已加载", ".env and config.json loaded");
+  $$('[data-save-hint]').forEach((item) => { item.hidden = !dirty; });
+}
+
+function markConfigurationDirty() {
+  state.configurationDirty = true;
+  updateConfigurationDirtyIndicator();
 }
 
 function envValue(key, fallback = "") {
@@ -619,7 +668,10 @@ function pageHeader() {
 
 function section(title, body, options = {}) {
   const icon = options.icon ? `${escapeHtml(options.icon)} ` : "";
-  return `<section class="section-card ${options.className || ""}"><div class="section-heading"><h2>${icon}${escapeHtml(title)}</h2>${options.hint ? `<p>${escapeHtml(options.hint)}</p>` : ""}</div>${body}</section>`;
+  const configurationHint = options.saveHint === false || pageGroup(state.page)?.id !== "configuration"
+    ? ""
+    : `<p class="save-hint" data-save-hint ${hasUnsavedConfiguration() ? "" : "hidden"}>有未保存的修改，保存后生效。</p>`;
+  return `<section class="section-card ${options.className || ""}"><div class="section-heading"><h2>${icon}${escapeHtml(title)}</h2>${options.hint ? `<p>${escapeHtml(options.hint)}</p>` : ""}</div>${body}${configurationHint}</section>`;
 }
 
 function divider() { return '<div class="section-divider"></div>'; }
@@ -686,6 +738,7 @@ function bindFields(root = document) {
       } else {
         state.draft.config[key] = value;
       }
+      markConfigurationDirty();
       if (element.type === "range") {
         const output = $$('[data-range-output]', root)
           .find((item) => item.dataset.rangeOutput === element.dataset.rangeKey);
@@ -694,7 +747,7 @@ function bindFields(root = document) {
         // browser as the slider moves.
         if (output) output.textContent = element.value;
       }
-      if (element.dataset.redraw === "1") renderPage();
+      if (element.dataset.redraw === "1") renderPage({ preserveScroll: true });
     });
   });
 }
@@ -859,7 +912,7 @@ async function renderDaily(token) {
 }
 
 function renderDailySettings() {
-  return `<details class="settings-expander"><summary>⚙️ 每日研究设置</summary><p class="hint-text">修改后点击侧边栏的“保存所有更改”生效。</p><div class="form-grid three">${field({ label: "生成 HTML 报告", key: "enable_html_report", type: "checkbox", fallback: true })}${field({ label: "生成 Markdown 报告", key: "enable_markdown_report", type: "checkbox", fallback: true })}${field({ label: "报告包含全部论文", key: "include_all_in_report", type: "checkbox", fallback: true })}</div><div class="form-grid two">${field({ label: "本次最多处理论文数（0 不限）", key: "daily_max_papers_per_run", type: "number", min: 0, max: 100000, step: 1, fallback: 200 })}${field({ label: "每日运行时间", key: "daily_run_time", type: "time", fallback: "12:00" })}</div></details>`;
+  return section("每日研究设置", `<div class="form-grid three">${field({ label: "生成 HTML 报告", key: "enable_html_report", type: "checkbox", fallback: true })}${field({ label: "生成 Markdown 报告", key: "enable_markdown_report", type: "checkbox", fallback: true })}${field({ label: "报告包含全部论文", key: "include_all_in_report", type: "checkbox", fallback: true })}</div><div class="form-grid two">${field({ label: "本次最多处理论文数（0 不限）", key: "daily_max_papers_per_run", type: "number", min: 0, max: 100000, step: 1, fallback: 200 })}${field({ label: "每日运行时间", key: "daily_run_time", type: "time", fallback: "12:00" })}</div>`, { icon: "⚙️", saveHint: false });
 }
 
 function compactTaskNotice(status) {
@@ -1163,7 +1216,7 @@ async function renderReports(token) {
     state.pageData.reportSelections[reportGroupKey(report.type, report.source)] = report.id;
     renderPage();
   };
-  root.innerHTML = `${pageHeader()}${section("报告浏览", `<div class="toolbar"><label class="toggle-field"><span>显示非 arXiv 来源报告</span><input id="report-non-arxiv" type="checkbox" ${showNonArxiv ? "checked" : ""}/><i></i></label><button id="reports-refresh" class="secondary-button">刷新列表</button></div><div class="report-grid">${reportPicker("每日研究", "📅", "daily", reports.daily, selected)}${reportPicker("趋势研究", "🔬", "trend", reports.trend, selected)}${reportPicker("关键词趋势", "📈", "keyword_trend", reports.keyword_trend, selected)}</div>`, { icon: "📚" })}${selected ? `<div id="report-preview" class="loading">正在加载报告预览…</div>` : section("报告预览", '<p class="empty-state">尚未生成可查看的报告。</p>')}`;
+  root.innerHTML = `${pageHeader()}${section("报告浏览", `<div class="toolbar"><label class="toggle-field"><span>显示非 arXiv 来源报告</span><input id="report-non-arxiv" type="checkbox" ${showNonArxiv ? "checked" : ""}/><i></i></label><button id="reports-refresh" class="secondary-button">刷新列表</button></div><div class="report-grid">${reportPicker("每日研究", "📅", "daily", reports.daily, selected)}${reportPicker("趋势研究", "🔬", "trend", reports.trend, selected)}${reportPicker("关键词趋势", "📈", "keyword_trend", reports.keyword_trend, selected)}</div>`, { icon: "📚" })}${selected ? `<div id="report-preview" class="loading">正在加载报告预览…</div>` : section("报告预览", '<p class="report-empty-state">尚未生成可查看的报告。</p>')}`;
   bindCommon(root);
   $("#report-non-arxiv").addEventListener("change", (event) => { state.pageData.showNonArxiv = event.target.checked; state.pageData.selectedReport = ""; state.pageData.reportSelections = {}; renderPage(); });
   $("#reports-refresh").addEventListener("click", () => { state.pageData.selectedReport = ""; state.pageData.reportSelections = {}; renderPage(); });
@@ -1497,17 +1550,17 @@ function validatedCustomJournalSource(raw, data) {
 
 function bindSources(root) {
   const data = ensureSourceState();
-  $("#source-arxiv", root)?.addEventListener("change", (event) => { data.arxiv = event.target.checked; renderPage(); });
-  $("#extra-enabled", root)?.addEventListener("change", (event) => { data.extraEnabled = event.target.checked; renderPage(); });
+  $("#source-arxiv", root)?.addEventListener("change", (event) => { data.arxiv = event.target.checked; markConfigurationDirty(); renderPage({ preserveScroll: true }); });
+  $("#extra-enabled", root)?.addEventListener("change", (event) => { data.extraEnabled = event.target.checked; markConfigurationDirty(); renderPage({ preserveScroll: true }); });
   bindTagSelector(root, "source-domains", (value) => {
     if (!value || data.domains.includes(value)) return;
-    data.domains.push(value); renderPage();
-  }, (value) => { data.domains = data.domains.filter((item) => item !== value); renderPage(); });
+    data.domains.push(value); markConfigurationDirty(); renderPage({ preserveScroll: true });
+  }, (value) => { data.domains = data.domains.filter((item) => item !== value); markConfigurationDirty(); renderPage({ preserveScroll: true }); });
   bindTagSelector(root, "extra-builtins", (value) => {
     if (!value || data.builtins.includes(value)) return;
-    data.builtins.push(value); renderPage();
-  }, (value) => { data.builtins = data.builtins.filter((item) => item !== value); renderPage(); });
-  $$('[data-remove-custom]', root).forEach((button) => button.addEventListener("click", () => { data.custom.splice(Number(button.dataset.removeCustom), 1); renderPage(); }));
+    data.builtins.push(value); markConfigurationDirty(); renderPage({ preserveScroll: true });
+  }, (value) => { data.builtins = data.builtins.filter((item) => item !== value); markConfigurationDirty(); renderPage({ preserveScroll: true }); });
+  $$('[data-remove-custom]', root).forEach((button) => button.addEventListener("click", () => { data.custom.splice(Number(button.dataset.removeCustom), 1); markConfigurationDirty(); renderPage({ preserveScroll: true }); }));
   $("#custom-add", root)?.addEventListener("click", () => {
     try {
       const candidate = validatedCustomJournalSource({
@@ -1517,7 +1570,8 @@ function bindSources(root) {
         issn: $("#custom-issn").value.split(","),
       }, data);
       data.custom.push(candidate);
-      renderPage();
+      markConfigurationDirty();
+      renderPage({ preserveScroll: true });
     } catch (error) {
       toast(error.message, "error");
     }
@@ -1676,13 +1730,16 @@ async function renderApi(_token) {
     const kind = button.dataset.testThird;
     testConnection(kind, { api_key: state.draft.env[thirdPartyKeys[kind]] }, `${kind}-test-result`);
   }));
-  $("#openalex-enabled", root)?.addEventListener("change", (event) => { state.draft.env.ENABLE_OPENALEX = event.target.checked ? "true" : "false"; renderPage(); });
-  $("#semantic-enabled", root)?.addEventListener("change", (event) => { state.draft.env.ENABLE_SEMANTIC_SCHOLAR_TLDR = event.target.checked ? "true" : "false"; renderPage(); });
+  $("#openalex-enabled", root)?.addEventListener("change", (event) => { state.draft.env.ENABLE_OPENALEX = event.target.checked ? "true" : "false"; markConfigurationDirty(); renderPage({ preserveScroll: true }); });
+  $("#semantic-enabled", root)?.addEventListener("change", (event) => { state.draft.env.ENABLE_SEMANTIC_SCHOLAR_TLDR = event.target.checked ? "true" : "false"; markConfigurationDirty(); renderPage({ preserveScroll: true }); });
   ["cheap", "smart"].forEach((role) => $("#" + role + "-provider", root)?.addEventListener("change", (event) => {
     const urls = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", ollama: "http://127.0.0.1:11434/v1", zhipu: "https://open.bigmodel.cn/api/paas/v4", custom: "" };
     const key = `${role === "cheap" ? "CHEAP_LLM" : "SMART_LLM"}__BASE_URL`;
-    if (event.target.value !== "custom") state.draft.env[key] = urls[event.target.value];
-    renderPage();
+    if (event.target.value !== "custom") {
+      state.draft.env[key] = urls[event.target.value];
+      markConfigurationDirty();
+    }
+    renderPage({ preserveScroll: true });
   }));
 }
 
@@ -2243,7 +2300,17 @@ function analyticsRangeControl(values) {
     ["24h", "24 小时内"], ["today", "当天"], ["3d", "3 天"],
     ["7d", "7 天"], ["14d", "14 天"], ["30d", "30 天"], ["custom", "自定义时间段"],
   ];
-  return `<div class="analytics-range-control"><span class="analytics-range-label">时间段</span><div class="segmented-control" role="group" aria-label="时间段">${choices.map(([value, label]) => `<button type="button" class="segmented-button ${values.range === value ? "is-active" : ""}" data-analytics-range="${value}" aria-pressed="${values.range === value}">${escapeHtml(label)}</button>`).join("")}</div>${values.range === "custom" ? `<div class="form-grid two analytics-custom-range"><label class="form-field"><span>开始日期</span><input id="analytics-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="analytics-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><div class="action-row analytics-custom-action"><button id="analytics-custom-apply" type="button" class="secondary-button">应用时间段</button></div>` : ""}</div>`;
+  return `<div class="analytics-range-control"><div class="segmented-control" role="group" aria-label="时间段">${choices.map(([value, label]) => `<button type="button" class="segmented-button ${values.range === value ? "is-active" : ""}" data-analytics-range="${value}" aria-pressed="${values.range === value}">${escapeHtml(label)}</button>`).join("")}</div>${values.range === "custom" ? `<div class="form-grid two analytics-custom-range"><label class="form-field"><span>开始日期</span><input id="analytics-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="analytics-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><div class="action-row analytics-custom-action"><button id="analytics-custom-apply" type="button" class="secondary-button">应用时间段</button></div>` : ""}</div>`;
+}
+
+function usageSummaryTable(summary) {
+  const rows = [
+    ["输入 tokens", formatNumber(summary.prompt)],
+    ["输出 tokens", formatNumber(summary.completion)],
+    ["合计 tokens", formatNumber(summary.total)],
+    ["涉及运行", formatNumber(summary.runs)],
+  ];
+  return `<div class="table-wrap usage-summary-table"><table><tbody>${rows.map(([label, value]) => `<tr><th scope="row">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 async function renderAnalytics(token) {
@@ -2262,20 +2329,21 @@ async function renderAnalytics(token) {
   const summary = data.summary || { prompt: 0, completion: 0, total: 0, runs: 0 };
   const hasUsage = Boolean(data.available && ((data.series || []).length || Number(summary.runs) > 0));
   const usage = hasUsage
-    ? metrics([
-      { label: "所选输入 tokens", value: formatNumber(summary.prompt), help: "" },
-      { label: "所选输出 tokens", value: formatNumber(summary.completion), help: "" },
-      { label: "所选合计 tokens", value: formatNumber(summary.total), help: "" },
-      { label: "涉及运行", value: formatNumber(summary.runs), help: "" },
-    ])
+    ? usageSummaryTable(summary)
     : '<p class="empty-state">所选时间段内暂无用量数据——完成一次每日研究、补充任务或趋势分析后，这里会出现统计。</p>';
   const trend = hasUsage
     ? tokenTrendChart(data.series || [], data.window || {})
     : '<p class="empty-state">所选时间段内没有可绘制的 Token 使用趋势。</p>';
   const heatmap = (data.heatmap_daily || []).length
-    ? `${divider()}${section("每日用量热力图（近一年）", tokenHeatmap(data.heatmap_daily || []), { icon: "🗓" })}`
-    : "";
-  root.innerHTML = `${pageHeader()}${section("LLM Token 用量", `${control}${usage}`, { icon: "📊" })}${divider()}${section("用量趋势", trend, { icon: "📈" })}${heatmap}${divider()}${section("按模型汇总", pagedTable("analytics-models", [{ label: "模型", key: "model" }, { label: "输入 tokens", value: (row) => formatNumber(row.prompt) }, { label: "输出 tokens", value: (row) => formatNumber(row.completion) }, { label: "总 tokens", value: (row) => formatNumber(row.total) }], data.models || [], { empty: "所选时间段内暂无模型使用记录。" }), { icon: "🧠" })}`;
+    ? tokenHeatmap(data.heatmap_daily || [])
+    : '<p class="report-empty-state">暂无历史 Token 使用记录。</p>';
+  const modelTable = pagedTable("analytics-models", [
+    { label: "模型", key: "model" },
+    { label: "输入 tokens", value: (row) => formatNumber(row.prompt) },
+    { label: "输出 tokens", value: (row) => formatNumber(row.completion) },
+    { label: "总 tokens", value: (row) => formatNumber(row.total) },
+  ], data.models || [], { empty: "所选时间段内暂无模型使用记录。" });
+  root.innerHTML = `${pageHeader()}<section class="section-card analytics-statistics-card">${heatmap}<div class="analytics-statistics-block">${control}${usage}</div><div class="analytics-statistics-block trend-chart-block">${trend}</div><div class="analytics-statistics-block">${modelTable}</div></section>`;
   bindCommon(root);
   $$('[data-analytics-range]', root).forEach((button) => button.addEventListener("click", () => {
     state.pageData.analytics = { ...values, range: button.dataset.analyticsRange };
@@ -2312,7 +2380,7 @@ async function renderLogs(token) {
   state.pageData.selectedLog = selected;
   const logLabel = (item) => `${item.name}  [${formatTime(item.modified_at).slice(5, 16)}  ${Math.round(Number(item.size_bytes) / 1024)} KB]`;
   const selector = (id, title, rows) => `<div class="log-select-field"><span>${escapeHtml(title)}</span>${scrollSelect({ id, rows, selected, label: logLabel, optionAttribute: "data-log-select-option", valueAttribute: "data-log-id" })}</div>`;
-  root.innerHTML = `${pageHeader()}<div class="log-selector-grid">${selector("log-system-select", "📌 系统日志", systemLogs)}${selector("log-run-select", "📀 运行日志", runLogs)}${selector("log-other-select", "📄 其他日志", otherLogs)}</div>${selected && !state.pageData.logClosed ? '<div id="log-content" class="loading">正在读取日志内容…</div>' : '<p class="empty-state">选择一个日志文件后可在这里查看内容。</p>'}`;
+  root.innerHTML = `${pageHeader()}<section class="section-card log-selector-card"><div class="log-selector-grid">${selector("log-system-select", "📌 系统日志", systemLogs)}${selector("log-run-select", "📀 运行日志", runLogs)}${selector("log-other-select", "📄 其他日志", otherLogs)}</div></section>${selected && !state.pageData.logClosed ? '<div id="log-content" class="loading">正在读取日志内容…</div>' : '<p class="report-empty-state">选择一个日志文件后可在这里查看内容。</p>'}`;
   $$('[data-log-select-option]', root).forEach((button) => button.addEventListener("click", () => {
     if (!button.dataset.logId) return;
     state.pageData.selectedLog = button.dataset.logId;
@@ -2466,7 +2534,9 @@ async function saveAll(showMessage = true) {
     const result = await api("/api/settings", { method: "PUT", body: { config: normalizeForSave(), env: state.draft.env, clear_env: Array.from(state.draft.clearEnv) } });
     state.settings = result;
     state.draft = { config: {}, env: {}, clearEnv: new Set() };
+    state.configurationDirty = false;
     state.pageData.sources = undefined;
+    updateConfigurationDirtyIndicator();
     if (showMessage) toast("配置已保存。", "success");
     return result;
   } catch (error) {
@@ -2517,7 +2587,9 @@ const PAGE_RENDERERS = {
   logs: renderLogs,
 };
 
-async function renderPage() {
+async function renderPage(options = {}) {
+  const preserveScroll = Boolean(options.preserveScroll);
+  const scrollTop = preserveScroll ? window.scrollY : 0;
   clearTimers();
   if (state.page !== "reports") {
     state.reportMarkAbortController?.abort();
@@ -2528,7 +2600,13 @@ async function renderPage() {
   const renderer = PAGE_RENDERERS[state.page] || renderDaily;
   try {
     await renderer(token);
-    if (token === state.renderToken) applyLocale($("#page-root"));
+    if (token === state.renderToken) {
+      applyLocale($("#page-root"));
+      updateConfigurationDirtyIndicator();
+      if (preserveScroll) {
+        window.requestAnimationFrame(() => window.scrollTo(0, scrollTop));
+      }
+    }
   } catch (error) {
     if (token === state.renderToken) {
       $("#page-root").innerHTML = `${pageHeader()}<section class="section-card"><p class="error-message">${escapeHtml(error.message)}</p><button class="secondary-button" id="page-retry">重试</button></section>`;
@@ -2542,8 +2620,9 @@ function showApp() {
   $("#auth").hidden = true;
   $("#app").hidden = false;
   renderNavigation();
-  $("#file-status").textContent = ".env 与 config.json 已加载";
+  updateConfigurationDirtyIndicator();
   applyLocale(document);
+  applyTheme();
 }
 
 function showAuth(auth) {
@@ -2608,12 +2687,14 @@ async function initialize() {
   $("#setup-form").addEventListener("submit", setupSubmit);
   $("#skip-auth-button").addEventListener("click", skipAuth);
   $("#language-button").addEventListener("click", toggleLanguage);
+  $("#theme-button").addEventListener("click", toggleTheme);
   $("#logout-button").addEventListener("click", logout);
   $("#save-button").addEventListener("click", () => saveAll(true));
-  $("#reload-button").addEventListener("click", async () => { try { await loadSettings(); state.draft = { config: {}, env: {}, clearEnv: new Set() }; state.pageData.sources = undefined; toast("配置已重新加载。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); } });
+  $("#reload-button").addEventListener("click", async () => { try { await loadSettings(); state.draft = { config: {}, env: {}, clearEnv: new Set() }; state.configurationDirty = false; state.pageData.sources = undefined; updateConfigurationDirtyIndicator(); toast("配置已重新加载。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); } });
   $("#restart-worker-button").addEventListener("click", async () => { if (!window.confirm("确认请求重启研究容器？正在运行的任务会由容器重启策略处理。")) return; try { await api("/api/system/restart-worker", { method: "POST", body: {} }); toast("已发送研究容器重启请求。", "success"); } catch (error) { toast(error.message, "error"); } });
   window.addEventListener("hashchange", () => { readLocation(); renderNavigation(); renderPage(); });
   try {
+    applyTheme();
     await loadTranslations().catch(() => null);
     state.auth = await api("/api/auth/status");
     if (!state.auth.authenticated) { showAuth(state.auth); return; }
