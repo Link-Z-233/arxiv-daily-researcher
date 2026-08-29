@@ -421,6 +421,46 @@ function renderTrendForm(templates = []) {
   };
 }
 
+function parseTrendKeywords(value) {
+  const source = String(value || "").trim();
+  if (!source) return [];
+  const words = [];
+  let current = "";
+  let quote = "";
+  let escaping = false;
+  for (const character of source) {
+    if (escaping) {
+      current += character;
+      escaping = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaping = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = "";
+      else current += character;
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (current) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += character;
+  }
+  if (escaping || quote) throw new Error("关键词中的引号或转义符不完整。");
+  if (current) words.push(current);
+  return words;
+}
+
 async function renderTrend(token) {
   const root = $("#page-root");
   root.innerHTML = `${pageHeader()}<div class="loading">正在读取趋势任务状态…</div>`;
@@ -465,8 +505,15 @@ async function renderTrend(token) {
     preserveTrend(); const values = state.pageData.trend;
     if (!values.keywords.trim()) return toast("请填写至少一个研究关键词。", "error");
     if (!values.date_from || !values.date_to || values.date_from > values.date_to) return toast("请填写有效的日期范围。", "error");
+    let keywords;
     try {
-      await api("/api/tasks/trend_research", { method: "POST", body: { args: { keywords: values.keywords.match(/(?:[^\s"]+|"[^"]*")+/g) || [], date_from: values.date_from, date_to: values.date_to, categories: values.categories, sort_order: values.sort_order, max_results: values.max_results, analysis_prompt: values.analysis_prompt.trim() } } });
+      keywords = parseTrendKeywords(values.keywords);
+    } catch (error) {
+      toast(error.message, "error");
+      return;
+    }
+    try {
+      await api("/api/tasks/trend_research", { method: "POST", body: { args: { keywords, date_from: values.date_from, date_to: values.date_to, categories: values.categories, sort_order: values.sort_order, max_results: values.max_results, analysis_prompt: values.analysis_prompt.trim() } } });
       toast("趋势任务已加入队列。 "); renderPage();
     } catch (error) { toast(error.message, "error"); }
   });
