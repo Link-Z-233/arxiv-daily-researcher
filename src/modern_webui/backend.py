@@ -1148,13 +1148,15 @@ def analytics(days: int | None) -> dict[str, Any]:
         raise ModernWebUIError(f"读取数据分析失败：{exc}") from exc
 
 
-def _report_sort_key(path: Path) -> tuple[int, int, str]:
+def _report_sort_key(path: Path, modified_at: float | None = None) -> tuple[int, int, str]:
     stem = path.stem
     match = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})(?:_(\d+))?", stem)
     if match:
         micro = (match.group(5) or "").ljust(6, "0")
         digits = re.sub(r"\D", "", match.group(1) + match.group(2) + match.group(3) + match.group(4))
         return (1, int(digits + micro), path.name)
+    if modified_at is not None:
+        return (0, int(modified_at), path.name)
     try:
         return (0, int(path.stat().st_mtime), path.name)
     except OSError:
@@ -1162,7 +1164,14 @@ def _report_sort_key(path: Path) -> tuple[int, int, str]:
 
 
 def _report_token(path: Path, root: Path) -> str:
-    relative = path.resolve().relative_to(root.resolve()).as_posix().encode("utf-8")
+    # ``list_reports`` only hands us paths found below ``root``.  Avoid a
+    # costly pair of filesystem resolves for every report; this list is read
+    # frequently on NAS/WSL bind mounts.  The public token resolver retains
+    # its strict resolved-path containment check before serving a file.
+    try:
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+    except ValueError:
+        relative = path.resolve().relative_to(root.resolve()).as_posix().encode("utf-8")
     return base64.urlsafe_b64encode(relative).decode("ascii").rstrip("=")
 
 
@@ -1188,6 +1197,9 @@ def list_reports(show_non_arxiv: bool = False) -> dict[str, list[dict[str, Any]]
     groups: dict[str, list[dict[str, Any]]] = {"daily": [], "trend": [], "keyword_trend": []}
     if not root.is_dir():
         return groups
+    # Loading config.json (JSON5) once is significant on small NAS devices;
+    # source labels are shared by every report row in this response.
+    labels = _report_source_labels()
     daily_root = root / "daily_research" / "html"
     if daily_root.is_dir():
         for path in daily_root.rglob("*.html"):
@@ -1197,19 +1209,21 @@ def list_reports(show_non_arxiv: bool = False) -> dict[str, list[dict[str, Any]]
             source = relative.parts[0].lower() if len(relative.parts) > 1 else (re.match(r"(.+?)_Report_", path.stem, re.I).group(1).lower() if re.match(r"(.+?)_Report_", path.stem, re.I) else "unknown")
             if not show_non_arxiv and source != "arxiv":
                 continue
-            groups["daily"].append(_report_row(path, root, "daily", source))
+            groups["daily"].append(_report_row(path, root, "daily", source, labels=labels))
     trend_root = root / "trend_research" / "html"
     if trend_root.is_dir():
         for path in trend_root.rglob("*.html"):
             if path.is_file():
                 relative = path.relative_to(trend_root)
                 source = relative.parts[0] if len(relative.parts) > 1 else "trend"
-                groups["trend"].append(_report_row(path, root, "trend", source))
+                groups["trend"].append(_report_row(path, root, "trend", source, labels=labels))
     keyword_root = root / "keyword_trend" / "html"
     if keyword_root.is_dir():
         for path in keyword_root.glob("*.html"):
             if path.is_file():
-                groups["keyword_trend"].append(_report_row(path, root, "keyword_trend", "keyword_trend"))
+                groups["keyword_trend"].append(
+                    _report_row(path, root, "keyword_trend", "keyword_trend", labels=labels)
+                )
     for name, values in groups.items():
         values.sort(key=lambda item: item["sort_key"], reverse=True)
         _disambiguate_report_labels(values)
@@ -1218,16 +1232,24 @@ def list_reports(show_non_arxiv: bool = False) -> dict[str, list[dict[str, Any]]
     return groups
 
 
-def _report_row(path: Path, root: Path, report_type: str, source: str) -> dict[str, Any]:
+def _report_row(
+    path: Path,
+    root: Path,
+    report_type: str,
+    source: str,
+    *,
+    labels: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     try:
         stat = path.stat()
         mtime = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
         size = stat.st_size
+        modified_at = stat.st_mtime
     except OSError:
-        mtime, size = "", 0
+        mtime, size, modified_at = "", 0, None
     date_match = re.search(r"\d{4}-\d{2}-\d{2}", path.stem)
     source_key = str(source or "unknown").strip().lower() or "unknown"
-    labels = _report_source_labels()
+    labels = labels or _report_source_labels()
     return {
         "id": _report_token(path, root),
         "name": path.name,
@@ -1239,7 +1261,7 @@ def _report_row(path: Path, root: Path, report_type: str, source: str) -> dict[s
         "modified_at": mtime,
         "size_bytes": size,
         "metadata": _trend_report_metadata(path) if report_type == "trend" else None,
-        "sort_key": _report_sort_key(path),
+        "sort_key": _report_sort_key(path, modified_at),
     }
 
 
