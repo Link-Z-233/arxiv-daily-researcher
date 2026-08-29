@@ -1440,7 +1440,9 @@ function bindHistoryLaunchers(root) {
   $("#history-import", root)?.addEventListener("click", async () => {
     try {
       const selectedFullRepair = Boolean(configValue("legacy_import_full_repair_enabled", false));
-      await saveAll(false);
+      // Like the Streamlit control, this submits the live switch as a task
+      // argument.  It must not persist unrelated configuration edits merely
+      // because the operator starts an idle-time import.
       await api("/api/tasks/legacy_import", { method: "POST", body: { args: { full_repair: selectedFullRepair } } });
       toast("旧历史导入已加入闲时队列。 ");
       renderPage();
