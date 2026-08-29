@@ -505,7 +505,22 @@ async def accounts_get(request: Request) -> JSONResponse:
     _require_session(request)
     actor = _actor(request)
     config = _auth_config()
-    return JSONResponse({"enabled": config.enabled, "actor": actor, "is_owner": account_is_owner(config, actor), "items": [{"username": account.username, "role": "所有者" if account.is_owner else "管理员", "current": account.username == actor} for account in config.accounts]})
+    return JSONResponse(
+        {
+            "enabled": config.enabled,
+            "actor": actor,
+            "is_owner": account_is_owner(config, actor),
+            "items": [
+                {
+                    "username": account.username,
+                    "role": "所有者" if account.is_owner else "管理员",
+                    "is_owner": account.is_owner,
+                    "current": account.username == actor,
+                }
+                for account in config.accounts
+            ],
+        }
+    )
 
 
 async def account_change_password(request: Request) -> JSONResponse:
@@ -525,8 +540,10 @@ async def account_change_password(request: Request) -> JSONResponse:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="两次输入的密码不一致。")
     accounts = tuple(Account(item.username, hash_password(new_password) if item.username == actor else item.password_hash, item.is_owner) for item in config.accounts)
     _persist_accounts(accounts)
-    updated = next(item for item in accounts if item.username == actor)
-    request.session["account_marker"] = account_session_marker(updated)
+    # Changing a password invalidates the active browser session just as the
+    # Streamlit panel does.  The user explicitly authenticates with the new
+    # password instead of keeping a pre-change session alive.
+    request.session.clear()
     return JSONResponse({"ok": True})
 
 
@@ -573,6 +590,12 @@ async def account_delete(request: Request) -> JSONResponse:
     _require_session(request)
     _actor_name, config = _require_owner(request)
     payload = await _payload(request)
+    confirmed = str(payload.get("confirmed") or "").strip().lower()
+    if confirmed not in {"1", "true", "yes", "on"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请先确认删除该管理员账户。",
+        )
     target = str(payload.get("username") or "").strip()
     account = find_account(config, target)
     if account is None or account.is_owner:

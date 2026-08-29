@@ -126,6 +126,54 @@ class ModernWebUIAppTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         delete.assert_called_once_with("模板")
 
+    def test_account_removal_requires_confirmation_and_password_change_logs_out(self) -> None:
+        self.assertEqual(
+            self.client.post(
+                "/api/auth/setup",
+                json={
+                    "username": "owner_user",
+                    "password": "secret6",
+                    "password_confirmation": "secret6",
+                },
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/accounts/add",
+                json={
+                    "username": "other_user",
+                    "password": "secret7",
+                    "password_confirmation": "secret7",
+                },
+            ).status_code,
+            200,
+        )
+
+        missing_confirmation = self.client.post(
+            "/api/accounts/delete", json={"username": "other_user"}
+        )
+        self.assertEqual(missing_confirmation.status_code, 400)
+        self.assertIn("确认", missing_confirmation.json()["detail"])
+        self.assertEqual(
+            self.client.post(
+                "/api/accounts/delete",
+                json={"username": "other_user", "confirmed": True},
+            ).status_code,
+            200,
+        )
+
+        changed = self.client.post(
+            "/api/accounts/change-password",
+            json={
+                "current_password": "secret6",
+                "new_password": "newsecret6",
+                "password_confirmation": "newsecret6",
+            },
+        )
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(self.client.get("/api/settings").status_code, 401)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

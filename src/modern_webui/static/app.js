@@ -1391,16 +1391,21 @@ async function renderAccounts(token) {
     return;
   }
   const ownForm = `<form id="own-password-form" class="stack-form compact-form"><h3>修改我的密码</h3><label>当前密码<input name="current_password" type="password" required /></label><label>新密码<input name="new_password" type="password" minlength="6" required /></label><label>确认新密码<input name="password_confirmation" type="password" minlength="6" required /></label><button class="primary-button" type="submit">保存密码</button></form>`;
-  const ownerForms = data.is_owner ? `<div class="form-grid two"><form id="add-account-form" class="stack-form compact-form"><h3>新增管理员</h3><label>用户名<input name="username" required /></label><label>密码<input name="password" type="password" minlength="6" required /></label><label>确认密码<input name="password_confirmation" type="password" minlength="6" required /></label><button class="secondary-button" type="submit">新增账户</button></form><form id="reset-account-form" class="stack-form compact-form"><h3>重置管理员密码</h3><label>账户<select name="username">${data.items.filter((item) => !item.current).map((item) => `<option value="${escapeAttribute(item.username)}">${escapeHtml(item.username)}</option>`).join("")}</select></label><label>新密码<input name="new_password" type="password" minlength="6" required /></label><label>确认密码<input name="password_confirmation" type="password" minlength="6" required /></label><button class="secondary-button" type="submit">重置密码</button></form></div>${data.items.filter((item) => item.role !== "所有者").length ? `<div class="account-delete-list"><h3>删除管理员</h3>${data.items.filter((item) => item.role !== "所有者").map((item) => `<button class="danger-button compact-button" data-delete-account="${escapeAttribute(item.username)}">删除 ${escapeHtml(item.username)}</button>`).join(" ")}</div>` : ""}` : '<p class="hint-text">普通管理员可以修改自己的密码；账户所有者可管理其他管理员。</p>';
+  const secondaryAccounts = (data.items || []).filter((item) => !item.is_owner);
+  const accountOptions = secondaryAccounts.map((item) => `<option value="${escapeAttribute(item.username)}">${escapeHtml(item.username)}</option>`).join("");
+  const ownerForms = data.is_owner
+    ? `<form id="add-account-form" class="stack-form compact-form"><h3>新增管理员</h3><label>用户名<input name="username" required /></label><label>密码<input name="password" type="password" minlength="6" required /></label><label>确认密码<input name="password_confirmation" type="password" minlength="6" required /></label><button class="secondary-button" type="submit">新增账户</button></form>${secondaryAccounts.length ? `${divider()}<form id="reset-account-form" class="stack-form compact-form"><h3>重置管理员密码</h3><label>账户<select name="username">${accountOptions}</select></label><label>新密码<input name="new_password" type="password" minlength="6" required /></label><label>确认新密码<input name="password_confirmation" type="password" minlength="6" required /></label><button class="secondary-button" type="submit">重置密码</button></form>${divider()}<form id="delete-account-form" class="stack-form compact-form"><h3>删除管理员</h3><label>账户<select name="username">${accountOptions}</select></label><label class="toggle-field"><span>我已确认删除该管理员账户</span><input name="confirmed" type="checkbox"/><i></i></label><button class="danger-button" type="submit">删除管理员</button></form>` : '<p class="hint-text">尚无其他管理员账户可重置或删除。</p>'}`
+    : '<p class="hint-text">普通管理员可以修改自己的密码；账户所有者可管理其他管理员。</p>';
   root.innerHTML = `${pageHeader()}${section("账户列表", `${pagedTable("accounts", [{ label: "用户名", key: "username" }, { label: "角色", key: "role" }, { label: "当前账户", value: (row) => row.current ? "当前" : "—" }], data.items || [], { empty: "暂无账户" })}`, { icon: "👥" })}${divider()}${section("账户操作", `${ownForm}${divider()}${ownerForms}`, { icon: "🔐" })}`;
   bindCommon(root);
-  bindAccountForm("#own-password-form", "/api/accounts/change-password", () => toast("密码已修改。", "success"));
+  bindAccountForm("#own-password-form", "/api/accounts/change-password", () => {
+    toast("密码已修改，请使用新密码重新登录。", "success");
+    clearTimers();
+    window.setTimeout(() => window.location.reload(), 600);
+  });
   bindAccountForm("#add-account-form", "/api/accounts/add", () => { toast("管理员账户已创建。", "success"); renderPage(); });
   bindAccountForm("#reset-account-form", "/api/accounts/reset", () => toast("管理员密码已重置。", "success"));
-  $$('[data-delete-account]', root).forEach((button) => button.addEventListener("click", async () => {
-    if (!window.confirm(`确认删除管理员 ${button.dataset.deleteAccount}？`)) return;
-    try { await api("/api/accounts/delete", { method: "POST", body: { username: button.dataset.deleteAccount } }); toast("管理员已删除。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); }
-  }));
+  bindAccountForm("#delete-account-form", "/api/accounts/delete", () => { toast("管理员已删除。", "success"); renderPage(); });
 }
 
 function bindAccountForm(selector, endpoint, onSuccess) {
