@@ -10,11 +10,13 @@ from __future__ import annotations
 import json
 import sys
 import time
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from starlette import status
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
@@ -50,6 +52,22 @@ from utils.config_io import read_env, write_env  # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 _MAX_JSON_BYTES = 1_000_000
+
+
+async def _blocking_call(function: Any, /, *args: Any, **kwargs: Any) -> Any:
+    """Run legacy synchronous storage/network helpers outside Uvicorn's loop.
+
+    The modern UI deliberately shares the existing Streamlit backend helpers.
+    Those helpers perform SQLite access, report-directory walks, file writes and
+    occasional network connection tests synchronously.  Calling them directly
+    from an ``async`` endpoint blocks every other request served by this
+    process, which made the lightweight UI feel less responsive than expected.
+    """
+
+    if kwargs:
+        function = partial(function, *args, **kwargs)
+        return await run_in_threadpool(function)
+    return await run_in_threadpool(function, *args)
 
 
 def _auth_config():
@@ -165,9 +183,12 @@ async def setup_account(request: Request) -> JSONResponse:
     if config.enabled and _configured(config):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="管理员账户已经初始化。")
     if str(payload.get("action") or "") == "skip":
-        values = read_env()
-        values["WEBUI_AUTH_ENABLED"] = "false"
-        write_env(values)
+        def _skip_setup() -> None:
+            values = read_env()
+            values["WEBUI_AUTH_ENABLED"] = "false"
+            write_env(values)
+
+        await _blocking_call(_skip_setup)
         request.session.clear()
         return JSONResponse({"ok": True, "enabled": False})
     username = str(payload.get("username") or "").strip()
@@ -179,17 +200,21 @@ async def setup_account(request: Request) -> JSONResponse:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
     if password != confirmation:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="两次输入的密码不一致。")
-    owner = Account(username, hash_password(password), is_owner=True)
-    values = read_env()
-    values.update(
-        {
-            "WEBUI_AUTH_ENABLED": "true",
-            "WEBUI_ADMIN_USERNAME": owner.username,
-            "WEBUI_ADMIN_PASSWORD_HASH": owner.password_hash,
-            "WEBUI_ACCOUNTS": serialize_accounts((owner,)),
-        }
-    )
-    write_env(values)
+    owner = await _blocking_call(lambda: Account(username, hash_password(password), is_owner=True))
+
+    def _save_setup() -> None:
+        values = read_env()
+        values.update(
+            {
+                "WEBUI_AUTH_ENABLED": "true",
+                "WEBUI_ADMIN_USERNAME": owner.username,
+                "WEBUI_ADMIN_PASSWORD_HASH": owner.password_hash,
+                "WEBUI_ACCOUNTS": serialize_accounts((owner,)),
+            }
+        )
+        write_env(values)
+
+    await _blocking_call(_save_setup)
     request.session.clear()
     request.session["username"] = owner.username
     request.session["account_marker"] = account_session_marker(owner)
@@ -213,7 +238,9 @@ async def login(request: Request) -> JSONResponse:
     if remaining:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"登录尝试过于频繁，请在 {remaining} 秒后重试。")
     account = find_account(config, username)
-    password_ok = verify_password_hash(account.password_hash, password) if account else False
+    password_ok = (
+        await _blocking_call(verify_password_hash, account.password_hash, password) if account else False
+    )
     if account is None or password_ok is not True:
         _record_failed_attempt(username or config.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误。")
@@ -232,14 +259,19 @@ async def logout(request: Request) -> Response:
 
 async def settings_get(request: Request) -> JSONResponse:
     _require_session(request)
-    return JSONResponse(backend.public_settings())
+    return JSONResponse(await _blocking_call(backend.public_settings))
 
 
 async def settings_put(request: Request) -> JSONResponse:
     _require_session(request)
     payload = await _payload(request)
     try:
-        result = backend.save_settings(payload.get("config"), payload.get("env"), payload.get("clear_env"))
+        result = await _blocking_call(
+            backend.save_settings,
+            payload.get("config"),
+            payload.get("env"),
+            payload.get("clear_env"),
+        )
     except Exception as exc:
         raise _safe_error(exc) from exc
     return JSONResponse(result)
@@ -248,7 +280,7 @@ async def settings_put(request: Request) -> JSONResponse:
 async def restart_worker(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        backend.request_worker_restart()
+        await _blocking_call(backend.request_worker_restart)
     except Exception as exc:
         raise _safe_error(exc) from exc
     return JSONResponse({"ok": True})
@@ -260,7 +292,7 @@ async def status_get(request: Request) -> JSONResponse:
     if kind not in {"daily", "past", "trend", "history"}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未知状态页面。")
     try:
-        return JSONResponse(backend.run_status(kind))
+        return JSONResponse(await _blocking_call(backend.run_status, kind))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -268,7 +300,7 @@ async def status_get(request: Request) -> JSONResponse:
 async def daily_status(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse(backend.run_status("daily"))
+        return JSONResponse(await _blocking_call(backend.run_status, "daily"))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -278,7 +310,7 @@ async def start_task(request: Request) -> JSONResponse:
     mode = request.path_params.get("mode", "")
     payload = await _payload(request)
     try:
-        return JSONResponse(backend.enqueue_task(mode, payload.get("args")))
+        return JSONResponse(await _blocking_call(backend.enqueue_task, mode, payload.get("args")))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -286,7 +318,7 @@ async def start_task(request: Request) -> JSONResponse:
 async def daily_start(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse(backend.enqueue_task("daily_research"))
+        return JSONResponse(await _blocking_call(backend.enqueue_task, "daily_research"))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -294,7 +326,7 @@ async def daily_start(request: Request) -> JSONResponse:
 async def stop_tasks(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        pids = backend.stop_active_tasks()
+        pids = await _blocking_call(backend.stop_active_tasks)
     except Exception as exc:
         raise _safe_error(exc) from exc
     return JSONResponse({"ok": True, "pids": pids})
@@ -303,7 +335,7 @@ async def stop_tasks(request: Request) -> JSONResponse:
 async def history_get(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse(backend.history_status())
+        return JSONResponse(await _blocking_call(backend.history_status))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -311,7 +343,9 @@ async def history_get(request: Request) -> JSONResponse:
 async def history_retry(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse(backend.retry_history_task(request.path_params.get("request_id", "")))
+        return JSONResponse(
+            await _blocking_call(backend.retry_history_task, request.path_params.get("request_id", ""))
+        )
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -320,7 +354,7 @@ async def papers_get(request: Request) -> JSONResponse:
     _require_session(request)
     filters = {key: value for key, value in request.query_params.items()}
     try:
-        return JSONResponse(backend.paper_search(filters))
+        return JSONResponse(await _blocking_call(backend.paper_search, filters))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -328,7 +362,7 @@ async def papers_get(request: Request) -> JSONResponse:
 async def favorites_get(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse(backend.preferences_summary())
+        return JSONResponse(await _blocking_call(backend.preferences_summary))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -337,24 +371,24 @@ async def preference_put(request: Request) -> JSONResponse:
     _require_session(request)
     payload = await _payload(request)
     try:
-        return JSONResponse(backend.set_preference(payload))
+        return JSONResponse(await _blocking_call(backend.set_preference, payload))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
 
 async def learned_get(request: Request) -> JSONResponse:
     _require_session(request)
-    return JSONResponse(backend.learned_preference_terms())
+    return JSONResponse(await _blocking_call(backend.learned_preference_terms))
 
 
 async def extracted_keywords_get(request: Request) -> JSONResponse:
     _require_session(request)
-    return JSONResponse({"items": backend.extracted_keywords()})
+    return JSONResponse({"items": await _blocking_call(backend.extracted_keywords)})
 
 
 async def trend_templates_get(request: Request) -> JSONResponse:
     _require_session(request)
-    return JSONResponse({"items": backend.list_trend_prompt_templates()})
+    return JSONResponse({"items": await _blocking_call(backend.list_trend_prompt_templates)})
 
 
 async def trend_templates_put(request: Request) -> JSONResponse:
@@ -362,7 +396,11 @@ async def trend_templates_put(request: Request) -> JSONResponse:
     payload = await _payload(request)
     try:
         return JSONResponse(
-            {"items": backend.save_trend_prompt_template(payload.get("name"), payload.get("text"))}
+            {
+                "items": await _blocking_call(
+                    backend.save_trend_prompt_template, payload.get("name"), payload.get("text")
+                )
+            }
         )
     except Exception as exc:
         raise _safe_error(exc) from exc
@@ -372,7 +410,9 @@ async def trend_templates_delete(request: Request) -> JSONResponse:
     _require_session(request)
     payload = await _payload(request)
     try:
-        return JSONResponse({"items": backend.delete_trend_prompt_template(payload.get("name"))})
+        return JSONResponse(
+            {"items": await _blocking_call(backend.delete_trend_prompt_template, payload.get("name"))}
+        )
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -382,7 +422,7 @@ async def diagnostics_get(request: Request) -> JSONResponse:
     raw_days = request.query_params.get("days", "7")
     try:
         days = None if raw_days == "all" else int(raw_days)
-        return JSONResponse(backend.diagnostics(days))
+        return JSONResponse(await _blocking_call(backend.diagnostics, days))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -392,20 +432,22 @@ async def analytics_get(request: Request) -> JSONResponse:
     raw_days = request.query_params.get("days", "30")
     try:
         days = None if raw_days == "all" else int(raw_days)
-        return JSONResponse(backend.analytics(days))
+        return JSONResponse(await _blocking_call(backend.analytics, days))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
 
 async def reports_get(request: Request) -> JSONResponse:
     _require_session(request)
-    return JSONResponse(backend.list_reports(request.query_params.get("non_arxiv") == "1"))
+    return JSONResponse(
+        await _blocking_call(backend.list_reports, request.query_params.get("non_arxiv") == "1")
+    )
 
 
 async def report_file(request: Request) -> FileResponse:
     _require_session(request)
     try:
-        path, media_type = backend.report_file(request.path_params.get("token", ""))
+        path, media_type = await _blocking_call(backend.report_file, request.path_params.get("token", ""))
     except Exception as exc:
         raise _safe_error(exc) from exc
     return FileResponse(path, media_type=media_type, content_disposition_type="inline")
@@ -414,7 +456,9 @@ async def report_file(request: Request) -> FileResponse:
 async def report_papers_get(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse({"items": backend.report_papers(request.path_params.get("token", ""))})
+        return JSONResponse(
+            {"items": await _blocking_call(backend.report_papers, request.path_params.get("token", ""))}
+        )
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -422,7 +466,7 @@ async def report_papers_get(request: Request) -> JSONResponse:
 async def backups_get(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse({"items": backend.local_backups()})
+        return JSONResponse({"items": await _blocking_call(backend.local_backups)})
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -430,7 +474,7 @@ async def backups_get(request: Request) -> JSONResponse:
 async def backup_create(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse(backend.create_local_backup())
+        return JSONResponse(await _blocking_call(backend.create_local_backup))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -438,7 +482,7 @@ async def backup_create(request: Request) -> JSONResponse:
 async def backup_export(request: Request) -> Response:
     _require_session(request)
     try:
-        content, filename = backend.export_database_backup()
+        content, filename = await _blocking_call(backend.export_database_backup)
     except Exception as exc:
         raise _safe_error(exc) from exc
     return Response(content, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -449,7 +493,7 @@ async def backup_restore(request: Request) -> JSONResponse:
     filename = Path(request.headers.get("x-file-name", "backup.zip")).name
     body = await request.body()
     try:
-        return JSONResponse(backend.restore_database_backup(body, filename))
+        return JSONResponse(await _blocking_call(backend.restore_database_backup, body, filename))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -457,7 +501,7 @@ async def backup_restore(request: Request) -> JSONResponse:
 async def configuration_export(request: Request) -> Response:
     _require_session(request)
     try:
-        content, filename = backend.export_configuration()
+        content, filename = await _blocking_call(backend.export_configuration)
     except Exception as exc:
         raise _safe_error(exc) from exc
     return Response(content, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -467,7 +511,9 @@ async def webdav_post(request: Request) -> JSONResponse:
     _require_session(request)
     payload = await _payload(request)
     try:
-        return JSONResponse(backend.webdav_operation(str(payload.get("operation") or "")))
+        return JSONResponse(
+            await _blocking_call(backend.webdav_operation, str(payload.get("operation") or ""))
+        )
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -476,20 +522,22 @@ async def connection_test(request: Request) -> JSONResponse:
     _require_session(request)
     payload = await _payload(request)
     try:
-        return JSONResponse(backend.connection_test(request.path_params.get("kind", ""), payload))
+        return JSONResponse(
+            await _blocking_call(backend.connection_test, request.path_params.get("kind", ""), payload)
+        )
     except Exception as exc:
         raise _safe_error(exc) from exc
 
 
 async def logs_get(request: Request) -> JSONResponse:
     _require_session(request)
-    return JSONResponse({"items": backend.list_logs()})
+    return JSONResponse({"items": await _blocking_call(backend.list_logs)})
 
 
 async def log_get(request: Request) -> JSONResponse:
     _require_session(request)
     try:
-        return JSONResponse(backend.read_log(request.path_params.get("token", "")))
+        return JSONResponse(await _blocking_call(backend.read_log, request.path_params.get("token", "")))
     except Exception as exc:
         raise _safe_error(exc) from exc
 
@@ -532,14 +580,28 @@ async def account_change_password(request: Request) -> JSONResponse:
     confirmation = str(payload.get("password_confirmation") or "")
     config = _auth_config()
     account = find_account(config, actor)
-    if account is None or verify_password_hash(account.password_hash, current_password) is not True:
+    password_ok = (
+        await _blocking_call(verify_password_hash, account.password_hash, current_password)
+        if account
+        else False
+    )
+    if account is None or password_ok is not True:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不正确。")
     if message := validate_password(new_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
     if new_password != confirmation:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="两次输入的密码不一致。")
-    accounts = tuple(Account(item.username, hash_password(new_password) if item.username == actor else item.password_hash, item.is_owner) for item in config.accounts)
-    _persist_accounts(accounts)
+    accounts = await _blocking_call(
+        lambda: tuple(
+            Account(
+                item.username,
+                hash_password(new_password) if item.username == actor else item.password_hash,
+                item.is_owner,
+            )
+            for item in config.accounts
+        )
+    )
+    await _blocking_call(_persist_accounts, accounts)
     # Changing a password invalidates the active browser session just as the
     # Streamlit panel does.  The user explicitly authenticates with the new
     # password instead of keeping a pre-change session alive.
@@ -564,7 +626,8 @@ async def account_add(request: Request) -> JSONResponse:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该用户名已经存在。")
     if len(config.accounts) >= 20:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="账户数量已达到上限。")
-    _persist_accounts((*config.accounts, Account(username, hash_password(password))))
+    account = await _blocking_call(lambda: Account(username, hash_password(password)))
+    await _blocking_call(_persist_accounts, (*config.accounts, account))
     return JSONResponse({"ok": True})
 
 
@@ -582,7 +645,17 @@ async def account_reset(request: Request) -> JSONResponse:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
     if password != confirmation:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="两次输入的密码不一致。")
-    _persist_accounts(tuple(Account(item.username, hash_password(password) if item.username == target else item.password_hash, item.is_owner) for item in config.accounts))
+    accounts = await _blocking_call(
+        lambda: tuple(
+            Account(
+                item.username,
+                hash_password(password) if item.username == target else item.password_hash,
+                item.is_owner,
+            )
+            for item in config.accounts
+        )
+    )
+    await _blocking_call(_persist_accounts, accounts)
     return JSONResponse({"ok": True})
 
 
@@ -600,7 +673,10 @@ async def account_delete(request: Request) -> JSONResponse:
     account = find_account(config, target)
     if account is None or account.is_owner:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能删除所有者账户。")
-    _persist_accounts(tuple(item for item in config.accounts if item.username != target))
+    await _blocking_call(
+        _persist_accounts,
+        tuple(item for item in config.accounts if item.username != target),
+    )
     return JSONResponse({"ok": True})
 
 
