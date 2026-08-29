@@ -1458,33 +1458,106 @@ function localDateKey(value) {
 }
 
 function tokenHeatmap(rows) {
-  const values = new Map((rows || []).map((row) => [String(row.date || ""), Number(row.total || 0)]));
-  const max = Math.max(0, ...Array.from(values.values()));
+  // Keep the same Monday-to-Sunday calendar layout as Streamlit's activity
+  // view.  A simple uninterrupted cell sequence looked compact, but made it
+  // much harder to associate a spike with a real weekday or month.
+  const values = new Map((rows || []).map((row) => [String(row.date || ""), {
+    total: Number(row.total || 0), runs: Number(row.runs || 0),
+  }]));
   const today = new Date();
-  const cells = [];
-  for (let offset = 364; offset >= 0; offset -= 1) {
-    const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - offset);
-    const key = localDateKey(day);
-    const total = values.get(key) || 0;
-    const ratio = max ? total / max : 0;
-    const level = total === 0 ? 0 : ratio <= .25 ? 1 : ratio <= .5 ? 2 : ratio <= .75 ? 3 : 4;
-    cells.push(`<i class="heat-cell level-${level}" title="${escapeAttribute(`${key} · ${formatNumber(total)} Token`)}"></i>`);
+  const firstDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 364);
+  const start = new Date(firstDay);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  const weeks = Math.floor((today - start) / 86400000 / 7) + 1;
+  let maximum = 0;
+  for (let offset = 0; offset < 365; offset += 1) {
+    const day = new Date(firstDay.getFullYear(), firstDay.getMonth(), firstDay.getDate() + offset);
+    maximum = Math.max(maximum, values.get(localDateKey(day))?.total || 0);
   }
-  return `<div class="heatmap-wrap"><div class="heatmap" aria-label="近一年 Token 使用热力图">${cells.join("")}</div><div class="heatmap-legend"><span>少</span><i class="heat-cell level-0"></i><i class="heat-cell level-1"></i><i class="heat-cell level-2"></i><i class="heat-cell level-3"></i><i class="heat-cell level-4"></i><span>多</span></div></div>`;
+  const levelFor = (total) => {
+    if (!total || !maximum) return 0;
+    const ratio = total / maximum;
+    if (ratio <= .25) return 1;
+    if (ratio <= .5) return 2;
+    if (ratio <= .75) return 3;
+    return 4;
+  };
+  const weekdayLabels = ["周一", "", "周三", "", "周五", "", "周日"];
+  const monthCells = [];
+  let previousMonth = -1;
+  for (let week = 0; week < weeks; week += 1) {
+    const weekStart = new Date(start.getFullYear(), start.getMonth(), start.getDate() + week * 7);
+    const month = weekStart.getMonth();
+    monthCells.push(`<th>${month !== previousMonth ? `${month + 1}月` : ""}</th>`);
+    previousMonth = month;
+  }
+  const calendarRows = weekdayLabels.map((label, weekday) => {
+    const cells = [];
+    for (let week = 0; week < weeks; week += 1) {
+      const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + week * 7 + weekday);
+      const key = localDateKey(day);
+      const record = values.get(key) || { total: 0, runs: 0 };
+      const title = record.total
+        ? `${key} · ${formatNumber(record.total)} Token · ${formatNumber(record.runs)} 次运行`
+        : `${key} · 暂无用量记录`;
+      cells.push(`<td><i class="heat-cell level-${levelFor(record.total)}" title="${escapeAttribute(title)}"></i></td>`);
+    }
+    return `<tr><th class="heat-weekday">${label}</th>${cells.join("")}</tr>`;
+  }).join("");
+  return `<div class="heatmap-wrap"><div class="heatmap-calendar" aria-label="近一年 Token 使用热力图"><table><thead><tr><th></th>${monthCells.join("")}</tr></thead><tbody>${calendarRows}</tbody></table></div><div class="heatmap-legend"><span>少</span><i class="heat-cell level-0"></i><i class="heat-cell level-1"></i><i class="heat-cell level-2"></i><i class="heat-cell level-3"></i><i class="heat-cell level-4"></i><span>多</span></div></div>`;
 }
 
 function tokenTrendChart(rows) {
-  const values = (rows || []).filter((row) => row && row.date).slice().sort((left, right) => String(left.date).localeCompare(String(right.date)));
-  if (!values.length) return '<p class="empty-state">所选范围内没有 Token 使用记录。</p>';
-  const width = 900; const height = 250; const left = 42; const right = 16; const top = 28; const bottom = 35;
-  const maximum = Math.max(1, ...values.flatMap((row) => [Number(row.prompt || 0), Number(row.completion || 0)]));
-  const x = (index) => values.length === 1 ? (left + width - right) / 2 : left + index * (width - left - right) / (values.length - 1);
-  const y = (value) => top + (height - top - bottom) * (1 - Number(value || 0) / maximum);
-  const points = (key) => values.map((row, index) => `${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`).join(" ");
-  const labels = Array.from({ length: Math.min(6, values.length) }, (_, index) => Math.round(index * (values.length - 1) / Math.max(1, Math.min(6, values.length) - 1)));
-  const labelText = labels.map((index) => `<text x="${x(index).toFixed(1)}" y="${height - 12}" text-anchor="middle">${escapeHtml(String(values[index].date).slice(5))}</text>`).join("");
-  const grid = [0, .25, .5, .75, 1].map((ratio) => `<line x1="${left}" x2="${width - right}" y1="${y(maximum * ratio).toFixed(1)}" y2="${y(maximum * ratio).toFixed(1)}" />`).join("");
-  return `<div class="trend-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Token 使用趋势"><g class="trend-grid">${grid}</g><polyline class="trend-line prompt" points="${points("prompt")}" /><polyline class="trend-line completion" points="${points("completion")}" /><g class="trend-labels">${labelText}</g><g class="trend-legend"><rect x="${left}" y="5" width="11" height="11" class="prompt"/><text x="${left + 17}" y="15">输入 Token</text><rect x="${left + 100}" y="5" width="11" height="11" class="completion"/><text x="${left + 117}" y="15">输出 Token</text></g></svg></div>`;
+  const source = (rows || []).filter((row) => row && row.date).slice().sort((left, right) => String(left.date).localeCompare(String(right.date)));
+  if (!source.length) return '<p class="empty-state">所选范围内没有 Token 使用记录。</p>';
+  const byDate = new Map(source.map((row) => [String(row.date), row]));
+  const start = new Date(`${source[0].date}T00:00:00`);
+  const end = new Date(`${source[source.length - 1].date}T00:00:00`);
+  const values = [];
+  for (let day = new Date(start); day <= end; day.setDate(day.getDate() + 1)) {
+    const key = localDateKey(day);
+    const row = byDate.get(key) || {};
+    values.push({ date: key, prompt: Number(row.prompt || 0), completion: Number(row.completion || 0) });
+  }
+  // Keep long all-time histories readable just like the Streamlit chart.
+  const sampled = values.length > 366 ? values.filter((_, index) => index % Math.ceil(values.length / 366) === 0) : values;
+  const width = 760; const height = 280; const left = 64; const right = 16; const top = 16; const bottom = 40;
+  const plotWidth = width - left - right; const plotHeight = height - top - bottom;
+  const rawMax = Math.max(0, ...sampled.map((row) => row.prompt + row.completion));
+  const niceCeiling = (value) => {
+    if (value <= 0) return 1;
+    const exponent = Math.floor(Math.log10(value));
+    const scale = 10 ** exponent;
+    const normalized = value / scale;
+    const step = [1, 2, 5, 10].find((item) => normalized <= item) || 10;
+    return step * scale;
+  };
+  const maximum = niceCeiling(rawMax * 1.05);
+  const x = (index) => sampled.length === 1 ? left + plotWidth / 2 : left + index * plotWidth / (sampled.length - 1);
+  const y = (value) => top + plotHeight * (1 - value / maximum);
+  const polygon = (upper, lower, cssClass) => {
+    const topPoints = upper.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`);
+    const bottomPoints = lower.slice().reverse().map((value, index) => `${x(lower.length - index - 1).toFixed(1)},${y(value).toFixed(1)}`);
+    return `<polygon class="${cssClass}" points="${topPoints.concat(bottomPoints).join(" ")}"/>`;
+  };
+  const completions = sampled.map((row) => row.completion);
+  const totals = sampled.map((row) => row.prompt + row.completion);
+  const grid = Array.from({ length: 5 }, (_, index) => {
+    const value = maximum * index / 4;
+    return `<line x1="${left}" x2="${width - right}" y1="${y(value).toFixed(1)}" y2="${y(value).toFixed(1)}"/><text x="${left - 8}" y="${(y(value) + 4).toFixed(1)}" text-anchor="end">${escapeHtml(formatCompactNumber(value))}</text>`;
+  }).join("");
+  const labelCount = Math.min(6, sampled.length);
+  const labels = Array.from({ length: labelCount }, (_, index) => labelCount === 1 ? 0 : Math.round(index * (sampled.length - 1) / (labelCount - 1)));
+  const labelText = labels.map((index) => `<text x="${x(index).toFixed(1)}" y="${height - 16}" text-anchor="middle">${escapeHtml(sampled[index].date.slice(5))}</text>`).join("");
+  return `<div class="trend-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Token 使用趋势"><g class="trend-grid">${grid}</g>${polygon(completions, completions.map(() => 0), "completion-area")}${polygon(totals, completions, "prompt-area")}<polyline class="trend-line completion" points="${completions.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ")}"/><polyline class="trend-line prompt" points="${totals.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ")}"/><g class="trend-labels">${labelText}</g><g class="trend-legend"><rect x="${left}" y="4" width="12" height="12" class="prompt"/><text x="${left + 18}" y="14">输入 Token</text><rect x="${left + 110}" y="4" width="12" height="12" class="completion"/><text x="${left + 128}" y="14">输出 Token</text></g></svg></div>`;
+}
+
+function formatCompactNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`;
+  if (number >= 1_000) return `${(number / 1_000).toFixed(1)}k`;
+  return String(Math.round(number));
 }
 
 async function renderAnalytics(token) {
