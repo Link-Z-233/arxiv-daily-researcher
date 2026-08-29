@@ -290,6 +290,27 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "输入 Token": "Input Tokens",
   "输出 Token": "Output Tokens",
   "刷新最新日志": "Refresh Latest Log",
+  "开启后，仅在任务运行或刚提交等待接手时每 5 秒刷新状态、队列和日志尾部。": "When enabled, refresh status, queue, and the live-log tail every 5 seconds only while a task is running or waiting for worker hand-off.",
+  "开启后，在历史任务运行或等待工作进程接手时每 5 秒刷新状态、进度和日志尾部。": "When enabled, refresh status, progress, and the live-log tail every 5 seconds only while a history task is running or waiting for worker hand-off.",
+  "Ollama（本地）": "Ollama (Local)",
+  "智谱 AI": "Zhipu AI",
+  "启用Telegram": "Enable Telegram",
+  "启用Slack": "Enable Slack",
+  "mineru：云端 API（质量更高）｜pymupdf：本地（无需网络）。": "mineru: cloud API (higher fidelity) | pymupdf: local (no network required).",
+  "推荐：3–5，过高可能触发速率限制。": "Recommended: 3–5. Higher values may trigger rate limits.",
+  "扫描报告": "Scan Reports",
+  "导入论文卡": "Import Paper Cards",
+  "写入投递记录": "Write Delivery Records",
+  "补充任务": "Supplement Tasks",
+  "暂无用量记录": "No usage recorded",
+  "报告元数据": "Report Metadata",
+  "时间范围": "Date Range",
+  "论文数量": "Paper Count",
+  "前一天": "Previous Day",
+  "后一天": "Next Day",
+  "输入": "Input",
+  "输出": "Output",
+  "合计": "Total",
 });
 
 const FALLBACK_ARXIV_CATEGORIES = [
@@ -385,6 +406,24 @@ function renderLanguageButton() {
 function applyLocale(root = document) {
   localizeRoot(root);
   renderLanguageButton();
+}
+
+function localeText(chinese, english) {
+  return state.language === "en" ? english : chinese;
+}
+
+function pagerSummary(page, pages, total) {
+  return state.language === "en"
+    ? `Page ${page} / ${pages} · ${total} item${total === 1 ? "" : "s"}`
+    : `第 ${page} / ${pages} 页 · 共 ${total} 条`;
+}
+
+function pageSizeLabel(size) {
+  return state.language === "en" ? `${size} items` : `${size} 条`;
+}
+
+function reportCountLabel(count) {
+  return state.language === "en" ? `${count} report${count === 1 ? "" : "s"}` : `${count} 份报告`;
 }
 
 async function loadTranslations() {
@@ -670,7 +709,7 @@ function pagedTable(key, columns, rows, options = {}) {
   const visible = rows.slice(entry.page * size, (entry.page + 1) * size);
   const head = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("");
   const body = visible.length ? visible.map((row) => `<tr>${columns.map((column) => `<td>${column.html ? column.html(row) : escapeHtml(column.value ? column.value(row) : row[column.key] ?? "—")}</td>`).join("")}</tr>`).join("") : `<tr><td class="empty-cell" colspan="${columns.length}">${escapeHtml(options.empty || "暂无数据")}</td></tr>`;
-  return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table><div class="pager"><label>每页<select data-table-size="${escapeAttribute(id)}"><option value="5" ${size === 5 ? "selected" : ""}>5 条</option><option value="10" ${size === 10 ? "selected" : ""}>10 条</option></select></label><span>第 ${entry.page + 1} / ${pages} 页 · 共 ${rows.length} 条</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>上一页</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>下一页</button></div></div>`;
+  return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table><div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, rows.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div></div>`;
 }
 
 function bindPagers(root = document) {
@@ -966,7 +1005,7 @@ function reportGroupKey(type, source) {
 
 function reportPicker(title, icon, type, rows, selected) {
   if (!rows.length) {
-    return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">0 份报告</p><p class="muted">暂无报告</p></div>`;
+    return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">${reportCountLabel(0)}</p><p class="muted">${localeText("暂无报告", "No reports")}</p></div>`;
   }
   const groups = new Map();
   rows.forEach((row) => {
@@ -982,9 +1021,9 @@ function reportPicker(title, icon, type, rows, selected) {
     const sourceLabel = type === "keyword_trend"
       ? "关键词趋势"
       : String(groupRows[0].source_label || source);
-    return `<div class="report-picker-group"><label class="report-select-field"><span>${escapeHtml(sourceLabel)} <small>(${groupRows.length})</small></span><select data-report-select="${escapeAttribute(groupKey)}">${groupRows.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === selectedHere ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label><button class="secondary-button compact-button report-preview-button" data-preview-group="${escapeAttribute(groupKey)}">预览</button></div>`;
+    return `<div class="report-picker-group"><label class="report-select-field"><span>${escapeHtml(sourceLabel)} <small>(${groupRows.length})</small></span><select data-report-select="${escapeAttribute(groupKey)}">${groupRows.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === selectedHere ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}</select></label><button class="secondary-button compact-button report-preview-button" data-preview-group="${escapeAttribute(groupKey)}">${localeText("预览", "Preview")}</button></div>`;
   }).join("");
-  return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">${rows.length} 份报告</p>${body}</div>`;
+  return `<div class="report-picker"><h3>${escapeHtml(icon)} ${escapeHtml(title)}</h3><p class="report-count">${reportCountLabel(rows.length)}</p>${body}</div>`;
 }
 
 function formatReportSize(bytes) {
@@ -1008,7 +1047,7 @@ function reportInfoHtml(report) {
   const metadata = report.type === "trend" && report.metadata && Object.keys(report.metadata).length
     ? `<details class="report-metadata"><summary>报告元数据</summary><div class="metric-grid compact-metrics">${report.metadata.keyword !== undefined ? `<div class="metric-card"><p>关键词</p><strong>${escapeHtml(report.metadata.keyword)}</strong></div>` : ""}${report.metadata.date_from && report.metadata.date_to ? `<div class="metric-card"><p>时间范围</p><strong>${escapeHtml(report.metadata.date_from)} → ${escapeHtml(report.metadata.date_to)}</strong></div>` : ""}${report.metadata.total_papers !== undefined ? `<div class="metric-card"><p>论文数量</p><strong>${escapeHtml(report.metadata.total_papers)}</strong></div>` : ""}</div></details>`
     : "";
-  return `<p class="report-file-info"><strong>${escapeHtml(reportTypeLabel(report.type))}</strong> · <code>${escapeHtml(report.source)}</code> · <code>${escapeHtml(report.name)}</code> · ${escapeHtml(formatReportSize(report.size_bytes))} · 修改时间：${escapeHtml(formatTime(report.modified_at))}</p>${metadata}`;
+  return `<p class="report-file-info"><strong>${escapeHtml(reportTypeLabel(report.type))}</strong> · <code>${escapeHtml(report.source)}</code> · <code>${escapeHtml(report.name)}</code> · ${escapeHtml(formatReportSize(report.size_bytes))} · ${localeText("修改时间：", "Modified:")}${escapeHtml(formatTime(report.modified_at))}</p>${metadata}`;
 }
 
 function normalizeReportText(value) {
@@ -1171,7 +1210,7 @@ function pagedItems(key, items, empty = "暂无数据") {
   const pages = Math.max(1, Math.ceil(items.length / entry.size));
   entry.page = Math.min(entry.page, pages - 1);
   const visible = items.slice(entry.page * entry.size, (entry.page + 1) * entry.size);
-  return `${visible.length ? visible.join("") : `<p class="empty-state">${escapeHtml(empty)}</p>`}<div class="pager"><label>每页<select data-table-size="${escapeAttribute(id)}"><option value="5" ${entry.size === 5 ? "selected" : ""}>5 条</option><option value="10" ${entry.size === 10 ? "selected" : ""}>10 条</option></select></label><span>第 ${entry.page + 1} / ${pages} 页 · 共 ${items.length} 条</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>上一页</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>下一页</button></div>`;
+  return `${visible.length ? visible.join("") : `<p class="empty-state">${escapeHtml(empty)}</p>`}<div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${entry.size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${entry.size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, items.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div>`;
 }
 
 function searchParamsFromState() {
@@ -1251,7 +1290,7 @@ async function loadSearchResults(token) {
       return;
     }
     const pages = Math.max(1, Math.ceil(result.total / values.size));
-    const pager = pages > 1 ? `<div class="pager"><span>第 ${values.page + 1} / ${pages} 页 · 每页 20 篇</span><button id="search-prev" class="secondary-button compact-button" ${values.page === 0 ? "disabled" : ""}>上一页</button><button id="search-next" class="secondary-button compact-button" ${values.page >= pages - 1 ? "disabled" : ""}>下一页</button></div>` : "";
+    const pager = pages > 1 ? `<div class="pager"><span>${state.language === "en" ? `Page ${values.page + 1} / ${pages} · 20 papers per page` : `第 ${values.page + 1} / ${pages} 页 · 每页 20 篇`}</span><button id="search-prev" class="secondary-button compact-button" ${values.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button id="search-next" class="secondary-button compact-button" ${values.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div>` : "";
     target.innerHTML = section(`检索结果（共 ${result.total} 篇匹配）`, `${result.items?.length ? result.items.map(paperCard).join("") : '<p class="empty-state">没有匹配的论文。</p>'}${pager}`);
     $("#search-prev")?.addEventListener("click", () => { values.page -= 1; loadSearchResults(token); });
     $("#search-next")?.addEventListener("click", () => { values.page += 1; loadSearchResults(token); });
@@ -1680,8 +1719,9 @@ function webdavSettings() {
   const enabled = Boolean(configValue("webdav_enabled", false));
   const backupEnabled = Boolean(configValue("backup_enabled", true));
   const database = configValue("daily_research_db_path", "data/daily_research/daily_research.db").split("/").pop();
+  const historyLabel = localeText(`历史数据（${database}）`, `Historical data (${database})`);
   const scheduled = configValue("webdav_sync_mode", "after_report") === "scheduled";
-  return `${section("配置导出", `<p class="hint-text">导出当前 config.json 与 .env。导出文件含凭据，请妥善保存。</p><button id="config-export" class="secondary-button">导出配置</button>`, { icon: "📦" })}${divider()}${section("WebDAV", `<p class="hint-text">按需同步配置、SQLite 历史、关键词和报告文件。</p>${field({ label: "启用 WebDAV 同步", key: "webdav_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "WebDAV URL", key: "WEBDAV_URL", scope: "env", placeholder: "https://dav.example.com/dav/" })}${field({ label: "用户名", key: "WEBDAV_USERNAME", scope: "env" })}${field({ label: "密码", key: "WEBDAV_PASSWORD", scope: "env", type: "secret" })}</div><div class="action-row"><button class="secondary-button" data-webdav="test">测试连接</button><button class="secondary-button" data-webdav="upload">上传</button><button class="secondary-button" data-webdav="download">下载</button><span id="webdav-result" class="inline-result"></span></div><h3>⚙️ 同步设置</h3><div class="form-grid two">${field({ label: "远程目录", key: "webdav_remote_path", fallback: "/arxiv-daily-researcher/" })}${field({ label: "同步时机", key: "webdav_sync_mode", type: "select", choices: [{ value: "manual", label: "手动" }, { value: "scheduled", label: "定时" }, { value: "after_report", label: "报告完成后" }], fallback: "after_report", redraw: true })}${scheduled ? `<label class="form-field"><span>定时同步时间<span class="field-help">每天在此时间执行同步。</span></span><input id="webdav-scheduled-time" type="time" value="${escapeAttribute(webdavScheduleTime(configValue("webdav_cron_schedule", "0 23 * * *")))}" /></label>` : ""}</div><h3>📂 同步范围</h3><div class="form-grid two">${field({ label: "配置文件", key: "webdav_sync_configs", type: "checkbox", fallback: true })}${field({ label: `历史数据（${database}）`, key: "webdav_sync_history", type: "checkbox", fallback: true })}${field({ label: "关键词数据", key: "webdav_sync_keywords", type: "checkbox", fallback: true })}${field({ label: "报告文件", key: "webdav_sync_reports", type: "checkbox", fallback: false })}</div>` : '<p class="hint-text">启用后可展开连接凭据、同步设置和同步范围。</p>'}`, { icon: "☁️" })}${divider()}${section("本地备份", `<p class="hint-text">本地备份按保留策略自动整理；启用 WebDAV 后会在本地快照成功后增量镜像到远端。</p>${field({ label: "启用自动备份", key: "backup_enabled", type: "checkbox", fallback: true, redraw: true })}${backupEnabled ? `<div class="form-grid two">${field({ label: "本地保存天数（0 永久保存）", key: "backup_local_retention_days", type: "number", min: 0, fallback: 7 })}${field({ label: "当天最多数量（0 不限）", key: "backup_local_same_day_max_count", type: "number", min: 0, fallback: 0 })}</div>` : ""}<div class="action-row"><button id="backup-create" class="primary-button">生成本地备份</button><button id="backup-export" class="secondary-button">导出备份</button></div><div class="action-row"><label class="file-button">导入备份<input id="backup-file" type="file" accept=".zip,.gz,.db" hidden /></label><button id="backup-restore" class="secondary-button" disabled>上传并恢复</button><span id="backup-result" class="inline-result"></span></div><div id="backup-list"><div class="loading">正在读取备份列表…</div></div>`, { icon: "🗄️" })}`;
+  return `${section("配置导出", `<p class="hint-text">导出当前 config.json 与 .env。导出文件含凭据，请妥善保存。</p><button id="config-export" class="secondary-button">导出配置</button>`, { icon: "📦" })}${divider()}${section("WebDAV", `<p class="hint-text">按需同步配置、SQLite 历史、关键词和报告文件。</p>${field({ label: "启用 WebDAV 同步", key: "webdav_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "WebDAV URL", key: "WEBDAV_URL", scope: "env", placeholder: "https://dav.example.com/dav/" })}${field({ label: "用户名", key: "WEBDAV_USERNAME", scope: "env" })}${field({ label: "密码", key: "WEBDAV_PASSWORD", scope: "env", type: "secret" })}</div><div class="action-row"><button class="secondary-button" data-webdav="test">测试连接</button><button class="secondary-button" data-webdav="upload">上传</button><button class="secondary-button" data-webdav="download">下载</button><span id="webdav-result" class="inline-result"></span></div><h3>⚙️ 同步设置</h3><div class="form-grid two">${field({ label: "远程目录", key: "webdav_remote_path", fallback: "/arxiv-daily-researcher/" })}${field({ label: "同步时机", key: "webdav_sync_mode", type: "select", choices: [{ value: "manual", label: "手动" }, { value: "scheduled", label: "定时" }, { value: "after_report", label: "报告完成后" }], fallback: "after_report", redraw: true })}${scheduled ? `<label class="form-field"><span>定时同步时间<span class="field-help">每天在此时间执行同步。</span></span><input id="webdav-scheduled-time" type="time" value="${escapeAttribute(webdavScheduleTime(configValue("webdav_cron_schedule", "0 23 * * *")))}" /></label>` : ""}</div><h3>📂 同步范围</h3><div class="form-grid two">${field({ label: "配置文件", key: "webdav_sync_configs", type: "checkbox", fallback: true })}${field({ label: historyLabel, key: "webdav_sync_history", type: "checkbox", fallback: true })}${field({ label: "关键词数据", key: "webdav_sync_keywords", type: "checkbox", fallback: true })}${field({ label: "报告文件", key: "webdav_sync_reports", type: "checkbox", fallback: false })}</div>` : '<p class="hint-text">启用后可展开连接凭据、同步设置和同步范围。</p>'}`, { icon: "☁️" })}${divider()}${section("本地备份", `<p class="hint-text">本地备份按保留策略自动整理；启用 WebDAV 后会在本地快照成功后增量镜像到远端。</p>${field({ label: "启用自动备份", key: "backup_enabled", type: "checkbox", fallback: true, redraw: true })}${backupEnabled ? `<div class="form-grid two">${field({ label: "本地保存天数（0 永久保存）", key: "backup_local_retention_days", type: "number", min: 0, fallback: 7 })}${field({ label: "当天最多数量（0 不限）", key: "backup_local_same_day_max_count", type: "number", min: 0, fallback: 0 })}</div>` : ""}<div class="action-row"><button id="backup-create" class="primary-button">生成本地备份</button><button id="backup-export" class="secondary-button">导出备份</button></div><div class="action-row"><label class="file-button">导入备份<input id="backup-file" type="file" accept=".zip,.gz,.db" hidden /></label><button id="backup-restore" class="secondary-button" disabled>上传并恢复</button><span id="backup-result" class="inline-result"></span></div><div id="backup-list"><div class="loading">正在读取备份列表…</div></div>`, { icon: "🗄️" })}`;
 }
 
 async function renderBackupSync(token) {
@@ -1961,13 +2001,16 @@ function tokenHeatmap(rows) {
     if (ratio <= .75) return 3;
     return 4;
   };
-  const weekdayLabels = ["周一", "", "周三", "", "周五", "", "周日"];
+  const weekdayLabels = state.language === "en" ? ["Mon", "", "Wed", "", "Fri", "", "Sun"] : ["周一", "", "周三", "", "周五", "", "周日"];
   const monthCells = [];
   let previousMonth = -1;
   for (let week = 0; week < weeks; week += 1) {
     const weekStart = new Date(start.getFullYear(), start.getMonth(), start.getDate() + week * 7);
     const month = weekStart.getMonth();
-    monthCells.push(`<th>${month !== previousMonth ? `${month + 1}月` : ""}</th>`);
+    const monthLabel = state.language === "en"
+      ? new Intl.DateTimeFormat("en-US", { month: "short" }).format(weekStart)
+      : `${month + 1}月`;
+    monthCells.push(`<th>${month !== previousMonth ? monthLabel : ""}</th>`);
     previousMonth = month;
   }
   const calendarRows = weekdayLabels.map((label, weekday) => {
@@ -1977,13 +2020,15 @@ function tokenHeatmap(rows) {
       const key = localDateKey(day);
       const record = values.get(key) || { total: 0, runs: 0 };
       const title = record.total
-        ? `${key} · ${formatNumber(record.total)} Token · ${formatNumber(record.runs)} 次运行`
-        : `${key} · 暂无用量记录`;
+        ? (state.language === "en"
+          ? `${key} · ${formatNumber(record.total)} tokens · ${formatNumber(record.runs)} run${record.runs === 1 ? "" : "s"}`
+          : `${key} · ${formatNumber(record.total)} Token · ${formatNumber(record.runs)} 次运行`)
+        : `${key} · ${localeText("暂无用量记录", "No usage recorded")}`;
       cells.push(`<td><i class="heat-cell level-${levelFor(record.total)}" title="${escapeAttribute(title)}"></i></td>`);
     }
     return `<tr><th class="heat-weekday">${label}</th>${cells.join("")}</tr>`;
   }).join("");
-  return `<div class="heatmap-wrap"><div class="heatmap-calendar" aria-label="近一年 Token 使用热力图"><table><thead><tr><th></th>${monthCells.join("")}</tr></thead><tbody>${calendarRows}</tbody></table></div><div class="heatmap-legend"><span>少</span><i class="heat-cell level-0"></i><i class="heat-cell level-1"></i><i class="heat-cell level-2"></i><i class="heat-cell level-3"></i><i class="heat-cell level-4"></i><span>多</span></div></div>`;
+  return `<div class="heatmap-wrap"><div class="heatmap-calendar" aria-label="${localeText("近一年 Token 使用热力图", "Token usage heatmap for the past year")}"><table><thead><tr><th></th>${monthCells.join("")}</tr></thead><tbody>${calendarRows}</tbody></table></div><div class="heatmap-legend"><span>${localeText("少", "Low")}</span><i class="heat-cell level-0"></i><i class="heat-cell level-1"></i><i class="heat-cell level-2"></i><i class="heat-cell level-3"></i><i class="heat-cell level-4"></i><span>${localeText("多", "High")}</span></div></div>`;
 }
 
 function tokenTrendChart(rows) {
