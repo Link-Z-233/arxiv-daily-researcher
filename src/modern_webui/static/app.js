@@ -902,19 +902,23 @@ function renderTrendForm(templates = []) {
   // merely opening this page and saving another setting must not erase it.
   const values = state.pageData.trend || { keywords: "", date_from: defaultFrom, date_to: today, categories: [], max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"), analysis_prompt: configuredPrompt, template: matchingTemplate, skills: configuredSkills };
   const selectedSkills = Array.isArray(values.skills) ? values.skills : configuredSkills;
-  const categories = arxivCategories().map((item) => `<option value="${escapeAttribute(item.code)}" ${values.categories.includes(item.code) ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+  const categoryChoices = arxivCategories().map((item) => ({ value: item.code, label: item.label }));
   const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
   const outputFormats = Array.isArray(config("trend_output_formats", ["markdown", "html"]))
     ? config("trend_output_formats", ["markdown", "html"])
     : ["markdown", "html"];
+  const generateTldr = booleanValue(config("trend_generate_tldr", true), true);
+  const analysisEnabled = selectedSkills.includes("comprehensive_analysis");
   const outputField = (key, format, label) => {
     const enabled = state.draft.config[key] ?? outputFormats.includes(format);
     return `<label class="toggle-field"><span>${escapeHtml(label)}</span><input type="checkbox" data-field="${escapeAttribute(key)}" data-scope="config" ${enabled ? "checked" : ""}/><i></i></label>`;
   };
+  const tldrSettings = `${field({ label: "生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true, redraw: true })}${generateTldr ? `<div class="trend-dependent-fields">${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div>` : ""}`;
+  const analysisSettings = `<h3>分析技能</h3><label class="toggle-field"><span>综合分析</span><input id="trend-skill-comprehensive" type="checkbox" ${analysisEnabled ? "checked" : ""}/><i></i></label>${analysisEnabled ? `<div class="trend-dependent-fields"><div class="form-grid two"><label class="form-field"><span>已保存提示词模板</span><select id="trend-template"><option value="">不使用模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><button id="trend-template-delete" class="secondary-button" ${values.template ? "" : "disabled"}>删除当前模板</button></div></div><p class="hint-text">选择模板后，模板内容会作为本次趋势研究的深度分析提示词；不选择时使用默认分析流程。</p><details class="compact-form"><summary>保存新的提示词模板</summary><div class="form-grid two"><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="5" maxlength="8000" placeholder="填写可复用的深度分析提示词"></textarea></label></div><div class="action-row"><button id="trend-template-save" class="secondary-button">保存模板</button></div></details></div>` : '<p class="hint-text trend-disabled-hint">关闭综合分析后，不会发送深度分析提示词；已保存模板会保留，重新开启后可继续使用。</p>'}`;
   return {
     run: `<label class="form-field"><span>研究关键词</span><input id="trend-keywords" value="${escapeAttribute(values.keywords)}" placeholder="例如 quantum error correction" /></label>`,
-    parameters: `<div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><label class="form-field"><span>arXiv 分类（可选）</span><select id="trend-categories" multiple>${categories}</select></label>`,
-    configuration: `<div class="form-grid two"><label class="form-field"><span>排序</span><select id="trend-sort"><option value="ascending" ${values.sort_order === "ascending" ? "selected" : ""}>由早到晚</option><option value="descending" ${values.sort_order === "descending" ? "selected" : ""}>由晚到早</option></select></label><label class="form-field"><span>最多结果数</span><input id="trend-max-results" type="number" min="10" max="5000" value="${escapeAttribute(values.max_results)}" /></label>${field({ label: "默认日期范围（天）", key: "trend_default_date_range_days", type: "number", min: 30, max: 3650, fallback: 365 })}${field({ label: "报告位置", key: "trend_report_position", type: "select", choices: [{ value: "beginning", label: "报告开头" }, { value: "end", label: "报告末尾" }], fallback: "end" })}${field({ label: "生成 TL;DR", key: "trend_generate_tldr", type: "checkbox", fallback: true })}${field({ label: "TL;DR 批大小", key: "trend_tldr_batch_size", type: "number", min: 1, max: 50, fallback: 10 })}</div><h3>输出格式</h3><div class="form-grid two">${outputField("trend_output_md", "markdown", "输出 Markdown")}${outputField("trend_output_html", "html", "输出 HTML")}</div><h3>分析技能</h3><label class="toggle-field"><span>综合分析</span><input id="trend-skill-comprehensive" type="checkbox" ${selectedSkills.includes("comprehensive_analysis") ? "checked" : ""}/><i></i></label><div class="form-grid two"><label class="form-field"><span>已保存提示词模板</span><select id="trend-template"><option value="">不使用模板</option>${templateOptions}</select></label><div class="form-field"><span>模板操作</span><button id="trend-template-delete" class="secondary-button" ${values.template ? "" : "disabled"}>删除当前模板</button></div></div><p class="hint-text">选择模板后，模板内容会作为本次趋势研究的深度分析提示词；不选择时使用默认分析流程。</p><details class="compact-form"><summary>保存新的提示词模板</summary><div class="form-grid two"><label class="form-field"><span>模板名称</span><input id="trend-template-name" maxlength="120" placeholder="例如：实验进展综述" /></label><label class="form-field"><span>模板内容</span><textarea id="trend-template-text" rows="5" maxlength="8000" placeholder="填写可复用的深度分析提示词"></textarea></label></div><div class="action-row"><button id="trend-template-save" class="secondary-button">保存模板</button></div></details>`,
+    parameters: `<div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="trend-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="trend-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div>${tagMultiSelect({ id: "trend-categories", label: "arXiv 分类（可选）", selected: values.categories, choices: categoryChoices, addLabel: localeText("添加分类", "Add category"), emptyLabel: localeText("不限制 arXiv 分类", "No arXiv category limit") })}`,
+    configuration: `<div class="form-grid two"><label class="form-field"><span>排序</span><select id="trend-sort"><option value="ascending" ${values.sort_order === "ascending" ? "selected" : ""}>由早到晚</option><option value="descending" ${values.sort_order === "descending" ? "selected" : ""}>由晚到早</option></select></label><label class="form-field"><span>最多结果数</span><input id="trend-max-results" type="number" min="10" max="5000" value="${escapeAttribute(values.max_results)}" /></label>${field({ label: "默认日期范围（天）", key: "trend_default_date_range_days", type: "number", min: 30, max: 3650, fallback: 365 })}${field({ label: "报告位置", key: "trend_report_position", type: "select", choices: [{ value: "beginning", label: "报告开头" }, { value: "end", label: "报告末尾" }], fallback: "end" })}</div><div class="trend-settings-block">${tldrSettings}</div><h3>输出格式</h3><div class="form-grid two">${outputField("trend_output_md", "markdown", "输出 Markdown")}${outputField("trend_output_html", "html", "输出 HTML")}</div>${analysisSettings}`,
   };
 }
 
@@ -968,19 +972,31 @@ async function renderTrend(token) {
   root.innerHTML = `${pageHeader()}${section("趋势研究", `${form.run}<div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button></div>${statusCard(status, { kind: "trend", refresh: false })}`, { icon: "📈" })}${divider()}${section("分析参数", form.parameters, { icon: "🔍" })}${divider()}${section("趋势研究配置", form.configuration, { icon: "⚙️", hint: "输出格式会在保存时转换为兼容配置。" })}`;
   bindCommon(root);
   const preserveTrend = () => {
+    const prior = state.pageData.trend || {};
+    const templateControl = $("#trend-template");
     state.pageData.trend = {
       keywords: $("#trend-keywords").value, date_from: $("#trend-from").value, date_to: $("#trend-to").value,
-      categories: Array.from($("#trend-categories").selectedOptions).map((item) => item.value), sort_order: $("#trend-sort").value,
-      max_results: Number($("#trend-max-results").value), template: $("#trend-template").value,
-      analysis_prompt: templates.find((item) => item.name === $("#trend-template").value)?.text || "",
+      categories: Array.isArray(prior.categories) ? [...prior.categories] : [], sort_order: $("#trend-sort").value,
+      max_results: Number($("#trend-max-results").value), template: templateControl?.value ?? String(prior.template || ""),
+      analysis_prompt: templates.find((item) => item.name === (templateControl?.value ?? prior.template))?.text || String(prior.analysis_prompt || ""),
       skills: $("#trend-skill-comprehensive").checked ? ["comprehensive_analysis"] : [],
     };
   };
-  ["#trend-keywords", "#trend-from", "#trend-to", "#trend-categories", "#trend-sort", "#trend-max-results", "#trend-template", "#trend-skill-comprehensive"].forEach((selector) => $(selector).addEventListener("change", preserveTrend));
-  $("#trend-template").addEventListener("change", (event) => {
-    preserveTrend();
+  ["#trend-keywords", "#trend-from", "#trend-to", "#trend-sort", "#trend-max-results", "#trend-template"].forEach((selector) => $(selector)?.addEventListener("change", preserveTrend));
+  $("#trend-keywords")?.addEventListener("input", preserveTrend);
+  $("#trend-skill-comprehensive")?.addEventListener("change", () => {
+    preserveTrend(); renderPage();
   });
-  $("#trend-template-save").addEventListener("click", async () => {
+  bindTagSelector(root, "trend-categories", (value) => {
+    preserveTrend();
+    if (!value || state.pageData.trend.categories.includes(value)) return;
+    state.pageData.trend.categories.push(value); renderPage();
+  }, (value) => {
+    preserveTrend();
+    state.pageData.trend.categories = state.pageData.trend.categories.filter((item) => item !== value);
+    renderPage();
+  });
+  $("#trend-template-save")?.addEventListener("click", async () => {
     const name = $("#trend-template-name").value.trim();
     const text = $("#trend-template-text").value.trim();
     try {
@@ -989,7 +1005,7 @@ async function renderTrend(token) {
       toast("提示词模板已保存。", "success"); renderPage();
     } catch (error) { toast(error.message, "error"); }
   });
-  $("#trend-template-delete").addEventListener("click", async () => {
+  $("#trend-template-delete")?.addEventListener("click", async () => {
     const name = $("#trend-template").value;
     if (!name || !window.confirm(`确认删除提示词模板“${name}”？`)) return;
     try {
@@ -1010,7 +1026,7 @@ async function renderTrend(token) {
       return;
     }
     try {
-      await api("/api/tasks/trend_research", { method: "POST", body: { args: { keywords, date_from: values.date_from, date_to: values.date_to, categories: values.categories, sort_order: values.sort_order, max_results: values.max_results, analysis_prompt: values.analysis_prompt.trim() } } });
+      await api("/api/tasks/trend_research", { method: "POST", body: { args: { keywords, date_from: values.date_from, date_to: values.date_to, categories: values.categories, sort_order: values.sort_order, max_results: values.max_results, analysis_prompt: values.skills.includes("comprehensive_analysis") ? values.analysis_prompt.trim() : "" } } });
       toast("趋势任务已加入队列。 "); renderPage();
     } catch (error) { toast(error.message, "error"); }
   });
@@ -1386,14 +1402,23 @@ function sourceDefinition(code) {
 
 function tagMultiSelect({ id, label, selected, choices, addLabel, emptyLabel, help = "" }) {
   const byValue = new Map(choices.map((item) => [String(item.value), item]));
+  const selectedSet = new Set(selected.map(String));
   const selectedItems = selected.map((value) => byValue.get(String(value)) || {
     value: String(value), label: String(value),
   });
   const chips = selectedItems.length
     ? selectedItems.map((item) => `<span class="source-tag"><span>${escapeHtml(item.label)}</span><button type="button" data-tag-remove="${escapeAttribute(id)}" data-tag-value="${escapeAttribute(item.value)}" aria-label="移除 ${escapeAttribute(item.label)}">×</button></span>`).join("")
     : `<span class="tag-select-placeholder">${escapeHtml(emptyLabel)}</span>`;
-  const available = choices.filter((item) => !selected.includes(String(item.value)));
-  return `<div class="form-field tag-select-field"><span>${escapeHtml(label)}${help ? `<span class="field-help">${escapeHtml(help)}</span>` : ""}</span><div class="tag-select-box"><div class="tag-select-chips">${chips}</div><select id="${escapeAttribute(id)}" aria-label="${escapeAttribute(label)}" ${available.length ? "" : "disabled"}><option value="">${escapeHtml(addLabel)}</option>${available.map((item) => `<option value="${escapeAttribute(item.value)}">${escapeHtml(item.label)}</option>`).join("")}</select></div></div>`;
+  const available = choices.filter((item) => !selectedSet.has(String(item.value)));
+  const picker = available.length
+    ? `<details class="tag-select-dropdown" data-tag-selector="${escapeAttribute(id)}"><summary><span>${escapeHtml(addLabel)}</span><i aria-hidden="true">⌄</i></summary><div class="tag-select-options" role="listbox" aria-label="${escapeAttribute(label)}">${available.map((item) => `<button type="button" role="option" data-tag-add="${escapeAttribute(id)}" data-tag-value="${escapeAttribute(item.value)}">${escapeHtml(item.label)}</button>`).join("")}</div></details>`
+    : `<div class="tag-select-complete">${escapeHtml(localeText("已全部选择", "All selected"))}</div>`;
+  return `<div class="form-field tag-select-field"><span>${escapeHtml(label)}${help ? `<span class="field-help">${escapeHtml(help)}</span>` : ""}</span><div class="tag-select-box"><div class="tag-select-chips">${chips}</div>${picker}</div></div>`;
+}
+
+function bindTagSelector(root, id, onAdd, onRemove) {
+  $$(`[data-tag-add="${id}"]`, root).forEach((button) => button.addEventListener("click", () => onAdd(String(button.dataset.tagValue || ""))));
+  $$(`[data-tag-remove="${id}"]`, root).forEach((button) => button.addEventListener("click", () => onRemove(String(button.dataset.tagValue || ""))));
 }
 
 function renderSources() {
@@ -1401,7 +1426,8 @@ function renderSources() {
   // A report directory split only has meaning when there is a real secondary
   // source.  Keeping the toggle hidden for an empty master group mirrors the
   // Streamlit panel and avoids persisting a misleading no-op setting.
-  const hasExtraSource = data.builtins.length > 0 || data.custom.length > 0;
+  const openAlexEnabled = booleanValue(envValue("ENABLE_OPENALEX", false), false);
+  const hasExtraSource = data.builtins.length > 0 || (openAlexEnabled && data.custom.length > 0);
   const builtinChoices = (state.settings.builtin_sources || []).map((item) => ({
     value: item.code,
     label: `${item.display_name}（${item.code}）`,
@@ -1412,7 +1438,13 @@ function renderSources() {
     "暂无自定义额外来源。",
   );
   const categoryChoices = arxivCategories().map((item) => ({ value: item.code, label: item.label }));
-  return `${section("arXiv", `<label class="toggle-field"><span>启动 arXiv 来源</span><input id="source-arxiv" type="checkbox" ${data.arxiv ? "checked" : ""}/><i></i></label>${data.arxiv ? `<p class="hint-text">选择需要扫描的 arXiv 分类。</p>${tagMultiSelect({ id: "source-domains", label: "arXiv 分类", selected: data.domains, choices: categoryChoices, addLabel: localeText("添加分类", "Add category"), emptyLabel: localeText("尚未选择分类", "No categories selected") })}<div class="form-grid two">${field({ label: "请求超时（秒）", key: "arxiv_fetch_timeout_seconds", type: "number", min: 30, max: 1800, fallback: 180 })}${field({ label: "公告回看宽限（天）", key: "arxiv_announcement_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}</div>` : ""}`)}${divider()}${section("额外数据源", `<label class="toggle-field"><span>启动额外数据源</span><input id="extra-enabled" type="checkbox" ${data.extraEnabled ? "checked" : ""}/><i></i></label>${data.extraEnabled ? `<div class="form-grid ${hasExtraSource ? "two" : "one"}">${tagMultiSelect({ id: "extra-builtins", label: "内置来源", selected: data.builtins, choices: builtinChoices, addLabel: localeText("添加内置来源", "Add built-in source"), emptyLabel: localeText("尚未选择内置来源", "No built-in sources selected") })}${hasExtraSource ? field({ label: "按数据源分类整理报告", key: "reports_by_source", type: "checkbox", fallback: true }) : ""}</div><div class="source-custom"><h3>自定义来源</h3>${customRows}<details><summary>添加自定义 OpenAlex 期刊来源</summary><div class="form-grid two"><label class="form-field"><span>来源代码</span><input id="custom-code" placeholder="optica_express" /></label><label class="form-field"><span>展示名称</span><input id="custom-display" placeholder="Opt. Express" /></label><label class="form-field"><span>完整名称</span><input id="custom-full" placeholder="Optics Express" /></label><label class="form-field"><span>ISSN（逗号分隔）</span><input id="custom-issn" placeholder="1094-4087" /></label></div><button id="custom-add" class="secondary-button">添加来源</button></details></div>${data.builtins.includes("huggingface_papers") ? `<div class="form-grid two">${field({ label: "Hugging Face 可用性滞后（天）", key: "huggingface_papers_availability_lag_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "回看宽限（天）", key: "huggingface_papers_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "请求超时（秒）", key: "huggingface_papers_request_timeout_seconds", type: "number", min: 5, max: 600, fallback: 30 })}${field({ label: "请求间隔（秒）", key: "huggingface_papers_request_interval_seconds", type: "number", min: 0, max: 60, step: 0.05, fallback: 0.25 })}</div>` : ""}` : '<p class="hint-text">开启后可选择内置来源或添加 ISSN 期刊来源。</p>'}`)}`;
+  const customOpenAlex = openAlexEnabled
+    ? `<div class="source-custom source-custom-panel"><h3>自定义 OpenAlex 期刊来源</h3><p class="hint-text">通过 ISSN 添加需要跟踪的期刊；保存后会与内置来源一起参与额外数据源任务。</p>${customRows}<div class="form-grid two"><label class="form-field"><span>来源代码</span><input id="custom-code" placeholder="optica_express" /></label><label class="form-field"><span>展示名称</span><input id="custom-display" placeholder="Opt. Express" /></label><label class="form-field"><span>完整名称</span><input id="custom-full" placeholder="Optics Express" /></label><label class="form-field"><span>ISSN（逗号分隔）</span><input id="custom-issn" placeholder="1094-4087" /></label></div><div class="action-row"><button id="custom-add" class="secondary-button">添加来源</button></div></div>`
+    : "";
+  const sourceReportGrouping = hasExtraSource
+    ? `<div class="source-report-group">${field({ label: "按数据源分类整理报告", key: "reports_by_source", type: "checkbox", fallback: true })}</div>`
+    : "";
+  return `${section("arXiv", `<label class="toggle-field"><span>启动 arXiv 来源</span><input id="source-arxiv" type="checkbox" ${data.arxiv ? "checked" : ""}/><i></i></label>${data.arxiv ? `<p class="hint-text">选择需要扫描的 arXiv 分类。</p>${tagMultiSelect({ id: "source-domains", label: "arXiv 分类", selected: data.domains, choices: categoryChoices, addLabel: localeText("添加分类", "Add category"), emptyLabel: localeText("尚未选择分类", "No categories selected") })}<div class="form-grid two">${field({ label: "请求超时（秒）", key: "arxiv_fetch_timeout_seconds", type: "number", min: 30, max: 1800, fallback: 180 })}${field({ label: "公告回看宽限（天）", key: "arxiv_announcement_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}</div>` : ""}`)}${divider()}${section("额外数据源", `<label class="toggle-field"><span>启动额外数据源</span><input id="extra-enabled" type="checkbox" ${data.extraEnabled ? "checked" : ""}/><i></i></label>${data.extraEnabled ? `${tagMultiSelect({ id: "extra-builtins", label: "内置来源", selected: data.builtins, choices: builtinChoices, addLabel: localeText("添加内置来源", "Add built-in source"), emptyLabel: localeText("尚未选择内置来源", "No built-in sources selected") })}${sourceReportGrouping}${customOpenAlex}${data.builtins.includes("huggingface_papers") ? `<div class="form-grid two">${field({ label: "Hugging Face 可用性滞后（天）", key: "huggingface_papers_availability_lag_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "回看宽限（天）", key: "huggingface_papers_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "请求超时（秒）", key: "huggingface_papers_request_timeout_seconds", type: "number", min: 5, max: 600, fallback: 30 })}${field({ label: "请求间隔（秒）", key: "huggingface_papers_request_interval_seconds", type: "number", min: 0, max: 60, step: 0.05, fallback: 0.25 })}</div>` : ""}` : '<p class="hint-text">开启后可选择内置来源；启用 OpenAlex 后可在此添加 ISSN 期刊来源。</p>'}`)}`;
 }
 
 function validatedCustomJournalSource(raw, data) {
@@ -1461,26 +1493,14 @@ function bindSources(root) {
   const data = ensureSourceState();
   $("#source-arxiv", root)?.addEventListener("change", (event) => { data.arxiv = event.target.checked; renderPage(); });
   $("#extra-enabled", root)?.addEventListener("change", (event) => { data.extraEnabled = event.target.checked; renderPage(); });
-  $("#source-domains", root)?.addEventListener("change", (event) => {
-    const value = String(event.target.value || "");
+  bindTagSelector(root, "source-domains", (value) => {
     if (!value || data.domains.includes(value)) return;
-    data.domains.push(value);
-    renderPage();
-  });
-  $("#extra-builtins", root)?.addEventListener("change", (event) => {
-    const value = String(event.target.value || "");
+    data.domains.push(value); renderPage();
+  }, (value) => { data.domains = data.domains.filter((item) => item !== value); renderPage(); });
+  bindTagSelector(root, "extra-builtins", (value) => {
     if (!value || data.builtins.includes(value)) return;
-    data.builtins.push(value);
-    renderPage();
-  });
-  $$('[data-tag-remove="source-domains"]', root).forEach((button) => button.addEventListener("click", () => {
-    data.domains = data.domains.filter((value) => value !== button.dataset.tagValue);
-    renderPage();
-  }));
-  $$('[data-tag-remove="extra-builtins"]', root).forEach((button) => button.addEventListener("click", () => {
-    data.builtins = data.builtins.filter((value) => value !== button.dataset.tagValue);
-    renderPage();
-  }));
+    data.builtins.push(value); renderPage();
+  }, (value) => { data.builtins = data.builtins.filter((item) => item !== value); renderPage(); });
   $$('[data-remove-custom]', root).forEach((button) => button.addEventListener("click", () => { data.custom.splice(Number(button.dataset.removeCustom), 1); renderPage(); }));
   $("#custom-add", root)?.addEventListener("click", () => {
     try {

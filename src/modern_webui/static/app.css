@@ -244,8 +244,8 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .form-field select::-ms-expand, .stack-form select::-ms-expand, .pager select::-ms-expand { display: none; }
 .form-field input:hover, .form-field textarea:hover, .form-field select:hover, .stack-form input:hover, .stack-form select:hover { border-color: #c0cadb; }
 .form-field input:focus, .form-field textarea:focus, .form-field select:focus, .stack-form input:focus, .stack-form select:focus { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
-.tag-select-field { margin-top: 15px; }
-.tag-select-box { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, 38%); overflow: hidden; min-height: 42px; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; transition: border-color .15s ease, box-shadow .15s ease; }
+.tag-select-field { margin-top: 18px; }
+.tag-select-box { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 36%); overflow: visible; min-height: var(--control-height); border: 1px solid var(--line-strong); border-radius: var(--control-radius); background: #fff; transition: border-color .15s ease, box-shadow .15s ease; }
 .tag-select-box:focus-within { border-color: #8193ee; box-shadow: 0 0 0 3px rgba(70, 95, 213, .12); }
 .tag-select-chips { display: flex; flex-wrap: wrap; align-content: center; gap: 6px; min-width: 0; padding: 6px 8px; }
 .source-tag { display: inline-flex; align-items: center; max-width: 100%; gap: 5px; padding: 4px 5px 4px 8px; border: 1px solid var(--brand-line); border-radius: 999px; background: var(--brand-soft); color: #3549aa; font-size: .75rem; font-weight: 650; line-height: 1.25; }
@@ -253,8 +253,28 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .source-tag button { display: grid; flex: 0 0 auto; width: 17px; height: 17px; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #5368c7; font-size: 1rem; line-height: 1; }
 .source-tag button:hover { background: rgba(70, 95, 213, .15); color: var(--brand-strong); }
 .tag-select-placeholder { align-self: center; color: var(--muted-light); font-size: .79rem; font-weight: 450; }
-.tag-select-box select { width: 100%; min-width: 0; padding: 8px 10px; border: 0; border-left: 1px solid var(--line); border-radius: 0; outline: 0; background: #fbfcff; color: var(--text-secondary); font-size: .78rem; font-weight: 600; }
-.tag-select-box select:disabled { color: var(--muted-light); }
+.tag-select-dropdown { position: relative; min-width: 0; border-left: 1px solid var(--line); }
+.tag-select-dropdown > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: var(--control-height); padding: 8px 10px 8px 12px; color: var(--text-secondary); font-size: .78rem; font-weight: 650; cursor: pointer; list-style: none; }
+.tag-select-dropdown > summary::-webkit-details-marker { display: none; }
+.tag-select-dropdown > summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-select-dropdown > summary > i { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 6px; background: #f1f4fb; color: var(--muted); font-style: normal; font-size: .96rem; transition: transform .15s ease, color .15s ease, background .15s ease; }
+.tag-select-dropdown:hover > summary > i, .tag-select-dropdown[open] > summary > i { background: var(--brand-soft); color: var(--brand); }
+.tag-select-dropdown[open] { z-index: 6; }
+.tag-select-dropdown[open] > summary > i { transform: rotate(180deg); }
+.tag-select-options { position: absolute; z-index: 7; top: calc(100% + 7px); right: -1px; left: -1px; display: grid; max-height: 210px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 10px; background: #fff; box-shadow: var(--shadow-md); scrollbar-gutter: stable; }
+.tag-select-options button { min-height: 42px; padding: 9px 12px; border: 0; border-bottom: 1px solid #edf0f5; background: #fff; color: var(--text-secondary); text-align: left; font-size: .78rem; line-height: 1.4; overflow-wrap: anywhere; }
+.tag-select-options button:last-child { border-bottom: 0; }
+.tag-select-options button:hover, .tag-select-options button:focus-visible { background: var(--brand-soft); color: #334ab4; outline: 0; }
+.tag-select-complete { display: grid; min-width: 0; place-items: center; padding: 8px 12px; border-left: 1px solid var(--line); background: #fbfcff; color: var(--muted-light); font-size: .74rem; font-weight: 600; text-align: center; }
+.source-report-group { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.source-custom-panel { margin-top: 22px; padding: 18px; border: 1px solid #e2e7ef; border-radius: 13px; background: var(--card-soft); }
+.source-custom-panel > .hint-text { margin-bottom: 18px; }
+.source-custom-panel .card-list { margin-top: 0; margin-bottom: 18px; }
+.trend-settings-block { margin-top: 22px; padding: 17px 18px; border: 1px solid #e2e7ef; border-radius: 13px; background: var(--card-soft); }
+.trend-settings-block .toggle-field + .trend-dependent-fields { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.trend-dependent-fields { margin-top: 20px; }
+.form-grid + h3, .trend-settings-block + h3 { margin-top: 26px; }
+.trend-disabled-hint { margin: 16px 0 0; padding: 11px 13px; border: 1px dashed #cfd7e5; border-radius: 9px; background: #fbfcff; }
 .narrow-field { width: min(225px, 100%); margin-bottom: 14px; }
 .toggle-field { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: var(--control-height); color: var(--text-secondary); font-size: .81rem; font-weight: 700; }
 .toggle-field > span { display: flex; align-items: center; gap: 5px; }
@@ -447,7 +467,7 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
   .section-heading p { max-width: none; text-align: left; }
   .form-grid.two, .form-grid.three, .form-grid.author-bonus-grid { grid-template-columns: 1fr; }
   .tag-select-box { grid-template-columns: 1fr; }
-  .tag-select-box select { min-height: 38px; border-top: 1px solid var(--line); border-left: 0; }
+  .tag-select-dropdown, .tag-select-complete { min-height: 40px; border-top: 1px solid var(--line); border-left: 0; }
   .timestamp { display: none; }
   .favorite-card { grid-template-columns: 1fr; }
   .favorite-card small { grid-column: 1; }
