@@ -968,29 +968,47 @@ function compactTaskNotice(status) {
   return "";
 }
 
-async function renderPastDaily(token) {
+function pastDailyMarkup(status, values) {
   const yesterday = relativeLocalDateKey(-1);
-  const values = state.pageData.past || { from: yesterday, to: yesterday };
-  const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}<div class="loading">正在读取过去日报队列…</div>`;
-  const status = await fetchStatus("past");
-  if (token !== state.renderToken) return;
   const queue = status.backfill || {};
   const hasQueue = ["pending", "running", "completed", "failed"].some((key) => Number(queue[key] || 0) > 0);
-  root.innerHTML = `${pageHeader()}${section("过去日报", `<p class="hint-text">选择过去日期范围后开始运行。系统会按天把任务写入持久化队列，并与其他研究任务安全互斥。</p><div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="backfill-from" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.from)}" /></label><label class="form-field"><span>结束日期</span><input id="backfill-to" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.to)}" /></label></div><div class="action-row"><button id="backfill-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button><button class="secondary-button" data-refresh-status="past">刷新状态</button></div>${triggerNotice(status)}${compactTaskNotice(status)}`, { icon: "🗓" })}${divider()}${section("过去日报队列", hasQueue ? metrics([
+  return `${section("过去日报", `<p class="hint-text">选择过去日期范围后开始运行。系统会按天把任务写入持久化队列，并与其他研究任务安全互斥。</p><div class="form-grid two"><label class="form-field"><span>开始日期</span><input id="backfill-from" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.from)}" /></label><label class="form-field"><span>结束日期</span><input id="backfill-to" type="date" min="1991-01-01" max="${yesterday}" value="${escapeAttribute(values.to)}" /></label></div><div class="action-row"><button id="backfill-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button><button id="past-status-refresh" class="secondary-button">刷新状态</button></div>${triggerNotice(status)}${compactTaskNotice(status)}`, { icon: "🗓" })}${divider()}${section("过去日报队列", hasQueue ? metrics([
     { label: "等待中", value: formatNumber(queue.pending), help: queue.next_date ? `下一日期：${queue.next_date}` : "暂无待处理日期" },
     { label: "运行中", value: formatNumber(queue.running), help: queue.active_date ? `当前日期：${queue.active_date}` : "" },
     { label: "已完成", value: formatNumber(queue.completed), help: "已生成历史日期报告" },
     { label: "失败", value: formatNumber(queue.failed), help: queue.first_error || "失败任务可在日志中查看" },
   ]) : '<p class="empty-state">当前没有过去日报任务。</p>', { icon: "📋" })}`;
-  bindCommon(root);
-  $("#backfill-from").addEventListener("change", (event) => { state.pageData.past = { ...values, from: event.target.value }; });
-  $("#backfill-to").addEventListener("change", (event) => { state.pageData.past = { ...values, to: event.target.value }; });
-  $("#backfill-start").addEventListener("click", async () => {
+}
+
+function bindPastDaily(root, values, token) {
+  $("#backfill-from", root)?.addEventListener("change", (event) => { state.pageData.past = { ...values, from: event.target.value }; });
+  $("#backfill-to", root)?.addEventListener("change", (event) => { state.pageData.past = { ...values, to: event.target.value }; });
+  $("#past-status-refresh", root)?.addEventListener("click", () => refreshPastDailyContent(root, token));
+  $("#backfill-start", root)?.addEventListener("click", async () => {
     const from = $("#backfill-from").value; const to = $("#backfill-to").value;
     if (!from || !to || from > to) return toast("请填写有效的开始和结束日期。", "error");
-    try { await api("/api/tasks/backfill_run", { method: "POST", body: { args: { date_from: from, date_to: to } } }); toast("过去日报已加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
+    try { await api("/api/tasks/backfill_run", { method: "POST", body: { args: { date_from: from, date_to: to } } }); toast("过去日报已加入队列。 "); await refreshPastDailyContent(root, token); } catch (error) { toast(error.message, "error"); }
   });
+}
+
+async function refreshPastDailyContent(root = $("#page-root"), token = state.renderToken) {
+  const host = $("#past-daily-content", root);
+  if (!host) return;
+  const yesterday = relativeLocalDateKey(-1);
+  const values = state.pageData.past || { from: yesterday, to: yesterday };
+  host.innerHTML = '<div class="loading">正在读取过去日报队列…</div>';
+  const status = await fetchStatus("past");
+  if (token !== state.renderToken || state.page !== "past_daily") return;
+  host.innerHTML = pastDailyMarkup(status, values);
+  bindCommon(host);
+  bindPastDaily(root, values, token);
+  applyLocale(host);
+}
+
+async function renderPastDaily(token) {
+  const root = $("#page-root");
+  root.innerHTML = `${pageHeader()}<div id="past-daily-content"><div class="loading">正在读取过去日报队列…</div></div>`;
+  await refreshPastDailyContent(root, token);
 }
 
 function renderTrendForm(templates = []) {
@@ -1077,7 +1095,7 @@ async function renderTrend(token) {
   if (token !== state.renderToken) return;
   let templates = Array.isArray(templateData.items) ? templateData.items : [];
   const form = renderTrendForm(templates);
-  root.innerHTML = `${pageHeader()}${section("趋势研究", `${form.run}<div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button></div>${statusCard(status, { kind: "trend", refresh: false })}`, { icon: "📈" })}${divider()}${section("分析参数", form.parameters, { icon: "🔍" })}${divider()}${section("趋势研究配置", form.configuration, { icon: "⚙️", hint: "输出格式会在保存时转换为兼容配置。" })}`;
+  root.innerHTML = `${pageHeader()}${section("趋势研究", `${form.run}<div id="trend-launch"><div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button></div></div><div id="trend-status-content">${statusCard(status, { kind: "trend", refresh: false })}</div>`, { icon: "📈" })}${divider()}${section("分析参数", form.parameters, { icon: "🔍" })}${divider()}${section("趋势研究配置", form.configuration, { icon: "⚙️", hint: "输出格式会在保存时转换为兼容配置。" })}`;
   bindCommon(root);
   const preserveTrend = () => {
     const prior = state.pageData.trend || {};
@@ -1200,7 +1218,7 @@ async function renderTrend(token) {
       toast(item.builtin ? "已恢复内置提示词模板。" : "提示词模板已删除。", "success");
     } catch (error) { toast(error.message, "error"); }
   });
-  $("#trend-start").addEventListener("click", async () => {
+  const startTrend = async () => {
     preserveTrend(); const values = state.pageData.trend;
     if (!values.keywords.trim()) return toast("请填写至少一个研究关键词。", "error");
     if (!values.date_from || !values.date_to || values.date_from > values.date_to) return toast("请填写有效的日期范围。", "error");
@@ -1213,9 +1231,36 @@ async function renderTrend(token) {
     }
     try {
       await api("/api/tasks/trend_research", { method: "POST", body: { args: { keywords, date_from: values.date_from, date_to: values.date_to, categories: values.categories, sort_order: values.sort_order, max_results: values.max_results, analysis_prompt: values.skills.includes("comprehensive_analysis") ? values.analysis_prompt.trim() : "" } } });
-      toast("趋势任务已加入队列。 "); renderPage();
+      toast("趋势任务已加入队列。 "); await refreshTrendStatus(root, token);
     } catch (error) { toast(error.message, "error"); }
-  });
+  };
+  root._trendStartHandler = startTrend;
+  $("#trend-start").addEventListener("click", startTrend);
+}
+
+function updateTrendStatus(root, status) {
+  const launch = $("#trend-launch", root);
+  const statusHost = $("#trend-status-content", root);
+  if (!launch || !statusHost) return false;
+  launch.innerHTML = `<div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button></div>`;
+  statusHost.innerHTML = statusCard(status, { kind: "trend", refresh: false });
+  bindCommon(statusHost);
+  applyLocale(launch);
+  applyLocale(statusHost);
+  return true;
+}
+
+async function refreshTrendStatus(root = $("#page-root"), token = state.renderToken) {
+  if (state.page !== "trend_tasks") return;
+  try {
+    const status = await fetchStatus("trend");
+    if (token !== state.renderToken || !updateTrendStatus(root, status)) return;
+    // The run button is replaced with the status fragment above.  Rebind its
+    // existing submit handler through a click relay rather than reconstructing
+    // the analysis form or discarding its in-progress values.
+    const start = root._trendStartHandler;
+    if (typeof start === "function") $("#trend-start", root)?.addEventListener("click", start);
+  } catch (error) { toast(`状态刷新失败：${error.message}`, "error"); }
 }
 
 function reportTypeLabel(type) {
@@ -1322,32 +1367,56 @@ async function fetchReportHtml(reportId) {
   return response.text();
 }
 
-async function renderReports(token) {
-  const root = $("#page-root");
-  // The report iframe is replaced on every selection.  Dispose its previous
-  // message listener before creating a new sandboxed preview.
-  state.reportMarkAbortController?.abort();
-  state.reportMarkAbortController = null;
-  const showNonArxiv = Boolean(state.pageData.showNonArxiv);
-  root.innerHTML = `${pageHeader()}<div class="loading">正在读取报告目录…</div>`;
-  const reports = await api(`/api/reports?non_arxiv=${showNonArxiv ? "1" : "0"}`);
-  if (token !== state.renderToken) return;
+function reportDirectoryMarkup(reports, selected, showNonArxiv) {
+  const browser = section("报告浏览", `<div class="toolbar"><label class="toggle-field"><span>显示非 arXiv 来源报告</span><input id="report-non-arxiv" type="checkbox" ${showNonArxiv ? "checked" : ""}/><i></i></label><button id="reports-refresh" class="secondary-button">刷新列表</button></div><div class="report-grid">${reportPicker("每日研究", "📅", "daily", reports.daily, selected)}${reportPicker("趋势研究", "🔬", "trend", reports.trend, selected)}${reportPicker("关键词趋势", "📈", "keyword_trend", reports.keyword_trend, selected)}</div>`, { icon: "📚" });
+  return `${browser}${selected ? '<div id="report-preview" class="loading">正在加载报告预览…</div>' : section("报告预览", '<p class="report-empty-state">尚未生成可查看的报告。</p>')}`;
+}
+
+function updateReportPickerSelection(root, report) {
+  const groupKey = reportGroupKey(report.type, report.source);
+  $$('[data-report-select-option]', root).forEach((option) => {
+    if (option.dataset.reportSelectOption !== groupKey) return;
+    const active = option.dataset.reportId === report.id;
+    option.setAttribute("aria-selected", String(active));
+    option.classList.toggle("is-selected", active);
+  });
+  const selector = $$('[data-scroll-select]', root).find((item) => item.dataset.scrollSelect === groupKey);
+  if (selector) {
+    const label = $("summary > span", selector);
+    if (label) label.textContent = report.label;
+    selector.open = false;
+  }
+}
+
+function bindReportDirectory(root, reports, token) {
   const all = [...reports.daily, ...reports.trend, ...reports.keyword_trend];
-  let selected = state.pageData.selectedReport;
-  if (!selected || !all.some((item) => item.id === selected)) selected = all[0]?.id || "";
-  state.pageData.selectedReport = selected;
-  if (!state.pageData.reportSelections) state.pageData.reportSelections = {};
   const chooseReport = (reportId) => {
     const report = all.find((item) => item.id === reportId);
     if (!report) return;
     state.pageData.selectedReport = report.id;
     state.pageData.reportSelections[reportGroupKey(report.type, report.source)] = report.id;
-    renderPage();
+    state.reportMarkAbortController?.abort();
+    state.reportMarkAbortController = null;
+    updateReportPickerSelection(root, report);
+    const preview = $("#report-preview", root);
+    if (preview) preview.outerHTML = '<div id="report-preview" class="loading">正在加载报告预览…</div>';
+    else {
+      const directory = $("#reports-directory", root);
+      if (directory) directory.insertAdjacentHTML("beforeend", '<div id="report-preview" class="loading">正在加载报告预览…</div>');
+    }
+    loadReportPreview(report, reports, token, chooseReport);
   };
-  root.innerHTML = `${pageHeader()}${section("报告浏览", `<div class="toolbar"><label class="toggle-field"><span>显示非 arXiv 来源报告</span><input id="report-non-arxiv" type="checkbox" ${showNonArxiv ? "checked" : ""}/><i></i></label><button id="reports-refresh" class="secondary-button">刷新列表</button></div><div class="report-grid">${reportPicker("每日研究", "📅", "daily", reports.daily, selected)}${reportPicker("趋势研究", "🔬", "trend", reports.trend, selected)}${reportPicker("关键词趋势", "📈", "keyword_trend", reports.keyword_trend, selected)}</div>`, { icon: "📚" })}${selected ? `<div id="report-preview" class="loading">正在加载报告预览…</div>` : section("报告预览", '<p class="report-empty-state">尚未生成可查看的报告。</p>')}`;
-  bindCommon(root);
-  $("#report-non-arxiv").addEventListener("change", (event) => { state.pageData.showNonArxiv = event.target.checked; state.pageData.selectedReport = ""; state.pageData.reportSelections = {}; renderPage(); });
-  $("#reports-refresh").addEventListener("click", () => { state.pageData.selectedReport = ""; state.pageData.reportSelections = {}; renderPage(); });
+  $("#report-non-arxiv", root)?.addEventListener("change", (event) => {
+    state.pageData.showNonArxiv = event.target.checked;
+    state.pageData.selectedReport = "";
+    state.pageData.reportSelections = {};
+    refreshReportsDirectory(root, token);
+  });
+  $("#reports-refresh", root)?.addEventListener("click", () => {
+    state.pageData.selectedReport = "";
+    state.pageData.reportSelections = {};
+    refreshReportsDirectory(root, token);
+  });
   $$('[data-report-select-option]', root).forEach((button) => button.addEventListener("click", () => chooseReport(button.dataset.reportId)));
   $$('[data-preview-group]', root).forEach((button) => button.addEventListener("click", () => {
     const selectedOption = $$('[data-report-select-option]', root).find((item) => (
@@ -1356,8 +1425,35 @@ async function renderReports(token) {
     ));
     if (selectedOption) chooseReport(selectedOption.dataset.reportId);
   }));
+  return chooseReport;
+}
+
+async function refreshReportsDirectory(root = $("#page-root"), token = state.renderToken) {
+  const host = $("#reports-directory", root);
+  if (!host) return;
+  state.reportMarkAbortController?.abort();
+  state.reportMarkAbortController = null;
+  const showNonArxiv = Boolean(state.pageData.showNonArxiv);
+  host.innerHTML = '<div class="loading">正在读取报告目录…</div>';
+  const reports = await api(`/api/reports?non_arxiv=${showNonArxiv ? "1" : "0"}`);
+  if (token !== state.renderToken || state.page !== "reports") return;
+  const all = [...reports.daily, ...reports.trend, ...reports.keyword_trend];
+  let selected = state.pageData.selectedReport;
+  if (!selected || !all.some((item) => item.id === selected)) selected = all[0]?.id || "";
+  state.pageData.selectedReport = selected;
+  if (!state.pageData.reportSelections) state.pageData.reportSelections = {};
+  host.innerHTML = reportDirectoryMarkup(reports, selected, showNonArxiv);
+  bindCommon(host);
+  const chooseReport = bindReportDirectory(root, reports, token);
+  applyLocale(host);
   const report = all.find((item) => item.id === selected);
   if (report) await loadReportPreview(report, reports, token, chooseReport);
+}
+
+async function renderReports(token) {
+  const root = $("#page-root");
+  root.innerHTML = `${pageHeader()}<div id="reports-directory"><div class="loading">正在读取报告目录…</div></div>`;
+  await refreshReportsDirectory(root, token);
 }
 
 async function loadReportPreview(report, reports, token, chooseReport) {
@@ -2337,20 +2433,20 @@ function bindHistoryLaunchers(root) {
       // because the operator starts an idle-time import.
       await api("/api/tasks/legacy_import", { method: "POST", body: { args: { full_repair: selectedFullRepair } } });
       toast("旧历史导入已加入闲时队列。 ");
-      renderPage();
+      await refreshHistoryStatus(root);
     } catch (error) { toast(error.message, "error"); }
   });
   $("#history-repair", root)?.addEventListener("click", async () => {
-    try { await api("/api/tasks/history_data_repair", { method: "POST", body: { args: {} } }); toast("历史数据补全已加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
+    try { await api("/api/tasks/history_data_repair", { method: "POST", body: { args: {} } }); toast("历史数据补全已加入队列。 "); await refreshHistoryStatus(root); } catch (error) { toast(error.message, "error"); }
   });
   $("#history-omission", root)?.addEventListener("click", async () => {
-    try { await api("/api/tasks/history_omission_scan", { method: "POST", body: { args: {} } }); toast("历史遗漏扫描已加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
+    try { await api("/api/tasks/history_omission_scan", { method: "POST", body: { args: {} } }); toast("历史遗漏扫描已加入队列。 "); await refreshHistoryStatus(root); } catch (error) { toast(error.message, "error"); }
   });
 }
 
 function bindHistoryRetries(root) {
   $$('[data-history-retry]', root).forEach((button) => button.addEventListener("click", async () => {
-    try { await api(`/api/history/${encodeURIComponent(button.dataset.historyRetry)}/retry`, { method: "POST", body: {} }); toast("历史维护任务已重新加入队列。 "); renderPage(); } catch (error) { toast(error.message, "error"); }
+    try { await api(`/api/history/${encodeURIComponent(button.dataset.historyRetry)}/retry`, { method: "POST", body: {} }); toast("历史维护任务已重新加入队列。 "); await refreshHistoryStatus(root); } catch (error) { toast(error.message, "error"); }
   }));
 }
 
@@ -2476,10 +2572,11 @@ function diagnosticsRangeControl(id, value) {
   return `<label class="form-field narrow-field"><span>查看范围</span><select id="${escapeAttribute(id)}"><option value="3" ${value === "3" ? "selected" : ""}>近 3 天</option><option value="7" ${value === "7" ? "selected" : ""}>近 7 天</option><option value="14" ${value === "14" ? "selected" : ""}>近 14 天</option><option value="30" ${value === "30" ? "selected" : ""}>近 30 天</option><option value="all" ${value === "all" ? "selected" : ""}>全部</option></select></label>`;
 }
 
-async function renderDiagnostics(token) {
-  const root = $("#page-root");
+async function refreshDiagnosticsContent(root = $("#page-root"), token = state.renderToken) {
+  const host = $("#diagnostics-content", root);
+  if (!host) return;
   const ranges = { runs: "7", llm: "7", sources: "7", ...(state.pageData.diagnosticsRanges || {}) };
-  root.innerHTML = `${pageHeader()}<div class="loading">正在读取运行诊断…</div>`;
+  host.innerHTML = '<div class="loading">正在读取运行诊断…</div>';
   // All three panels are backed by the same aggregate.  When their ranges
   // match (the common default), share one request instead of making three
   // identical SQLite reads and serialising them behind the server worker.
@@ -2493,13 +2590,20 @@ async function renderDiagnostics(token) {
     loadRange(ranges.llm),
     loadRange(ranges.sources),
   ]);
-  if (token !== state.renderToken) return;
-  root.innerHTML = `${pageHeader()}${section("运行诊断", `${diagnosticsRangeControl("diagnostics-range", ranges.runs)}<p class="hint-text">显示所选时间范围内的每日研究与过去日报；旧历史维护任务请在“系统 → 历史维护”查看。</p>${pagedTable("operational-runs", [{ label: "任务", value: (row) => diagnosticTaskKindLabel(row.run_kind) }, { label: "状态", value: (row) => diagnosticRunStatusLabel(row.status) }, { label: "开始时间", value: (row) => formatTime(row.started_at) }, { label: "完成时间", value: (row) => formatTime(row.completed_at) }, { label: "论文数", key: "total_papers" }, { label: "问题摘要", value: (row) => row.error_summary || "—" }], runData.runs || [], { empty: "尚无每日研究或过去日报运行记录。" })}`, { icon: "🩺" })}${divider()}${section("LLM 健康", `${diagnosticsRangeControl("llm-range", ranges.llm)}<p class="hint-text">汇总所有真实任务（含历史维护）的 LLM 调用；查看不会发送探针请求，也不会额外消耗 Token。</p>${healthTable("llm-health", "llm", llmData.llm || [])}`, { icon: "🧠" })}${divider()}${section("数据源健康", `${diagnosticsRangeControl("source-range", ranges.sources)}<p class="hint-text">汇总所有真实任务（含历史维护）的数据源请求；查看不会发送探针请求。</p>${healthTable("source-health", "source", sourceData.sources || [])}`, { icon: "🌐" })}`;
-  bindCommon(root);
-  [["#diagnostics-range", "runs"], ["#llm-range", "llm"], ["#source-range", "sources"]].forEach(([selector, key]) => $(selector, root).addEventListener("change", (event) => {
+  if (token !== state.renderToken || state.page !== "diagnostics") return;
+  host.innerHTML = `${section("运行诊断", `${diagnosticsRangeControl("diagnostics-range", ranges.runs)}<p class="hint-text">显示所选时间范围内的每日研究与过去日报；旧历史维护任务请在“系统 → 历史维护”查看。</p>${pagedTable("operational-runs", [{ label: "任务", value: (row) => diagnosticTaskKindLabel(row.run_kind) }, { label: "状态", value: (row) => diagnosticRunStatusLabel(row.status) }, { label: "开始时间", value: (row) => formatTime(row.started_at) }, { label: "完成时间", value: (row) => formatTime(row.completed_at) }, { label: "论文数", key: "total_papers" }, { label: "问题摘要", value: (row) => row.error_summary || "—" }], runData.runs || [], { empty: "尚无每日研究或过去日报运行记录。" })}`, { icon: "🩺" })}${divider()}${section("LLM 健康", `${diagnosticsRangeControl("llm-range", ranges.llm)}<p class="hint-text">汇总所有真实任务（含历史维护）的 LLM 调用；查看不会发送探针请求，也不会额外消耗 Token。</p>${healthTable("llm-health", "llm", llmData.llm || [])}`, { icon: "🧠" })}${divider()}${section("数据源健康", `${diagnosticsRangeControl("source-range", ranges.sources)}<p class="hint-text">汇总所有真实任务（含历史维护）的数据源请求；查看不会发送探针请求。</p>${healthTable("source-health", "source", sourceData.sources || [])}`, { icon: "🌐" })}`;
+  bindCommon(host);
+  [["#diagnostics-range", "runs"], ["#llm-range", "llm"], ["#source-range", "sources"]].forEach(([selector, key]) => $(selector, host).addEventListener("change", (event) => {
     state.pageData.diagnosticsRanges = { ...ranges, [key]: event.target.value };
-    renderPage();
+    refreshDiagnosticsContent(root, token);
   }));
+  applyLocale(host);
+}
+
+async function renderDiagnostics(token) {
+  const root = $("#page-root");
+  root.innerHTML = `${pageHeader()}<div id="diagnostics-content"><div class="loading">正在读取运行诊断…</div></div>`;
+  await refreshDiagnosticsContent(root, token);
 }
 
 function localDateKey(value) {
@@ -2655,8 +2759,9 @@ function usageSummaryTable(summary) {
   return `<div class="table-wrap usage-summary-table"><table><tbody>${rows.map((metrics) => `<tr>${metrics.map(([label, value]) => `<th scope="row">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
-async function renderAnalytics(token) {
-  const root = $("#page-root");
+async function refreshAnalyticsContent(root = $("#page-root"), token = state.renderToken) {
+  const host = $("#analytics-content", root);
+  if (!host) return;
   const fallback = { range: "7d", date_from: relativeLocalDateKey(-6), date_to: relativeLocalDateKey(0) };
   const values = { ...fallback, ...(state.pageData.analytics || {}) };
   const params = new URLSearchParams({ range: values.range });
@@ -2664,9 +2769,9 @@ async function renderAnalytics(token) {
     params.set("date_from", values.date_from);
     params.set("date_to", values.date_to);
   }
-  root.innerHTML = `${pageHeader()}<div class="loading">正在读取 Token 使用记录…</div>`;
+  host.innerHTML = '<div class="loading">正在读取 Token 使用记录…</div>';
   const data = await api(`/api/analytics?${params.toString()}`);
-  if (token !== state.renderToken) return;
+  if (token !== state.renderToken || state.page !== "analytics") return;
   const control = analyticsRangeControl(values);
   const summary = data.summary || { prompt: 0, completion: 0, total: 0, runs: 0 };
   const hasUsage = Boolean(data.available && ((data.series || []).length || Number(summary.runs) > 0));
@@ -2685,70 +2790,118 @@ async function renderAnalytics(token) {
     { label: "输出 Token", value: (row) => formatNumber(row.completion) },
     { label: "总 Token", value: (row) => formatNumber(row.total) },
   ], data.models || [], { empty: "所选时间段内暂无模型使用记录。" });
-  root.innerHTML = `${pageHeader()}<section class="section-card analytics-statistics-card">${heatmap}<div class="analytics-statistics-block">${control}${usage}</div><div class="analytics-statistics-block trend-chart-block">${trend}</div><div class="analytics-statistics-block">${modelTable}</div></section>`;
-  bindCommon(root);
-  $$('[data-analytics-range]', root).forEach((button) => button.addEventListener("click", () => {
+  host.innerHTML = `<section class="section-card analytics-statistics-card">${heatmap}<div class="analytics-statistics-block">${control}${usage}</div><div class="analytics-statistics-block trend-chart-block">${trend}</div><div class="analytics-statistics-block">${modelTable}</div></section>`;
+  bindCommon(host);
+  $$('[data-analytics-range]', host).forEach((button) => button.addEventListener("click", () => {
     state.pageData.analytics = { ...values, range: button.dataset.analyticsRange };
-    renderPage();
+    refreshAnalyticsContent(root, token);
   }));
-  $("#analytics-custom-apply", root)?.addEventListener("click", () => {
-    const dateFrom = $("#analytics-from", root).value;
-    const dateTo = $("#analytics-to", root).value;
+  $("#analytics-custom-apply", host)?.addEventListener("click", () => {
+    const dateFrom = $("#analytics-from", host).value;
+    const dateTo = $("#analytics-to", host).value;
     if (!dateFrom || !dateTo || dateFrom > dateTo) {
       toast("请填写有效的开始和结束日期。", "error");
       return;
     }
     state.pageData.analytics = { ...values, date_from: dateFrom, date_to: dateTo };
-    renderPage();
+    refreshAnalyticsContent(root, token);
   });
+  applyLocale(host);
+}
+
+async function renderAnalytics(token) {
+  const root = $("#page-root");
+  root.innerHTML = `${pageHeader()}<div id="analytics-content"><div class="loading">正在读取 Token 使用记录…</div></div>`;
+  await refreshAnalyticsContent(root, token);
+}
+
+function logLabel(item) {
+  return `${item.name}  [${formatTime(item.modified_at).slice(5, 16)}  ${Math.round(Number(item.size_bytes) / 1024)} KB]`;
+}
+
+function logWorkspaceMarkup(items, selected) {
+  const group = (category) => items.filter((item) => (item.category || "other") === category);
+  const selector = (id, title, rows) => `<div class="log-select-field"><span>${escapeHtml(title)}</span>${scrollSelect({ id, rows, selected, label: logLabel, optionAttribute: "data-log-select-option", valueAttribute: "data-log-id" })}</div>`;
+  return `<section class="section-card log-selector-card"><div class="log-selector-grid">${selector("log-system-select", "📌 系统日志", group("system"))}${selector("log-run-select", "📀 运行日志", group("run"))}${selector("log-other-select", "📄 其他日志", group("other"))}</div></section><div id="log-content-region">${selected && !state.pageData.logClosed ? '<div class="loading">正在读取日志内容…</div>' : '<p class="report-empty-state">选择一个日志文件后可在这里查看内容。</p>'}</div>`;
+}
+
+function updateLogSelectorSelection(root, selected) {
+  $$('[data-log-select-option]', root).forEach((option) => {
+    const active = option.dataset.logId === selected;
+    option.setAttribute("aria-selected", String(active));
+    option.classList.toggle("is-selected", active);
+  });
+  const selectedOption = $$('[data-log-select-option]', root).find((item) => item.dataset.logId === selected);
+  const selector = selectedOption?.closest(".scroll-select");
+  if (selector) {
+    const label = $("summary > span", selector);
+    if (label) label.textContent = selectedOption.textContent || "—";
+    selector.open = false;
+  }
+}
+
+async function loadSelectedLog(root, items, selected, token) {
+  const host = $("#log-content-region", root);
+  if (!host) return;
+  if (!selected || state.pageData.logClosed) {
+    host.innerHTML = '<p class="report-empty-state">选择一个日志文件后可在这里查看内容。</p>';
+    return;
+  }
+  host.innerHTML = '<div class="loading">正在读取日志内容…</div>';
+  try {
+    const log = await api(`/api/logs/${encodeURIComponent(selected)}`);
+    if (token !== state.renderToken || state.page !== "logs" || state.pageData.selectedLog !== selected) return;
+    const selectedItem = items.find((item) => item.id === selected);
+    host.innerHTML = `<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · ${localeText("修改时间：", "Modified: ")}${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? ` · ${localeText("仅显示最后 300 行", "last 300 lines only")}` : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`;
+    $("#log-refresh-latest", host)?.addEventListener("click", () => refreshLogsWorkspace(root, token, { latest: true }));
+    $("#log-close", host)?.addEventListener("click", () => {
+      state.pageData.logClosed = true;
+      loadSelectedLog(root, items, selected, token);
+    });
+    applyLocale(host);
+  } catch (error) {
+    host.innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function bindLogWorkspace(root, items, token) {
+  $$('[data-log-select-option]', root).forEach((button) => button.addEventListener("click", () => {
+    const selected = button.dataset.logId;
+    if (!selected) return;
+    state.pageData.selectedLog = selected;
+    state.pageData.logClosed = false;
+    updateLogSelectorSelection(root, selected);
+    loadSelectedLog(root, items, selected, token);
+  }));
+}
+
+async function refreshLogsWorkspace(root = $("#page-root"), token = state.renderToken, options = {}) {
+  const host = $("#logs-workspace", root);
+  if (!host) return;
+  host.innerHTML = '<div class="loading">正在读取日志列表…</div>';
+  const data = await api("/api/logs");
+  if (token !== state.renderToken || state.page !== "logs") return;
+  const items = data.items || [];
+  const nonSystemLogs = items.filter((item) => (item.category || "other") !== "system");
+  let selected = options.latest ? nonSystemLogs[0]?.id || "" : state.pageData.selectedLog;
+  if (!selected || !items.some((item) => item.id === selected)) selected = nonSystemLogs[0]?.id || "";
+  state.pageData.selectedLog = selected;
+  if (options.latest) state.pageData.logClosed = false;
+  host.innerHTML = logWorkspaceMarkup(items, selected);
+  bindLogWorkspace(root, items, token);
+  applyLocale(host);
+  await loadSelectedLog(root, items, selected, token);
 }
 
 async function renderLogs(token) {
   const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}<div class="loading">正在读取日志列表…</div>`;
-  const data = await api("/api/logs");
-  if (token !== state.renderToken) return;
-  const items = data.items || [];
-  const group = (category) => items.filter((item) => (item.category || "other") === category);
-  const systemLogs = group("system");
-  const runLogs = group("run");
-  const otherLogs = group("other");
-  // The compatibility panel opens the newest non-system log regardless of
-  // whether it belongs to a daily/backfill run or a trend task.  Preserving
-  // the API's global mtime order avoids silently preferring an older run log.
-  const nonSystemLogs = items.filter((item) => (item.category || "other") !== "system");
-  let selected = state.pageData.selectedLog;
-  if (!selected || !items.some((item) => item.id === selected)) selected = nonSystemLogs[0]?.id || "";
-  state.pageData.selectedLog = selected;
-  const logLabel = (item) => `${item.name}  [${formatTime(item.modified_at).slice(5, 16)}  ${Math.round(Number(item.size_bytes) / 1024)} KB]`;
-  const selector = (id, title, rows) => `<div class="log-select-field"><span>${escapeHtml(title)}</span>${scrollSelect({ id, rows, selected, label: logLabel, optionAttribute: "data-log-select-option", valueAttribute: "data-log-id" })}</div>`;
-  root.innerHTML = `${pageHeader()}<section class="section-card log-selector-card"><div class="log-selector-grid">${selector("log-system-select", "📌 系统日志", systemLogs)}${selector("log-run-select", "📀 运行日志", runLogs)}${selector("log-other-select", "📄 其他日志", otherLogs)}</div></section>${selected && !state.pageData.logClosed ? '<div id="log-content" class="loading">正在读取日志内容…</div>' : '<p class="report-empty-state">选择一个日志文件后可在这里查看内容。</p>'}`;
-  $$('[data-log-select-option]', root).forEach((button) => button.addEventListener("click", () => {
-    if (!button.dataset.logId) return;
-    state.pageData.selectedLog = button.dataset.logId;
-    state.pageData.logClosed = false;
-    renderPage();
-  }));
-  if (selected) {
-    try {
-      const log = await api(`/api/logs/${encodeURIComponent(selected)}`); if (token !== state.renderToken) return;
-      const selectedItem = items.find((item) => item.id === selected);
-      const logHost = $("#log-content", root);
-      if (logHost) logHost.outerHTML = `<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · ${localeText("修改时间：", "Modified: ")}${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? ` · ${localeText("仅显示最后 300 行", "last 300 lines only")}` : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`;
-      $("#log-refresh-latest", root)?.addEventListener("click", () => { state.pageData.selectedLog = nonSystemLogs[0]?.id || ""; state.pageData.logClosed = false; renderPage(); });
-      $("#log-close", root)?.addEventListener("click", () => { state.pageData.logClosed = true; renderPage(); });
-    } catch (error) { const logHost = $("#log-content", root); if (logHost) logHost.outerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
-  }
+  root.innerHTML = `${pageHeader()}<div id="logs-workspace"><div class="loading">正在读取日志列表…</div></div>`;
+  await refreshLogsWorkspace(root, token);
 }
 
-async function renderAccounts(token) {
-  const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}<div class="loading">正在读取账户列表…</div>`;
-  const data = await api("/api/accounts");
-  if (token !== state.renderToken) return;
+function accountsContent(data) {
   if (!data.enabled) {
-    root.innerHTML = `${pageHeader()}${section("账户管理", '<p class="info-box">当前已跳过登录，仅建议在可信内网使用。可在 .env 设置 WEBUI_AUTH_ENABLED=true 后重新启用账户验证。</p>', { icon: "👤" })}`;
-    return;
+    return section("账户管理", '<p class="info-box">当前已跳过登录，仅建议在可信内网使用。可在 .env 设置 WEBUI_AUTH_ENABLED=true 后重新启用账户验证。</p>', { icon: "👤" });
   }
   const ownForm = `<form id="own-password-form" class="stack-form compact-form"><h3>修改我的密码</h3><label>当前密码<input name="current_password" type="password" required /></label><label>新密码<input name="new_password" type="password" minlength="6" required /></label><label>确认新密码<input name="password_confirmation" type="password" minlength="6" required /></label><button class="primary-button" type="submit">保存密码</button></form>`;
   const secondaryAccounts = (data.items || []).filter((item) => !item.is_owner);
@@ -2756,16 +2909,36 @@ async function renderAccounts(token) {
   const ownerForms = data.is_owner
     ? `<form id="add-account-form" class="stack-form compact-form"><h3>新增管理员</h3><label>用户名<input name="username" required /></label><label>密码<input name="password" type="password" minlength="6" required /></label><label>确认密码<input name="password_confirmation" type="password" minlength="6" required /></label><button class="secondary-button" type="submit">新增账户</button></form>${secondaryAccounts.length ? `${divider()}<form id="reset-account-form" class="stack-form compact-form"><h3>重置管理员密码</h3><label>账户<select name="username">${accountOptions}</select></label><label>新密码<input name="new_password" type="password" minlength="6" required /></label><label>确认新密码<input name="password_confirmation" type="password" minlength="6" required /></label><button class="secondary-button" type="submit">重置密码</button></form>${divider()}<form id="delete-account-form" class="stack-form compact-form"><h3>删除管理员</h3><label>账户<select name="username">${accountOptions}</select></label><label class="toggle-field"><span>我已确认删除该管理员账户</span><input name="confirmed" type="checkbox"/><i></i></label><button class="danger-button" type="submit">删除管理员</button></form>` : '<p class="hint-text">尚无其他管理员账户可重置或删除。</p>'}`
     : '<p class="hint-text">普通管理员可以修改自己的密码；账户所有者可管理其他管理员。</p>';
-  root.innerHTML = `${pageHeader()}${section("账户列表", `${pagedTable("accounts", [{ label: "用户名", key: "username" }, { label: "角色", key: "role" }, { label: "当前账户", value: (row) => row.current ? "当前" : "—" }], data.items || [], { empty: "暂无账户" })}`, { icon: "👥" })}${divider()}${section("账户操作", `${ownForm}${divider()}${ownerForms}`, { icon: "🔐" })}`;
-  bindCommon(root);
+  return `${section("账户列表", `${pagedTable("accounts", [{ label: "用户名", key: "username" }, { label: "角色", key: "role" }, { label: "当前账户", value: (row) => row.current ? "当前" : "—" }], data.items || [], { empty: "暂无账户" })}`, { icon: "👥" })}${divider()}${section("账户操作", `${ownForm}${divider()}${ownerForms}`, { icon: "🔐" })}`;
+}
+
+function bindAccounts(root, token) {
   bindAccountForm("#own-password-form", "/api/accounts/change-password", () => {
     toast("密码已修改，请使用新密码重新登录。", "success");
     clearTimers();
     window.setTimeout(() => window.location.reload(), 600);
   });
-  bindAccountForm("#add-account-form", "/api/accounts/add", () => { toast("管理员账户已创建。", "success"); renderPage(); });
+  bindAccountForm("#add-account-form", "/api/accounts/add", () => { toast("管理员账户已创建。", "success"); refreshAccountsContent(root, token); });
   bindAccountForm("#reset-account-form", "/api/accounts/reset", () => toast("管理员密码已重置。", "success"));
-  bindAccountForm("#delete-account-form", "/api/accounts/delete", () => { toast("管理员已删除。", "success"); renderPage(); });
+  bindAccountForm("#delete-account-form", "/api/accounts/delete", () => { toast("管理员已删除。", "success"); refreshAccountsContent(root, token); });
+}
+
+async function refreshAccountsContent(root = $("#page-root"), token = state.renderToken) {
+  const host = $("#accounts-content", root);
+  if (!host) return;
+  host.innerHTML = '<div class="loading">正在读取账户列表…</div>';
+  const data = await api("/api/accounts");
+  if (token !== state.renderToken || state.page !== "accounts") return;
+  host.innerHTML = accountsContent(data);
+  bindCommon(host);
+  bindAccounts(root, token);
+  applyLocale(host);
+}
+
+async function renderAccounts(token) {
+  const root = $("#page-root");
+  root.innerHTML = `${pageHeader()}<div id="accounts-content"><div class="loading">正在读取账户列表…</div></div>`;
+  await refreshAccountsContent(root, token);
 }
 
 function bindAccountForm(selector, endpoint, onSuccess) {
@@ -2887,23 +3060,32 @@ async function saveAll(showMessage = true) {
   }
 }
 
+async function refreshActiveTaskPanels() {
+  const root = $("#page-root");
+  if (state.page === "daily_research") return refreshDailyStatus();
+  if (state.page === "past_daily") return refreshPastDailyContent(root);
+  if (state.page === "trend_tasks") return refreshTrendStatus(root);
+  if (state.page === "history_tasks") return refreshHistoryStatus();
+  return undefined;
+}
+
 function bindCommon(root = document) {
   bindFields(root);
   bindPagers(root);
-  $$('[data-refresh-status]', root).forEach((button) => button.addEventListener("click", () => renderPage()));
+  $$('[data-refresh-status]', root).forEach((button) => button.addEventListener("click", () => refreshActiveTaskPanels()));
   $$('[data-start-task]', root).forEach((button) => button.addEventListener("click", async () => {
-    try { await api(`/api/tasks/${encodeURIComponent(button.dataset.startTask)}`, { method: "POST", body: { args: {} } }); toast("任务已加入队列。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); }
+    try { await api(`/api/tasks/${encodeURIComponent(button.dataset.startTask)}`, { method: "POST", body: { args: {} } }); toast("任务已加入队列。", "success"); await refreshActiveTaskPanels(); } catch (error) { toast(error.message, "error"); }
   }));
   $$('[data-stop-task]', root).forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm("确认停止当前任务？已完成的阶段会保留，未完成论文将留队等待重试。")) return;
-    try { await api("/api/tasks/stop", { method: "POST", body: { kind: button.dataset.stopTask } }); toast("已发送停止请求。", "success"); renderPage(); } catch (error) { toast(error.message, "error"); }
+    try { await api("/api/tasks/stop", { method: "POST", body: { kind: button.dataset.stopTask } }); toast("已发送停止请求。", "success"); await refreshActiveTaskPanels(); } catch (error) { toast(error.message, "error"); }
   }));
   $$('[data-clear-stale-triggers]', root).forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm("确认清除所有本地过期任务请求？未被工作进程接手的任务需要重新提交。")) return;
     try {
       const result = await api("/api/triggers/stale", { method: "POST", body: {} });
       toast(`已清除 ${Number(result.removed || 0)} 个过期请求。`, "success");
-      renderPage();
+      await refreshActiveTaskPanels();
     } catch (error) { toast(error.message, "error"); }
   }));
 }
