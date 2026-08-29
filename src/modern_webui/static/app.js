@@ -1592,10 +1592,21 @@ async function renderKeywords(token) {
   root.innerHTML = `${pageHeader()}<section class="section-card"><p class="hint-text">研究背景会用于评分和参考文献关键词提取。</p><label class="form-field"><textarea data-field="research_context" data-scope="config" aria-label="研究背景" rows="6" placeholder="描述你的研究问题、方法与关注方向">${context}</textarea></label></section>${divider()}${section("主关键词", `${weightedEntryEditor(editor)}`, { icon: "🏷️", hint: "主关键词参与资格判定与排序；每个关键词可设置 0–1 的独立权重。" })}${divider()}${renderReferenceExtraction()}`;
   bindCommon(root);
   bindWeightedEntryEditor(root, editor);
+  const referenceToggle = $('[data-field="enable_reference_extraction"]', root);
+  referenceToggle?.addEventListener("change", (event) => {
+    $("#reference-extraction-dependent", root).hidden = !event.target.checked;
+    $("#reference-extraction-disabled-hint", root).hidden = event.target.checked;
+    if (event.target.checked) loadExtractedKeywords(root, token);
+  });
+  if (booleanValue(configValue("enable_reference_extraction", false), false)) loadExtractedKeywords(root, token);
+}
+
+async function loadExtractedKeywords(root, token) {
+  const host = $("#extracted-keywords", root);
+  if (host) host.innerHTML = '<div class="loading">正在读取已提取关键词…</div>';
   try {
     const result = await api("/api/extracted-keywords");
-    if (token !== state.renderToken || !configValue("enable_reference_extraction", false)) return;
-    const host = $("#extracted-keywords");
+    if (token !== state.renderToken || !booleanValue(configValue("enable_reference_extraction", false), false)) return;
     if (host) host.innerHTML = extractedKeywordList(result.items || []);
   } catch (error) { /* cache visibility should not prevent configuration */ }
 }
@@ -1612,8 +1623,9 @@ function extractedKeywordList(items) {
 }
 
 function renderReferenceExtraction() {
-  const enabled = Boolean(configValue("enable_reference_extraction", false));
-  const content = `${field({ label: "启用参考文献关键词提取", key: "enable_reference_extraction", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "最多关键词数量", key: "max_reference_keywords", type: "number", min: 1, max: 50, fallback: 10 })}${field({ label: "相似度阈值", key: "similarity_threshold", type: "range", min: 0, max: 1, step: 0.05, fallback: 0.75 })}</div><div class="form-grid three">${weightField("高重要度", "high", 1, 3)}${weightField("中重要度", "medium", 0.2, 5)}${weightField("低重要度", "low", 0.1, 2)}</div><div id="extracted-keywords"><div class="loading">正在读取已提取关键词…</div></div>` : '<p class="hint-text">关闭后不会展示或使用此前提取的关键词；缓存会保留，重新开启后可继续复用。</p>'}`;
+  const enabled = booleanValue(configValue("enable_reference_extraction", false), false);
+  const fields = `<div class="form-grid two">${field({ label: "最多关键词数量", key: "max_reference_keywords", type: "number", min: 1, max: 50, fallback: 10 })}${field({ label: "相似度阈值", key: "similarity_threshold", type: "range", min: 0, max: 1, step: 0.05, fallback: 0.75 })}</div><div class="form-grid three">${weightField("高重要度", "high", 1, 3)}${weightField("中重要度", "medium", 0.2, 5)}${weightField("低重要度", "low", 0.1, 2)}</div><div id="extracted-keywords"><div class="loading">正在读取已提取关键词…</div></div>`;
+  const content = `${field({ label: "启用参考文献关键词提取", key: "enable_reference_extraction", type: "checkbox", fallback: false })}<div id="reference-extraction-dependent" ${enabled ? "" : "hidden"}>${fields}</div><p id="reference-extraction-disabled-hint" class="hint-text" ${enabled ? "hidden" : ""}>关闭后不会展示或使用此前提取的关键词；缓存会保留，重新开启后可继续复用。</p>`;
   return section("参考文献 PDF 关键词提取", content, { icon: "📚" });
 }
 
@@ -1730,19 +1742,31 @@ function validatedCustomJournalSource(raw, data) {
   };
 }
 
-function bindSources(root) {
+function refreshSources(pageRoot) {
+  const host = $("#sources-settings", pageRoot);
+  if (!host) return;
+  host.innerHTML = renderSources();
+  bindCommon(host);
+  bindSources(pageRoot);
+  applyLocale(host);
+  updateConfigurationDirtyIndicator();
+}
+
+function bindSources(pageRoot) {
+  const root = $("#sources-settings", pageRoot) || pageRoot;
   const data = ensureSourceState();
-  $("#source-arxiv", root)?.addEventListener("change", (event) => { data.arxiv = event.target.checked; markConfigurationDirty(); renderPage({ preserveScroll: true }); });
-  $("#extra-enabled", root)?.addEventListener("change", (event) => { data.extraEnabled = event.target.checked; markConfigurationDirty(); renderPage({ preserveScroll: true }); });
+  const refresh = () => refreshSources(pageRoot);
+  $("#source-arxiv", root)?.addEventListener("change", (event) => { data.arxiv = event.target.checked; markConfigurationDirty(); refresh(); });
+  $("#extra-enabled", root)?.addEventListener("change", (event) => { data.extraEnabled = event.target.checked; markConfigurationDirty(); refresh(); });
   bindTagSelector(root, "source-domains", (value) => {
     if (!value || data.domains.includes(value)) return;
-    data.domains.push(value); markConfigurationDirty(); renderPage({ preserveScroll: true });
-  }, (value) => { data.domains = data.domains.filter((item) => item !== value); markConfigurationDirty(); renderPage({ preserveScroll: true }); });
+    data.domains.push(value); markConfigurationDirty(); refresh();
+  }, (value) => { data.domains = data.domains.filter((item) => item !== value); markConfigurationDirty(); refresh(); });
   bindTagSelector(root, "extra-builtins", (value) => {
     if (!value || data.builtins.includes(value)) return;
-    data.builtins.push(value); markConfigurationDirty(); renderPage({ preserveScroll: true });
-  }, (value) => { data.builtins = data.builtins.filter((item) => item !== value); markConfigurationDirty(); renderPage({ preserveScroll: true }); });
-  $$('[data-remove-custom]', root).forEach((button) => button.addEventListener("click", () => { data.custom.splice(Number(button.dataset.removeCustom), 1); markConfigurationDirty(); renderPage({ preserveScroll: true }); }));
+    data.builtins.push(value); markConfigurationDirty(); refresh();
+  }, (value) => { data.builtins = data.builtins.filter((item) => item !== value); markConfigurationDirty(); refresh(); });
+  $$('[data-remove-custom]', root).forEach((button) => button.addEventListener("click", () => { data.custom.splice(Number(button.dataset.removeCustom), 1); markConfigurationDirty(); refresh(); }));
   $("#custom-add", root)?.addEventListener("click", () => {
     try {
       const candidate = validatedCustomJournalSource({
@@ -1753,7 +1777,7 @@ function bindSources(root) {
       }, data);
       data.custom.push(candidate);
       markConfigurationDirty();
-      renderPage({ preserveScroll: true });
+      refresh();
     } catch (error) {
       toast(error.message, "error");
     }
@@ -1762,8 +1786,9 @@ function bindSources(root) {
 
 async function renderDataSources(_token) {
   const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}${renderSources()}`;
-  bindCommon(root); bindSources(root);
+  root.innerHTML = `${pageHeader()}<div id="sources-settings">${renderSources()}</div>`;
+  bindCommon($("#sources-settings", root));
+  bindSources(root);
 }
 
 async function renderScoring(token) {
@@ -1917,12 +1942,19 @@ function thirdPartySection() {
   // consistent with what the worker will actually call.
   const openAlexEnabled = booleanValue(envValue("ENABLE_OPENALEX"), true);
   const semanticEnabled = booleanValue(envValue("ENABLE_SEMANTIC_SCHOLAR_TLDR"), true);
-  return `${divider()}${section("第三方 API 密钥", `<p class="hint-text">开启来源后才会调用对应服务；关闭时会隐藏其配置，已保存的密钥不会被清除。</p><div class="subsection"><h3>📚 OpenAlex</h3><label class="toggle-field"><span>启用 OpenAlex 来源<span class="field-help">关闭后不会请求 OpenAlex。开启后，还需在“数据源 → 额外数据源”中选择期刊来源。</span></span><input id="openalex-enabled" type="checkbox" ${openAlexEnabled ? "checked" : ""}/><i></i></label>${openAlexEnabled ? `<p class="hint-text">免费 API Key 可将每日 API 额度提高到匿名使用的 10 倍，并可查看用量。</p>${field({ label: "OpenAlex API Key", key: "OPENALEX_API_KEY", scope: "env", type: "secret" })}<div class="action-row"><button class="secondary-button" data-test-third="openalex">测试 OpenAlex 连接</button><a href="https://openalex.org/settings/api" target="_blank" rel="noreferrer">打开 OpenAlex API 控制台 ↗</a><span id="openalex-test-result" class="inline-result"></span></div>` : ""}</div><div class="subsection"><h3>🧠 Semantic Scholar</h3><label class="toggle-field"><span>启用 Semantic Scholar TL;DR 增强<span class="field-help">关闭后不会请求 Semantic Scholar，也不会把其 TL;DR 用于后续处理。</span></span><input id="semantic-enabled" type="checkbox" ${semanticEnabled ? "checked" : ""}/><i></i></label>${semanticEnabled ? `<p class="hint-text">用于可选 TL;DR 增强。匿名额度由所有用户共享；API Key 初始限额为每秒 1 次，应用会自动按此节奏请求。</p>${field({ label: "Semantic Scholar API Key", key: "SEMANTIC_SCHOLAR_API_KEY", scope: "env", type: "secret" })}<div class="action-row"><button class="secondary-button" data-test-third="semantic_scholar">测试 Semantic Scholar 连接</button><a href="https://www.semanticscholar.org/product/api#api-key-form" target="_blank" rel="noreferrer">打开 Semantic Scholar API 申请页 ↗</a><span id="semantic_scholar-test-result" class="inline-result"></span></div>` : ""}</div>`, { icon: "🔑" })}`;
+  const openAlexFields = `<p class="hint-text">免费 API Key 可将每日 API 额度提高到匿名使用的 10 倍，并可查看用量。</p>${field({ label: "OpenAlex API Key", key: "OPENALEX_API_KEY", scope: "env", type: "secret" })}<div class="action-row"><button class="secondary-button" data-test-third="openalex">测试 OpenAlex 连接</button><a href="https://openalex.org/settings/api" target="_blank" rel="noreferrer">打开 OpenAlex API 控制台 ↗</a><span id="openalex-test-result" class="inline-result"></span></div>`;
+  const semanticFields = `<p class="hint-text">用于可选 TL;DR 增强。匿名额度由所有用户共享；API Key 初始限额为每秒 1 次，应用会自动按此节奏请求。</p>${field({ label: "Semantic Scholar API Key", key: "SEMANTIC_SCHOLAR_API_KEY", scope: "env", type: "secret" })}<div class="action-row"><button class="secondary-button" data-test-third="semantic_scholar">测试 Semantic Scholar 连接</button><a href="https://www.semanticscholar.org/product/api#api-key-form" target="_blank" rel="noreferrer">打开 Semantic Scholar API 申请页 ↗</a><span id="semantic_scholar-test-result" class="inline-result"></span></div>`;
+  const content = [
+    '<p class="hint-text">开启来源后才会调用对应服务；关闭时会隐藏其配置，已保存的密钥不会被清除。</p>',
+    `<div class="subsection"><h3>📚 OpenAlex</h3><label class="toggle-field"><span>启用 OpenAlex 来源<span class="field-help">关闭后不会请求 OpenAlex。开启后，还需在“数据源 → 额外数据源”中选择期刊来源。</span></span><input id="openalex-enabled" type="checkbox" ${openAlexEnabled ? "checked" : ""}/><i></i></label><div id="openalex-dependent" ${openAlexEnabled ? "" : "hidden"}>${openAlexFields}</div></div>`,
+    `<div class="subsection"><h3>🧠 Semantic Scholar</h3><label class="toggle-field"><span>启用 Semantic Scholar TL;DR 增强<span class="field-help">关闭后不会请求 Semantic Scholar，也不会把其 TL;DR 用于后续处理。</span></span><input id="semantic-enabled" type="checkbox" ${semanticEnabled ? "checked" : ""}/><i></i></label><div id="semantic-dependent" ${semanticEnabled ? "" : "hidden"}>${semanticFields}</div></div>`,
+  ].join("");
+  return `${divider()}${section("第三方 API 密钥", content, { icon: "🔑" })}`;
 }
 
 async function renderApi(_token) {
   const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}${llmSection("cheap", "低成本 LLM", "💸")}${divider()}${llmSection("smart", "高性能 LLM", "🧠")}${mineruSection()}${thirdPartySection()}`;
+  root.innerHTML = `${pageHeader()}${llmSection("cheap", "低成本 LLM", "💸")}${divider()}${llmSection("smart", "高性能 LLM", "🧠")}${mineruSection()}<div id="api-third-party">${thirdPartySection()}</div>`;
   bindCommon(root);
   $$("[data-test-llm]", root).forEach((button) => button.addEventListener("click", () => testLlm(button.dataset.testLlm)));
   $("[data-test-mineru]", root)?.addEventListener("click", () => testConnection("mineru", {
@@ -1936,16 +1968,23 @@ async function renderApi(_token) {
     const kind = button.dataset.testThird;
     testConnection(kind, { api_key: state.draft.env[thirdPartyKeys[kind]] }, `${kind}-test-result`);
   }));
-  $("#openalex-enabled", root)?.addEventListener("change", (event) => { state.draft.env.ENABLE_OPENALEX = event.target.checked ? "true" : "false"; markConfigurationDirty(); renderPage({ preserveScroll: true }); });
-  $("#semantic-enabled", root)?.addEventListener("change", (event) => { state.draft.env.ENABLE_SEMANTIC_SCHOLAR_TLDR = event.target.checked ? "true" : "false"; markConfigurationDirty(); renderPage({ preserveScroll: true }); });
+  const bindThirdPartyToggle = (selector, key, dependent) => $(selector, root)?.addEventListener("change", (event) => {
+    state.draft.env[key] = event.target.checked ? "true" : "false";
+    const fields = $(dependent, root);
+    if (fields) fields.hidden = !event.target.checked;
+    markConfigurationDirty();
+  });
+  bindThirdPartyToggle("#openalex-enabled", "ENABLE_OPENALEX", "#openalex-dependent");
+  bindThirdPartyToggle("#semantic-enabled", "ENABLE_SEMANTIC_SCHOLAR_TLDR", "#semantic-dependent");
   ["cheap", "smart"].forEach((role) => $("#" + role + "-provider", root)?.addEventListener("change", (event) => {
     const urls = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", ollama: "http://127.0.0.1:11434/v1", zhipu: "https://open.bigmodel.cn/api/paas/v4", custom: "" };
     const key = `${role === "cheap" ? "CHEAP_LLM" : "SMART_LLM"}__BASE_URL`;
     if (event.target.value !== "custom") {
       state.draft.env[key] = urls[event.target.value];
+      const baseUrlInput = $(`[data-field="${key}"][data-scope="env"]`, root);
+      if (baseUrlInput) baseUrlInput.value = urls[event.target.value];
       markConfigurationDirty();
     }
-    renderPage({ preserveScroll: true });
   }));
 }
 
