@@ -119,6 +119,17 @@ function envValue(key, fallback = "") {
   return state.draft.env[key] ?? state.settings?.env?.[key] ?? fallback;
 }
 
+function booleanValue(value, fallback = false) {
+  // Environment values come from .env as strings.  In particular, the
+  // string "false" must not render as a checked switch just because it is a
+  // non-empty JavaScript value.  Blank optional env values retain each
+  // control's documented default, matching the Streamlit collectors.
+  if (value === undefined || value === null || value === "") return Boolean(fallback);
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
+
 function secretConfigured(key) {
   return Boolean(state.settings?.secrets?.[key]);
 }
@@ -240,7 +251,7 @@ function field(options) {
   const data = `data-field="${escapeAttribute(key)}" data-scope="${scope}"${redraw ? ' data-redraw="1"' : ""}`;
   const hint = help ? `<span class="field-help">${escapeHtml(help)}</span>` : "";
   if (type === "checkbox") {
-    return `<label class="toggle-field"><span>${escapeHtml(label)}${hint}</span><input type="checkbox" ${data} ${value ? "checked" : ""}/><i></i></label>`;
+    return `<label class="toggle-field"><span>${escapeHtml(label)}${hint}</span><input type="checkbox" ${data} ${booleanValue(value, fallback) ? "checked" : ""}/><i></i></label>`;
   }
   if (type === "textarea" || type === "lines") {
     const transform = type === "lines" ? ' data-transform="lines"' : "";
