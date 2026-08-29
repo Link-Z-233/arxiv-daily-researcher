@@ -432,11 +432,13 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .compact-metrics .metric-card strong { margin-bottom: 0; font-size: .94rem; overflow-wrap: anywhere; }
 .card-list { display: grid; gap: 9px; margin-top: 16px; }
 .card-list > .paged-items-host { display: grid; gap: 9px; }
-.favorite-card, .list-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
-.favorite-card { display: grid; grid-template-columns: 145px 1fr; }
-.favorite-card span, .favorite-card small { color: var(--muted); font-size: .72rem; }
-.favorite-card strong { min-width: 0; overflow-wrap: anywhere; }
-.favorite-card small { grid-column: 2; }
+.list-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.favorite-papers-table { margin-top: 16px; }
+.favorite-papers-table .table-wrap table { min-width: 760px; }
+.favorite-papers-table .table-wrap td:nth-child(1),
+.favorite-papers-table .table-wrap td:nth-child(3),
+.favorite-papers-table .table-wrap td:nth-child(4) { white-space: nowrap; }
+.favorite-papers-table .table-wrap td:nth-child(2) { min-width: 360px; font-weight: 650; }
 .paper-card { margin-bottom: 9px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow-xs); }
 .paper-card > summary { display: grid; grid-template-columns: auto 1fr; gap: 9px; padding: 12px; cursor: pointer; }
 .paper-card summary small { grid-column: 2; color: var(--muted); font-size: .72rem; }
@@ -664,7 +666,6 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 :root[data-theme="dark"] .live-log { border-color: #384966; background: #1b283d; }
 :root[data-theme="dark"] .table-wrap,
 :root[data-theme="dark"] .native-scroll-table,
-:root[data-theme="dark"] .favorite-card,
 :root[data-theme="dark"] .list-row,
 :root[data-theme="dark"] .paper-card,
 :root[data-theme="dark"] .report-frame { background: var(--card); }
@@ -725,8 +726,6 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
   .tag-select-box { grid-template-columns: 1fr; }
   .tag-select-dropdown, .tag-select-complete { min-height: 40px; border-top: 1px solid var(--line); border-left: 0; }
   .timestamp { display: none; }
-  .favorite-card { grid-template-columns: 1fr; }
-  .favorite-card small { grid-column: 1; }
   .report-frame { height: 620px; }
   .log-viewer { height: 620px; }
   .status-card { padding: 16px; }

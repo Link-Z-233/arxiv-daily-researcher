@@ -221,6 +221,10 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "正向偏好": "Positive preference",
   "负向偏好": "Negative preference",
   "按标记时间倒序展示；点击标题可打开论文页面。": "Newest marks first; select a title to open the paper page.",
+  "收藏时间": "Marked at",
+  "论文": "Paper",
+  "论文标识": "Paper ID",
+  "暂无 👍 收藏论文。": "No liked papers yet.",
   "收藏次数": "Favorites",
   "收藏关键词": "Favorite Keywords",
   "次数": "Count",
@@ -1540,18 +1544,23 @@ async function renderFavorites(token) {
     root.innerHTML = `${pageHeader()}${section("收藏", '<p class="empty-state">尚未标记论文。可直接在每日研究报告的论文卡片中使用 👍 或 👎。</p>', { icon: "⭐" })}`;
     return;
   }
-  const cards = data.liked.map((row) => {
+  const likedRows = Array.isArray(data.liked) ? data.liked : [];
+  const paperTitle = (row) => {
     const fallback = String(row.source || "").toLowerCase() === "arxiv" && row.paper_id
       ? `https://arxiv.org/abs/${row.paper_id}`
       : null;
     const url = safeExternalUrl(row.url) || fallback;
-    const title = url
+    return url
       ? `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.title || row.paper_id)}</a>`
       : escapeHtml(row.title || row.paper_id);
-    return `<article class="favorite-card"><span>${escapeHtml(formatTime(row.updated_at))}</span><strong>${title}</strong><small>${escapeHtml(row.source)} · ${escapeHtml(row.paper_id)}</small></article>`;
-  });
-  const likedList = cards.length
-    ? `<p class="hint-text">按标记时间倒序展示；点击标题可打开论文页面。</p><div class="card-list">${pagedItems("favorite-cards", cards, "暂无已收藏论文")}</div>`
+  };
+  const likedList = likedRows.length
+    ? `<p class="hint-text">按标记时间倒序展示；点击标题可打开论文页面。</p><div class="favorite-papers-table">${pagedTable("favorite-papers", [
+      { label: "收藏时间", value: (row) => formatTime(row.updated_at) },
+      { label: "论文", html: paperTitle },
+      { label: "来源", value: (row) => row.source || "—" },
+      { label: "论文标识", value: (row) => row.paper_id || "—" },
+    ], likedRows, { empty: "暂无 👍 收藏论文。" })}</div>`
     : '<p class="empty-state">暂无 👍 收藏论文。</p>';
   root.innerHTML = `${pageHeader()}${section("收藏的论文", `${metrics([{ label: "👍 收藏", value: formatNumber(likeCount), help: "正向偏好" }, { label: "👎 不喜欢", value: formatNumber(dislikeCount), help: "负向偏好" }])}${likedList}`, { icon: "⭐" })}${divider()}${section("收藏画像", `<div class="form-grid two"><div><p class="scroll-list-label">收藏作者 Top</p>${nativeScrollTable([{ label: "作者", key: "name" }, { label: "收藏次数", key: "count" }], data.authors || [], { empty: "暂无收藏作者统计", visibleRows: 10 })}</div><div><p class="scroll-list-label">收藏关键词</p>${nativeScrollTable([{ label: "关键词", key: "keyword" }, { label: "次数", key: "count" }], data.keywords || [], { empty: "暂无收藏关键词统计", visibleRows: 10 })}</div></div>`, { icon: "🧩" })}`;
   bindCommon(root);

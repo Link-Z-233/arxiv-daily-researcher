@@ -62,6 +62,13 @@ class ModernWebUIAppTests(unittest.TestCase):
             response.text.count('preview.className = "report-preview-host";'), 2
         )
 
+    def test_favorite_papers_use_the_shared_paged_table(self) -> None:
+        response = self.client.get("/assets/app.js")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('pagedTable("favorite-papers"', response.text)
+        self.assertNotIn('class="favorite-card"', response.text)
+
     def test_stale_trigger_cleanup_uses_the_authenticated_api_boundary(self) -> None:
         self.assertEqual(self.client.post("/api/triggers/stale", json={}).status_code, 503)
         self.assertEqual(
