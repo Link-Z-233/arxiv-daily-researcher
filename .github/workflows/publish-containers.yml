@@ -106,8 +106,8 @@ jobs:
             ghcr.io/${{ github.repository }}-config-panel:${{ steps.version.outputs.value }}
             ghcr.io/${{ github.repository }}-config-panel:latest
           labels: |
-            org.opencontainers.image.title=ArXiv Daily Researcher Config Panel
-            org.opencontainers.image.description=WebUI for ArXiv Daily Researcher
+            org.opencontainers.image.title=ArXiv Daily Researcher Modern WebUI
+            org.opencontainers.image.description=Modern management WebUI for ArXiv Daily Researcher
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.value }}
