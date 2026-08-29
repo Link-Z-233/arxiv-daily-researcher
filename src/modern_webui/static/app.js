@@ -231,6 +231,16 @@ function formatPercent(value) {
   return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : "—";
 }
 
+function relativeLocalDateKey(offsetDays = 0) {
+  // Date inputs represent an operator's local calendar day.  ISO timestamps
+  // are UTC, so slicing ``toISOString()`` made "today" and "yesterday"
+  // one day early for users east of UTC before their local morning.
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + Number(offsetDays || 0));
+  return localDateKey(date);
+}
+
 function pageGroup(page) {
   return NAVIGATION.find((group) => group.pages.some(([id]) => id === page));
 }
@@ -583,7 +593,7 @@ function compactTaskNotice(status) {
 }
 
 async function renderPastDaily(token) {
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const yesterday = relativeLocalDateKey(-1);
   const values = state.pageData.past || { from: yesterday, to: yesterday };
   const root = $("#page-root");
   root.innerHTML = `${pageHeader()}<div class="loading">正在读取过去日报队列…</div>`;
@@ -609,8 +619,8 @@ async function renderPastDaily(token) {
 
 function renderTrendForm(templates = []) {
   const config = configValue;
-  const today = new Date().toISOString().slice(0, 10);
-  const defaultFrom = new Date(Date.now() - Number(config("trend_default_date_range_days", 365)) * 86400000).toISOString().slice(0, 10);
+  const today = relativeLocalDateKey(0);
+  const defaultFrom = relativeLocalDateKey(-Number(config("trend_default_date_range_days", 365)));
   const configuredPrompt = String(config("trend_analysis_prompt", "") || "");
   const matchingTemplate = templates.find((item) => item.text === configuredPrompt)?.name || "";
   const configuredSkills = Array.isArray(config("trend_enabled_skills", ["comprehensive_analysis"])) ? config("trend_enabled_skills", ["comprehensive_analysis"]) : [];
