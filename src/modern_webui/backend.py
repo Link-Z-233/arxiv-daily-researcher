@@ -632,6 +632,7 @@ def _read_status_file(path: Path) -> dict[str, Any] | None:
         "state": str(raw.get("state") or "unknown"),
         "issue": sanitize_task_error_summary(raw.get("error_summary") or raw.get("error")),
         "args": raw.get("args") if isinstance(raw.get("args"), dict) else {},
+        "retry_of": str(raw.get("retry_of") or "").strip(),
     }
 
 
@@ -656,6 +657,7 @@ def task_records(modes: Iterable[str] | None = None, *, limit: int = 200) -> lis
                 "state": "queued",
                 "issue": "",
                 "args": payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                "retry_of": str(payload.get("retry_of") or "").strip(),
             }
         for path in queue_dir.glob("*.running"):
             payload = read_trigger_payload(path)
@@ -671,6 +673,7 @@ def task_records(modes: Iterable[str] | None = None, *, limit: int = 200) -> lis
                 "state": "starting",
                 "issue": "",
                 "args": payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                "retry_of": str(payload.get("retry_of") or "").strip(),
             }
     except (OSError, ValueError):
         pass
@@ -908,13 +911,18 @@ def run_status(kind: str = "daily") -> dict[str, Any]:
     }
 
 
-def enqueue_task(mode: str, args: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def enqueue_task(
+    mode: str,
+    args: Mapping[str, Any] | None = None,
+    *,
+    retry_of: str | None = None,
+) -> dict[str, Any]:
     if mode not in SUPPORTED_MODES:
         raise ModernWebUIError("不支持的任务类型。")
     safe_args = dict(args or {})
     _ensure_json_value(safe_args)
     try:
-        path = enqueue_trigger(DEFAULT_DATA_DIR, mode, **safe_args)
+        path = enqueue_trigger(DEFAULT_DATA_DIR, mode, retry_of=retry_of, **safe_args)
     except (TypeError, ValueError) as exc:
         raise ModernWebUIError(str(exc)) from exc
     return {"queued": True, "request_id": path.stem.rsplit("_", 1)[-1], "mode": mode}
@@ -975,10 +983,17 @@ def history_status() -> dict[str, Any]:
             active_progress = candidate if isinstance(candidate, Mapping) else None
         except Exception:
             active_progress = None
+    all_records = task_records(HISTORY_MODES)
+    retried_request_ids = {
+        str(row.get("retry_of") or "").strip()
+        for row in all_records
+        if str(row.get("retry_of") or "").strip()
+    }
     records = [
         _history_task_row(row, active_progress)
-        for row in task_records(HISTORY_MODES)
+        for row in all_records
         if row["state"] != "succeeded"
+        and str(row.get("request_id") or "") not in retried_request_ids
     ]
     return {
         "status": run_status("history"),
@@ -1044,7 +1059,9 @@ def retry_history_task(request_id: str) -> dict[str, Any]:
         raise ModernWebUIError("未找到可重试的历史维护任务。")
     if record["state"] not in {"failed", "rejected", "interrupted", "skipped_busy"}:
         raise ModernWebUIError("该历史维护任务当前不能重试。")
-    return enqueue_task(record["mode"], record.get("args") or {})
+    return enqueue_task(
+        record["mode"], record.get("args") or {}, retry_of=request_id
+    )
 
 
 def _source_list(store: DailyResearchStore) -> list[str]:

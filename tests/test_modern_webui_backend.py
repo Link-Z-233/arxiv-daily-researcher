@@ -491,6 +491,41 @@ class ModernBackendTests(unittest.TestCase):
         self.assertTrue(failed["retryable"])
         self.assertEqual(failed["completed_at"], "2026-08-28T00:02:00+00:00")
 
+    def test_history_status_hides_a_failure_replaced_by_its_retry(self) -> None:
+        records = [
+            {
+                "request_id": "failed",
+                "mode": "legacy_import",
+                "state": "failed",
+                "created_at": "2026-08-28T00:00:00+00:00",
+                "updated_at": "2026-08-28T00:02:00+00:00",
+                "issue": "读取报告失败",
+                "args": {"full_repair": True},
+                "retry_of": "",
+            },
+            {
+                "request_id": "retry",
+                "mode": "legacy_import",
+                "state": "succeeded",
+                "created_at": "2026-08-29T00:00:00+00:00",
+                "updated_at": "2026-08-29T00:02:00+00:00",
+                "issue": "",
+                "args": {"full_repair": True},
+                "retry_of": "failed",
+            },
+        ]
+        store = MagicMock()
+        store.get_app_state.return_value = ""
+        store.active_run_progress.return_value = None
+        with patch.object(backend, "flat_config", return_value={}), patch.object(
+            backend, "open_store", return_value=store
+        ), patch.object(backend, "task_records", return_value=records), patch.object(
+            backend, "run_status", return_value={"is_active": False}
+        ):
+            payload = backend.history_status()
+
+        self.assertEqual(payload["tasks"], [])
+
     def test_daily_status_hides_history_locks_but_keeps_launch_guard(self) -> None:
         history_lock = {"name": "legacy_import.lock", "pid": 42}
         with patch.object(backend, "flat_config", return_value={}), patch.object(
