@@ -167,6 +167,10 @@ class Settings(BaseSettings):
     KEYWORD_DB_PATH: Path = DATA_DIR / "keywords" / "keywords.db"
     KEYWORD_NORMALIZATION_ENABLED: bool = True
     KEYWORD_NORMALIZATION_BATCH_SIZE: int = 50
+    # Keyword normalization is a background workload.  It uses the low-cost
+    # model by default, but installations that value normalization quality can
+    # explicitly route it to the high-capability model.
+    KEYWORD_NORMALIZATION_LLM_ROLE: str = "cheap"
     KEYWORD_TREND_DEFAULT_DAYS: int = 30
     KEYWORD_CHART_TOP_N: int = 15
     KEYWORD_TREND_TOP_N: int = 5
@@ -715,6 +719,10 @@ class Settings(BaseSettings):
                     norm = kt["normalization"]
                     self.KEYWORD_NORMALIZATION_ENABLED = norm.get("enabled", True)
                     self.KEYWORD_NORMALIZATION_BATCH_SIZE = norm.get("batch_size", 25)
+                    role = str(norm.get("llm_role", "cheap") or "cheap").strip().lower()
+                    if role not in {"cheap", "smart"}:
+                        role = "cheap"
+                    self.KEYWORD_NORMALIZATION_LLM_ROLE = role
 
                 if "trend_view" in kt:
                     self.KEYWORD_TREND_DEFAULT_DAYS = kt["trend_view"].get("default_days", 30)

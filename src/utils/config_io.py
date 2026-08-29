@@ -139,6 +139,17 @@ def validate_config_document(config: object) -> Dict[str, Any]:
             legacy_history["full_repair_enabled"], bool
         ):
             raise ValueError("legacy_history.full_repair_enabled 必须是布尔值")
+    keyword_tracker = config.get("keyword_tracker")
+    if keyword_tracker is not None:
+        if not isinstance(keyword_tracker, dict):
+            raise ValueError("keyword_tracker 配置段必须是对象")
+        normalization = keyword_tracker.get("normalization", {})
+        if normalization is None:
+            normalization = {}
+        if not isinstance(normalization, dict):
+            raise ValueError("keyword_tracker.normalization 必须是对象")
+        if "llm_role" in normalization and str(normalization["llm_role"]).strip().lower() not in {"cheap", "smart"}:
+            raise ValueError("keyword_tracker.normalization.llm_role 必须是 cheap 或 smart")
     data_sources = config.get("data_sources")
     if data_sources is not None:
         if not isinstance(data_sources, dict):
@@ -708,6 +719,7 @@ def build_config_dict(
     keyword_db_path: str = "data/keywords/keywords.db",
     keyword_normalization_enabled: bool = True,
     keyword_normalization_batch_size: int = 25,
+    keyword_normalization_llm_role: str = "cheap",
     keyword_trend_default_days: int = 30,
     keyword_chart_top_n: int = 15,
     keyword_trend_top_n: int = 5,
@@ -815,6 +827,9 @@ def build_config_dict(
 
     if not isinstance(extra_sources_enabled, bool):
         raise ValueError("extra_sources_enabled 必须是布尔值")
+    keyword_normalization_llm_role = str(keyword_normalization_llm_role or "cheap").strip().lower()
+    if keyword_normalization_llm_role not in {"cheap", "smart"}:
+        raise ValueError("keyword_tracker.normalization.llm_role 必须是 cheap 或 smart")
     from utils.backup import (
         validate_local_backup_retention_days,
         validate_local_backup_same_day_max_count,
@@ -972,6 +987,7 @@ def build_config_dict(
             "normalization": {
                 "enabled": keyword_normalization_enabled,
                 "batch_size": keyword_normalization_batch_size,
+                "llm_role": keyword_normalization_llm_role,
             },
             "trend_view": {
                 "default_days": keyword_trend_default_days,
@@ -1299,6 +1315,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     norm = kt.get("normalization", {})
     flat["keyword_normalization_enabled"] = norm.get("enabled", True)
     flat["keyword_normalization_batch_size"] = norm.get("batch_size", 25)
+    flat["keyword_normalization_llm_role"] = norm.get("llm_role", "cheap")
     flat["keyword_trend_default_days"] = kt.get("trend_view", {}).get("default_days", 30)
     charts = kt.get("charts", {})
     flat["keyword_chart_top_n"] = charts.get("bar_chart", {}).get("top_n", 15)

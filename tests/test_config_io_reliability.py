@@ -417,6 +417,13 @@ class ConfigIOReliabilityTests(unittest.TestCase):
         flat = flatten_config_dict(config)
         self.assertEqual(flat["pdf_download_max_bytes"], 12 * 1024 * 1024)
 
+    def test_keyword_normalization_llm_role_round_trips_and_is_validated(self):
+        config = build_config_dict(keyword_normalization_llm_role="smart")
+        self.assertEqual(config["keyword_tracker"]["normalization"]["llm_role"], "smart")
+        self.assertEqual(flatten_config_dict(config)["keyword_normalization_llm_role"], "smart")
+        with self.assertRaisesRegex(ValueError, "llm_role"):
+            build_config_dict(keyword_normalization_llm_role="experimental")
+
     def test_custom_path_roots_survive_an_unrelated_config_save_round_trip(self):
         """Global WebUI saves must retain hidden/custom path settings."""
         original = {

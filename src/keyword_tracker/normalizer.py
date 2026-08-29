@@ -47,16 +47,19 @@ class KeywordNormalizer:
     """
 
     def __init__(self, health_recorder: Optional[LLMHealthRecorder] = None):
-        """初始化，使用 settings 中的 cheap_llm 配置"""
+        """Initialize using the configured low-cost or high-capability LLM."""
         from config import settings
         from utils.llm_resilience import build_llm_client
 
         # 与全部 LLM 客户端共享超时/重试边界（config.json 的 llm 段）。
+        role = str(getattr(settings, "KEYWORD_NORMALIZATION_LLM_ROLE", "cheap") or "cheap").strip().lower()
+        self.role = role if role in {"cheap", "smart"} else "cheap"
+        llm_config = settings.SMART_LLM if self.role == "smart" else settings.CHEAP_LLM
         self.client = build_llm_client(
-            settings.CHEAP_LLM.api_key,
-            settings.CHEAP_LLM.base_url,
+            llm_config.api_key,
+            llm_config.base_url,
         )
-        self.model = settings.CHEAP_LLM.model_name
+        self.model = llm_config.model_name
         self._health_recorder = health_recorder
 
     def _record_llm_health(
@@ -64,7 +67,7 @@ class KeywordNormalizer:
     ) -> None:
         recorder = getattr(self, "_health_recorder", None)
         if recorder is not None:
-            recorder("cheap", self.model, success, error)
+            recorder(self.role, self.model, success, error)
 
     def set_health_recorder(self, health_recorder: Optional[LLMHealthRecorder]) -> None:
         """Attach optional passive observability after construction."""

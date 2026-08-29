@@ -315,6 +315,9 @@ def collect(env_values: dict, config_values: dict) -> dict:
         "keyword_tracker_enabled": current("keyword_tracker_enabled", True),
         "keyword_normalization_enabled": current("keyword_normalization_enabled", True),
         "keyword_normalization_batch_size": current("keyword_normalization_batch_size", 25),
+        # The modern panel can choose the LLM role.  Preserve that choice when
+        # an operator later saves an unrelated setting through Streamlit.
+        "keyword_normalization_llm_role": current("keyword_normalization_llm_role", "cheap"),
         "keyword_trend_default_days": current("keyword_trend_default_days", 30),
         "keyword_chart_top_n": current("keyword_chart_top_n", 15),
         "keyword_trend_top_n": current("keyword_trend_top_n", 5),
