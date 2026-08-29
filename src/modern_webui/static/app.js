@@ -349,6 +349,7 @@ const state = {
   group: "run",
   page: "daily_research",
   tables: {},
+  pagedRenderers: new Map(),
   timers: new Map(),
   pageData: {},
   renderToken: 0,
@@ -477,12 +478,11 @@ function toggleLanguage() {
   state.language = state.language === "en" ? "zh" : "en";
   window.localStorage.setItem("adr-modern-language", state.language);
   renderNavigation();
-  if (state.auth?.authenticated) {
-    renderPage();
-  } else {
+  if (!state.auth?.authenticated) {
     showAuth(state.auth || { enabled: true, configured: false });
   }
   applyLocale(document);
+  updateConfigurationDirtyIndicator();
   applyTheme();
 }
 
@@ -771,8 +771,7 @@ function bindFields(root = document) {
 
 function tableId(key) { return `${state.page}:${key}`; }
 
-function pagedTable(key, columns, rows, options = {}) {
-  const id = tableId(key);
+function pagedTableMarkup(id, columns, rows, options = {}) {
   const entry = state.tables[id] || { size: 5, page: 0 };
   state.tables[id] = entry;
   const size = entry.size;
@@ -788,6 +787,12 @@ function pagedTable(key, columns, rows, options = {}) {
   // once there are real rows to inspect.
   const pager = rows.length ? `<div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, rows.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div>` : "";
   return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>${pager}</div>`;
+}
+
+function pagedTable(key, columns, rows, options = {}) {
+  const id = tableId(key);
+  state.pagedRenderers.set(id, () => pagedTableMarkup(id, columns, rows, options));
+  return `<div data-paged-host="${escapeAttribute(id)}">${pagedTableMarkup(id, columns, rows, options)}</div>`;
 }
 
 function nativeScrollTable(columns, rows, options = {}) {
@@ -808,10 +813,35 @@ function nativeScrollTable(columns, rows, options = {}) {
 
 function bindPagers(root = document) {
   $$('[data-table-size]', root).forEach((element) => element.addEventListener("change", () => {
-    const item = state.tables[element.dataset.tableSize]; item.size = Number(element.value); item.page = 0; renderPage();
+    const item = state.tables[element.dataset.tableSize];
+    if (!item) return;
+    item.size = Number(element.value);
+    item.page = 0;
+    refreshPagedHost(element.dataset.tableSize);
   }));
-  $$('[data-table-prev]', root).forEach((element) => element.addEventListener("click", () => { state.tables[element.dataset.tablePrev].page -= 1; renderPage(); }));
-  $$('[data-table-next]', root).forEach((element) => element.addEventListener("click", () => { state.tables[element.dataset.tableNext].page += 1; renderPage(); }));
+  $$('[data-table-prev]', root).forEach((element) => element.addEventListener("click", () => {
+    const item = state.tables[element.dataset.tablePrev];
+    if (!item) return;
+    item.page -= 1;
+    refreshPagedHost(element.dataset.tablePrev);
+  }));
+  $$('[data-table-next]', root).forEach((element) => element.addEventListener("click", () => {
+    const item = state.tables[element.dataset.tableNext];
+    if (!item) return;
+    item.page += 1;
+    refreshPagedHost(element.dataset.tableNext);
+  }));
+}
+
+function refreshPagedHost(id, root = document) {
+  const render = state.pagedRenderers.get(id);
+  const host = $$('[data-paged-host]', root).find((item) => item.dataset.pagedHost === id)
+    || $$('[data-paged-host]').find((item) => item.dataset.pagedHost === id);
+  if (!render || !host) return false;
+  host.innerHTML = render();
+  bindPagers(host);
+  applyLocale(host);
+  return true;
 }
 
 function triggerNotice(status) {
@@ -1409,8 +1439,7 @@ async function renderFavorites(token) {
   bindCommon(root);
 }
 
-function pagedItems(key, items, empty = "暂无数据") {
-  const id = tableId(key);
+function pagedItemsMarkup(id, items, empty = "暂无数据") {
   const entry = state.tables[id] || { size: 5, page: 0 };
   state.tables[id] = entry;
   const pages = Math.max(1, Math.ceil(items.length / entry.size));
@@ -1418,6 +1447,12 @@ function pagedItems(key, items, empty = "暂无数据") {
   const visible = items.slice(entry.page * entry.size, (entry.page + 1) * entry.size);
   if (!items.length) return `<p class="empty-state">${escapeHtml(empty)}</p>`;
   return `${visible.join("")}<div class="pager"><label>${localeText("每页", "Rows per page")}<select data-table-size="${escapeAttribute(id)}"><option value="5" ${entry.size === 5 ? "selected" : ""}>${pageSizeLabel(5)}</option><option value="10" ${entry.size === 10 ? "selected" : ""}>${pageSizeLabel(10)}</option></select></label><span>${pagerSummary(entry.page + 1, pages, items.length)}</span><button class="secondary-button compact-button" data-table-prev="${escapeAttribute(id)}" ${entry.page === 0 ? "disabled" : ""}>${localeText("上一页", "Previous")}</button><button class="secondary-button compact-button" data-table-next="${escapeAttribute(id)}" ${entry.page >= pages - 1 ? "disabled" : ""}>${localeText("下一页", "Next")}</button></div>`;
+}
+
+function pagedItems(key, items, empty = "暂无数据") {
+  const id = tableId(key);
+  state.pagedRenderers.set(id, () => pagedItemsMarkup(id, items, empty));
+  return `<div class="paged-items-host" data-paged-host="${escapeAttribute(id)}">${pagedItemsMarkup(id, items, empty)}</div>`;
 }
 
 function searchParamsFromState() {
@@ -2834,6 +2869,7 @@ async function renderPage(options = {}) {
   const preserveScroll = Boolean(options.preserveScroll);
   const scrollTop = preserveScroll ? window.scrollY : 0;
   clearTimers();
+  state.pagedRenderers.clear();
   if (state.page !== "reports") {
     state.reportMarkAbortController?.abort();
     state.reportMarkAbortController = null;

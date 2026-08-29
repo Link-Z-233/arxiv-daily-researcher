@@ -431,6 +431,7 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .compact-metrics .metric-card p { margin-bottom: 6px; }
 .compact-metrics .metric-card strong { margin-bottom: 0; font-size: .94rem; overflow-wrap: anywhere; }
 .card-list { display: grid; gap: 9px; margin-top: 16px; }
+.card-list > .paged-items-host { display: grid; gap: 9px; }
 .favorite-card, .list-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .favorite-card { display: grid; grid-template-columns: 145px 1fr; }
 .favorite-card span, .favorite-card small { color: var(--muted); font-size: .72rem; }
