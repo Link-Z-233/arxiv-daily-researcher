@@ -1868,10 +1868,20 @@ function normalizeForSave() {
   // field.  Persist it only after that page has been opened so an unrelated
   // save never replaces a configured template selection.
   if (state.pageData.trend) {
-    config.trend_analysis_prompt = String(state.pageData.trend.analysis_prompt || "");
-    config.trend_enabled_skills = Array.isArray(state.pageData.trend.skills)
-      ? state.pageData.trend.skills.filter((item) => item === "comprehensive_analysis")
+    const trend = state.pageData.trend;
+    config.trend_analysis_prompt = String(trend.analysis_prompt || "");
+    config.trend_enabled_skills = Array.isArray(trend.skills)
+      ? trend.skills.filter((item) => item === "comprehensive_analysis")
       : [];
+    // These two controls live beside the one-off launch form, but they are
+    // also persisted preferences in the compatibility panel.  Keep their
+    // browser constraints explicit here because native number inputs can be
+    // edited outside their spinner range before the global Save action.
+    const maxResults = Number(trend.max_results);
+    if (Number.isFinite(maxResults)) {
+      config.trend_max_results = Math.max(10, Math.min(5000, Math.round(maxResults)));
+    }
+    config.trend_sort_order = trend.sort_order === "descending" ? "descending" : "ascending";
   }
   config.score_strategy_explicit = true;
   return config;
