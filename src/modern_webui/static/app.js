@@ -411,7 +411,7 @@ async function renderDaily(token) {
 }
 
 function renderDailySettings() {
-  return `<details class="settings-expander"><summary>⚙️ 每日研究设置</summary><p class="hint-text">修改后点击侧边栏的“保存所有更改”生效。</p><div class="form-grid three">${field({ label: "生成 HTML 报告", key: "enable_html_report", type: "checkbox", fallback: true })}${field({ label: "生成 Markdown 报告", key: "enable_markdown_report", type: "checkbox", fallback: true })}${field({ label: "报告包含全部论文", key: "include_all_in_report", type: "checkbox", fallback: true })}</div><div class="form-grid two">${field({ label: "本次最多处理论文数（0 不限）", key: "daily_max_papers_per_run", type: "number", min: 0, step: 1, fallback: 200 })}${field({ label: "每日运行时间", key: "daily_run_time", type: "time", fallback: "12:00" })}</div></details>`;
+  return `<details class="settings-expander"><summary>⚙️ 每日研究设置</summary><p class="hint-text">修改后点击侧边栏的“保存所有更改”生效。</p><div class="form-grid three">${field({ label: "生成 HTML 报告", key: "enable_html_report", type: "checkbox", fallback: true })}${field({ label: "生成 Markdown 报告", key: "enable_markdown_report", type: "checkbox", fallback: true })}${field({ label: "报告包含全部论文", key: "include_all_in_report", type: "checkbox", fallback: true })}</div><div class="form-grid two">${field({ label: "本次最多处理论文数（0 不限）", key: "daily_max_papers_per_run", type: "number", min: 0, max: 100000, step: 1, fallback: 200 })}${field({ label: "每日运行时间", key: "daily_run_time", type: "time", fallback: "12:00" })}</div></details>`;
 }
 
 function compactTaskNotice(status) {
