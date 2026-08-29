@@ -1618,7 +1618,7 @@ function extractedKeywordList(items) {
   // in one compact, fixed-height box so users can scan its ordering without
   // growing the entire configuration page.
   const visibleRows = Math.min(10, items.length);
-  const height = 44 + visibleRows * 27;
+  const height = 54 + visibleRows * 46;
   return `<div class="native-scroll-list" style="height:${height}px"><p class="hint-text">已提取 ${formatNumber(items.length)} 个关键词</p>${items.map((item) => `<div class="native-scroll-row"><span>${escapeHtml(item.keyword)}</span><small>${escapeHtml(Number(item.weight).toFixed(2))}</small></div>`).join("")}</div>`;
 }
 
