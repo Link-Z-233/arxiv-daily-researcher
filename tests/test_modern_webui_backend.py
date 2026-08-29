@@ -77,6 +77,24 @@ class ModernBackendTests(unittest.TestCase):
         self.assertEqual(status["stop_kind"], "trend")
         self.assertTrue(status["can_stop"])
 
+    def test_live_status_log_keeps_only_the_latest_fifteen_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            logs_root = Path(directory)
+            log_path = logs_root / "daily_20260829.log"
+            log_path.write_text(
+                "\n".join(f"line {index}" for index in range(20)), encoding="utf-8"
+            )
+            with patch.object(backend, "LOGS_DIR", logs_root):
+                tail = backend._live_log_tail([{"name": "daily_research.lock"}])
+
+        self.assertIsNotNone(tail)
+        self.assertTrue(tail["truncated"])
+        lines = tail["content"].splitlines()
+        self.assertEqual(len(lines), 16)
+        self.assertIn("5 行", lines[0])
+        self.assertEqual(lines[1], "line 5")
+        self.assertEqual(lines[-1], "line 19")
+
     def test_scoped_stop_targets_only_matching_lock(self) -> None:
         locks = [
             {"name": "daily_research.lock", "pid": 101},

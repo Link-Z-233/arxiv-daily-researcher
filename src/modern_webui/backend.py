@@ -598,7 +598,10 @@ def _live_log_tail(locks: Iterable[Mapping[str, Any]]) -> dict[str, Any] | None:
         lines = selected.read_text(encoding="utf-8", errors="replace").splitlines()
     except (OSError, ValueError):
         return None
-    max_lines = 80
+    # Status cards refresh frequently while a task is active.  Fifteen recent
+    # lines give useful progress and failure context without turning the
+    # dashboard into a second full log viewer.
+    max_lines = 15
     skipped = max(0, len(lines) - max_lines)
     visible = lines[-max_lines:]
     if skipped:
