@@ -200,7 +200,17 @@ async def setup_account(request: Request) -> JSONResponse:
     if str(payload.get("action") or "") == "skip":
         def _skip_setup() -> None:
             values = read_env()
-            values["WEBUI_AUTH_ENABLED"] = "false"
+            # Match the Streamlit trusted-LAN opt-out: disabling the gate is
+            # an explicit fresh-start choice, so stale owner credentials and
+            # managed-account records must not remain in the shared .env.
+            values.update(
+                {
+                    "WEBUI_AUTH_ENABLED": "false",
+                    "WEBUI_ADMIN_USERNAME": "",
+                    "WEBUI_ADMIN_PASSWORD_HASH": "",
+                    "WEBUI_ACCOUNTS": "",
+                }
+            )
             write_env(values)
 
         await _blocking_call(_skip_setup)

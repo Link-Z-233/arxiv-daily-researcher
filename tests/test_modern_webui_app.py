@@ -82,9 +82,19 @@ class ModernWebUIAppTests(unittest.TestCase):
         self.assertEqual(login.json()["username"], "admin_user")
 
     def test_skip_auth_allows_a_trusted_intranet_installation(self) -> None:
+        self.env.update(
+            {
+                "WEBUI_ADMIN_USERNAME": "!stale-owner",
+                "WEBUI_ADMIN_PASSWORD_HASH": "stale_hash",
+                "WEBUI_ACCOUNTS": "stale_registry",
+            }
+        )
         response = self.client.post("/api/auth/setup", json={"action": "skip"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.env["WEBUI_AUTH_ENABLED"], "false")
+        self.assertEqual(self.env["WEBUI_ADMIN_USERNAME"], "")
+        self.assertEqual(self.env["WEBUI_ADMIN_PASSWORD_HASH"], "")
+        self.assertEqual(self.env["WEBUI_ACCOUNTS"], "")
 
         with patch.object(
             modern_app.backend,
