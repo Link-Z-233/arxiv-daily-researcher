@@ -1380,7 +1380,7 @@ def _analytics_window(
         start = current.replace(hour=0, minute=0, second=0) - timedelta(days=days - 1)
         return start, current, "day", key
     if key != "custom":
-        raise ModernWebUIError("数据分析时间范围无效。")
+        raise ModernWebUIError("用量统计时间范围无效。")
     try:
         start_date = datetime.strptime(str(date_from or ""), "%Y-%m-%d")
         end_date = datetime.strptime(str(date_to or ""), "%Y-%m-%d")
@@ -1439,7 +1439,7 @@ def analytics(
             "heatmap_daily": store.get_daily_token_totals(days=365),
         }
     except Exception as exc:
-        raise ModernWebUIError(f"读取数据分析失败：{exc}") from exc
+        raise ModernWebUIError(f"读取用量统计失败：{exc}") from exc
 
 
 def _report_sort_key(path: Path, modified_at: float | None = None) -> tuple[int, int, str]:

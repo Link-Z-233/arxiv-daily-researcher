@@ -2482,7 +2482,7 @@ function tokenTrendChart(rows, window) {
   const x = (index) => sampled.length === 1 ? left + plotWidth / 2 : left + index * plotWidth / (sampled.length - 1);
   const y = (value) => top + plotHeight * (1 - value / maximum);
   const linePoints = (key) => sampled.map((row, index) => `${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`).join(" ");
-  const points = (key) => sampled.map((row, index) => `<circle class="trend-point ${key}" cx="${x(index).toFixed(1)}" cy="${y(row[key]).toFixed(1)}" r="${sampled.length > 90 ? "1.5" : "2.25"}"><title>${escapeHtml(`${analyticsBucketLabel(row.bucket, window?.bucket)} · ${key === "prompt" ? "输入" : key === "completion" ? "输出" : "合计"} ${formatNumber(row[key])} tokens`)}</title></circle>`).join("");
+  const points = (key) => sampled.map((row, index) => `<circle class="trend-point ${key}" cx="${x(index).toFixed(1)}" cy="${y(row[key]).toFixed(1)}" r="${sampled.length > 90 ? "1.5" : "2.25"}"><title>${escapeHtml(`${analyticsBucketLabel(row.bucket, window?.bucket)} · ${key === "prompt" ? "输入" : key === "completion" ? "输出" : "合计"} ${formatNumber(row[key])} ${state.language === "en" ? "tokens" : "Token"}`)}</title></circle>`).join("");
   const grid = Array.from({ length: 5 }, (_, index) => {
     const value = maximum * index / 4;
     return `<line x1="${left}" x2="${width - right}" y1="${y(value).toFixed(1)}" y2="${y(value).toFixed(1)}"/><text x="${left - 8}" y="${(y(value) + 4).toFixed(1)}" text-anchor="end">${escapeHtml(formatCompactNumber(value))}</text>`;
@@ -2511,9 +2511,9 @@ function analyticsRangeControl(values) {
 
 function usageSummaryTable(summary) {
   const rows = [
-    ["输入 tokens", formatNumber(summary.prompt)],
-    ["输出 tokens", formatNumber(summary.completion)],
-    ["合计 tokens", formatNumber(summary.total)],
+    ["输入 Token", formatNumber(summary.prompt)],
+    ["输出 Token", formatNumber(summary.completion)],
+    ["合计 Token", formatNumber(summary.total)],
     ["涉及运行", formatNumber(summary.runs)],
   ];
   return `<div class="table-wrap usage-summary-table"><table><tbody>${rows.map(([label, value]) => `<tr><th scope="row">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}</tbody></table></div>`;
@@ -2536,7 +2536,7 @@ async function renderAnalytics(token) {
   const hasUsage = Boolean(data.available && ((data.series || []).length || Number(summary.runs) > 0));
   const usage = hasUsage
     ? usageSummaryTable(summary)
-    : '<p class="empty-state">所选时间段内暂无用量数据——完成一次每日研究、补充任务或趋势分析后，这里会出现统计。</p>';
+    : '<p class="empty-state">所选时间段内暂无用量数据。完成任一涉及 LLM 的任务后，这里会出现统计。</p>';
   const trend = hasUsage
     ? tokenTrendChart(data.series || [], data.window || {})
     : '<p class="empty-state">所选时间段内没有可绘制的 Token 使用趋势。</p>';
@@ -2545,9 +2545,9 @@ async function renderAnalytics(token) {
     : '<p class="report-empty-state">暂无历史 Token 使用记录。</p>';
   const modelTable = pagedTable("analytics-models", [
     { label: "模型", key: "model" },
-    { label: "输入 tokens", value: (row) => formatNumber(row.prompt) },
-    { label: "输出 tokens", value: (row) => formatNumber(row.completion) },
-    { label: "总 tokens", value: (row) => formatNumber(row.total) },
+    { label: "输入 Token", value: (row) => formatNumber(row.prompt) },
+    { label: "输出 Token", value: (row) => formatNumber(row.completion) },
+    { label: "总 Token", value: (row) => formatNumber(row.total) },
   ], data.models || [], { empty: "所选时间段内暂无模型使用记录。" });
   root.innerHTML = `${pageHeader()}<section class="section-card analytics-statistics-card">${heatmap}<div class="analytics-statistics-block">${control}${usage}</div><div class="analytics-statistics-block trend-chart-block">${trend}</div><div class="analytics-statistics-block">${modelTable}</div></section>`;
   bindCommon(root);

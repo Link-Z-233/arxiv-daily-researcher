@@ -154,7 +154,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "nav_reports": {"zh": "📄 报告", "en": "📄 Reports"},
     "nav_favorites": {"zh": "⭐ 收藏", "en": "⭐ Favorites"},
     "nav_paper_search": {"zh": "🔎 检索", "en": "🔎 Search"},
-    "nav_analytics": {"zh": "📊 数据分析", "en": "📊 Analytics"},
+    "nav_analytics": {"zh": "📊 用量统计", "en": "📊 Usage Statistics"},
     "nav_keywords": {"zh": "🔑 关键词", "en": "🔑 Keywords"},
     "nav_data_sources": {"zh": "🧭 数据源", "en": "🧭 Data Sources"},
     "nav_scoring": {"zh": "⚖️ 评分", "en": "⚖️ Scoring"},
@@ -164,7 +164,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "nav_accounts": {"zh": "👤 账户", "en": "👤 Accounts"},
     "nav_backup_sync": {"zh": "☁️ 备份与同步", "en": "☁️ Backup & Sync"},
     "nav_history_tasks": {"zh": "🗂 历史维护", "en": "🗂 History Maintenance"},
-    "nav_diagnostics": {"zh": "🩺 诊断", "en": "🩺 Diagnostics"},
+    "nav_diagnostics": {"zh": "🩺 运行诊断", "en": "🩺 Run Diagnostics"},
     "rm_auto_refresh": {"zh": "自动刷新", "en": "Auto refresh"},
     "rm_auto_refresh_help": {
         "zh": "开启后，有任务运行时每 5 秒刷新状态、队列与日志尾部；刚点击启动时会短暂检查，任务结束后自动停止刷新。",
@@ -231,10 +231,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Last request did not run: an identical task was already active.",
     },
     # ── usage.py ────────────────────────────────────────────────────────
-    "usage_title": {"zh": "LLM Token 用量", "en": "LLM Token Usage"},
+    "usage_title": {"zh": "用量统计", "en": "Usage Statistics"},
     "usage_empty": {
-        "zh": "暂无用量数据——完成一次每日研究或趋势分析后，这里会出现统计。",
-        "en": "No usage yet — complete a daily or trend run and stats appear here.",
+        "zh": "暂无用量数据。完成任一涉及 LLM 的任务后，这里会出现统计。",
+        "en": "No usage yet. Statistics appear after any task that uses an LLM.",
     },
     "usage_load_failed": {
         "zh": "用量数据读取失败",
@@ -253,17 +253,17 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "usage_range_90": {"zh": "近90天", "en": "90 days"},
     "usage_range_365": {"zh": "近365天", "en": "365 days"},
     "usage_range_all": {"zh": "全部", "en": "All"},
-    "usage_prompt_tokens": {"zh": "输入 tokens", "en": "Prompt tokens"},
-    "usage_completion_tokens": {"zh": "输出 tokens", "en": "Completion tokens"},
-    "usage_total_tokens": {"zh": "总 tokens", "en": "Total tokens"},
+    "usage_prompt_tokens": {"zh": "输入 Token", "en": "Prompt tokens"},
+    "usage_completion_tokens": {"zh": "输出 Token", "en": "Completion tokens"},
+    "usage_total_tokens": {"zh": "总 Token", "en": "Total tokens"},
     "usage_by_model_title": {"zh": "按模型汇总", "en": "By model"},
     "usage_model": {"zh": "模型", "en": "Model"},
-    "usage_today_prompt": {"zh": "当日输入 tokens", "en": "Today prompt tokens"},
-    "usage_today_completion": {"zh": "当日输出 tokens", "en": "Today completion tokens"},
+    "usage_today_prompt": {"zh": "当日输入 Token", "en": "Today prompt tokens"},
+    "usage_today_completion": {"zh": "当日输出 Token", "en": "Today completion tokens"},
     "usage_month_total": {"zh": "近30天累计用量", "en": "30-day total usage"},
-    "usage_range_totals": {"zh": "所选区间 · 输入 {prompt} · 输出 {completion} · 合计 {total} tokens", "en": "Selected range · prompt {prompt} · completion {completion} · total {total} tokens"},
+    "usage_range_totals": {"zh": "所选区间 · 输入 {prompt} · 输出 {completion} · 合计 {total} Token", "en": "Selected range · prompt {prompt} · completion {completion} · total {total} tokens"},
     "usage_heatmap_tip": {
-        "zh": "{date} · {tokens} tokens · {runs} 次运行",
+        "zh": "{date} · {tokens} Token · {runs} 次运行",
         "en": "{date} · {tokens} tokens · {runs} runs",
     },
     "usage_heatmap_none": {"zh": "{date} · 无用量", "en": "{date} · no usage"},
@@ -286,10 +286,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── 报告查看页：随手标记（原收藏偏好页融合）─────────────────────────
     "fav_like": {"zh": "喜欢", "en": "Like"},
     "fav_dislike": {"zh": "不喜欢", "en": "Dislike"},
-    "tab_analytics": {"zh": "数据分析", "en": "Analytics"},
+    "tab_analytics": {"zh": "用量统计", "en": "Usage Statistics"},
     "llm_health_title": {"zh": "LLM 健康", "en": "LLM Health"},
     "llm_health_hint": {
-        "zh": "汇总所有真实任务（含历史维护）的 LLM 调用；查看不会发送探针请求，也不会额外消耗 token。",
+        "zh": "汇总所有真实任务（含历史维护）的 LLM 调用；查看不会发送探针请求，也不会额外消耗 Token。",
         "en": "Summarizes LLM calls from all real tasks, including history maintenance; viewing sends no probe or extra token use.",
     },
     "llm_health_no_data": {
@@ -1532,7 +1532,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "dm_history_omission_queued": {"zh": "已加入队列：空闲后扫描遗漏并按自然周生成补充报告。", "en": "Queued: omissions will be scanned and supplemented by calendar week when idle."},
     "dm_history_repair_short": {"zh": "历史数据补全", "en": "history repair"},
     "dm_history_omission_short": {"zh": "历史遗漏扫描", "en": "omission scan"},
-    "dm_history_task_running_hint": {"zh": "{tasks} 正在排队或运行中，请在本页任务和状态面板或“系统 → 运行日志”查看进度。", "en": "{tasks} is queued or running. Follow their progress in this page's task/status panel or System → Run Logs."},
+    "dm_history_task_running_hint": {"zh": "{tasks} 正在排队或运行中，请在本页任务和状态面板或“系统 → 日志”查看进度。", "en": "{tasks} is queued or running. Follow their progress in this page's task/status panel or System → Run Logs."},
     "dm_supplement_btn": {"zh": "🧾 生成补充报告", "en": "🧾 Build Supplement Report"},
     "dm_supplement_help": {
         "zh": "把补充积压中的论文（缺数据/遗漏）按「本次最多处理论文数」重跑评分/翻译/分析并生成一份补充报告；会消耗 LLM 额度，任务在空闲时自动运行。",
@@ -1547,7 +1547,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "en": "Queued: the worker will import legacy history when idle and follow the selected full-repair setting.",
     },
     "dm_legacy_running_hint": {
-        "zh": "旧历史导入流程正在排队或运行中，请在本页任务和状态面板或“系统 → 运行日志”查看实时进度。",
+        "zh": "旧历史导入流程正在排队或运行中，请在本页任务和状态面板或“系统 → 日志”查看实时进度。",
         "en": "The legacy-import workflow is queued or running. Follow its progress in this page's task/status panel or System → Run Logs.",
     },
     "dm_legacy_failed": {"zh": "❌ 触发失败", "en": "❌ Failed to queue"},
