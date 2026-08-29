@@ -351,6 +351,7 @@ const state = {
   page: "daily_research",
   tables: {},
   pagedRenderers: new Map(),
+  localRequestVersions: new Map(),
   timers: new Map(),
   pageData: {},
   renderToken: 0,
@@ -625,6 +626,20 @@ function toast(text, type = "success") {
   node.hidden = false;
   window.clearTimeout(node._timer);
   node._timer = window.setTimeout(() => { node.hidden = true; }, 4200);
+}
+
+function runLocalRefresh(promise) {
+  Promise.resolve(promise).catch((error) => toast(error?.message || "请求未完成。", "error"));
+}
+
+function beginLocalRequest(name) {
+  const next = Number(state.localRequestVersions.get(name) || 0) + 1;
+  state.localRequestVersions.set(name, next);
+  return next;
+}
+
+function isCurrentLocalRequest(name, version) {
+  return state.localRequestVersions.get(name) === version;
 }
 
 function clearTimers() {
@@ -984,7 +999,7 @@ function pastDailyMarkup(status, values) {
 function bindPastDaily(root, values, token) {
   $("#backfill-from", root)?.addEventListener("change", (event) => { state.pageData.past = { ...values, from: event.target.value }; });
   $("#backfill-to", root)?.addEventListener("change", (event) => { state.pageData.past = { ...values, to: event.target.value }; });
-  $("#past-status-refresh", root)?.addEventListener("click", () => refreshPastDailyContent(root, token));
+  $("#past-status-refresh", root)?.addEventListener("click", () => runLocalRefresh(refreshPastDailyContent(root, token)));
   $("#backfill-start", root)?.addEventListener("click", async () => {
     const from = $("#backfill-from").value; const to = $("#backfill-to").value;
     if (!from || !to || from > to) return toast("请填写有效的开始和结束日期。", "error");
@@ -995,11 +1010,12 @@ function bindPastDaily(root, values, token) {
 async function refreshPastDailyContent(root = $("#page-root"), token = state.renderToken) {
   const host = $("#past-daily-content", root);
   if (!host) return;
+  const requestVersion = beginLocalRequest("past-daily-content");
   const yesterday = relativeLocalDateKey(-1);
   const values = state.pageData.past || { from: yesterday, to: yesterday };
   host.innerHTML = '<div class="loading">正在读取过去日报队列…</div>';
   const status = await fetchStatus("past");
-  if (token !== state.renderToken || state.page !== "past_daily") return;
+  if (token !== state.renderToken || state.page !== "past_daily" || !isCurrentLocalRequest("past-daily-content", requestVersion)) return;
   host.innerHTML = pastDailyMarkup(status, values);
   bindCommon(host);
   bindPastDaily(root, values, token);
@@ -1411,12 +1427,12 @@ function bindReportDirectory(root, reports, token) {
     state.pageData.showNonArxiv = event.target.checked;
     state.pageData.selectedReport = "";
     state.pageData.reportSelections = {};
-    refreshReportsDirectory(root, token);
+    runLocalRefresh(refreshReportsDirectory(root, token));
   });
   $("#reports-refresh", root)?.addEventListener("click", () => {
     state.pageData.selectedReport = "";
     state.pageData.reportSelections = {};
-    refreshReportsDirectory(root, token);
+    runLocalRefresh(refreshReportsDirectory(root, token));
   });
   $$('[data-report-select-option]', root).forEach((button) => button.addEventListener("click", () => chooseReport(button.dataset.reportId)));
   $$('[data-preview-group]', root).forEach((button) => button.addEventListener("click", () => {
@@ -1432,12 +1448,13 @@ function bindReportDirectory(root, reports, token) {
 async function refreshReportsDirectory(root = $("#page-root"), token = state.renderToken) {
   const host = $("#reports-directory", root);
   if (!host) return;
+  const requestVersion = beginLocalRequest("reports-directory");
   state.reportMarkAbortController?.abort();
   state.reportMarkAbortController = null;
   const showNonArxiv = Boolean(state.pageData.showNonArxiv);
   host.innerHTML = '<div class="loading">正在读取报告目录…</div>';
   const reports = await api(`/api/reports?non_arxiv=${showNonArxiv ? "1" : "0"}`);
-  if (token !== state.renderToken || state.page !== "reports") return;
+  if (token !== state.renderToken || state.page !== "reports" || !isCurrentLocalRequest("reports-directory", requestVersion)) return;
   const all = [...reports.daily, ...reports.trend, ...reports.keyword_trend];
   let selected = state.pageData.selectedReport;
   if (!selected || !all.some((item) => item.id === selected)) selected = all[0]?.id || "";
@@ -1460,6 +1477,7 @@ async function renderReports(token) {
 async function loadReportPreview(report, reports, token, chooseReport) {
   const preview = $("#report-preview");
   if (!preview) return;
+  const requestVersion = beginLocalRequest("report-preview");
   try {
     const [html, paperResponse] = await Promise.all([
       fetchReportHtml(report.id),
@@ -1467,7 +1485,7 @@ async function loadReportPreview(report, reports, token, chooseReport) {
         ? api(`/api/reports/${encodeURIComponent(report.id)}/papers`).catch(() => ({ items: [] }))
         : Promise.resolve({ items: [] }),
     ]);
-    if (token !== state.renderToken || state.pageData.selectedReport !== report.id) return;
+    if (token !== state.renderToken || state.pageData.selectedReport !== report.id || !isCurrentLocalRequest("report-preview", requestVersion)) return;
     const marked = buildMarkedReportHtml(html, paperResponse.items || []);
     const previous = report.type === "daily" ? findAdjacentDailyReport(report, reports.daily, -1) : null;
     const next = report.type === "daily" ? findAdjacentDailyReport(report, reports.daily, 1) : null;
@@ -2576,6 +2594,7 @@ function diagnosticsRangeControl(id, value) {
 async function refreshDiagnosticsContent(root = $("#page-root"), token = state.renderToken) {
   const host = $("#diagnostics-content", root);
   if (!host) return;
+  const requestVersion = beginLocalRequest("diagnostics-content");
   const ranges = { runs: "7", llm: "7", sources: "7", ...(state.pageData.diagnosticsRanges || {}) };
   host.innerHTML = '<div class="loading">正在读取运行诊断…</div>';
   // All three panels are backed by the same aggregate.  When their ranges
@@ -2591,12 +2610,12 @@ async function refreshDiagnosticsContent(root = $("#page-root"), token = state.r
     loadRange(ranges.llm),
     loadRange(ranges.sources),
   ]);
-  if (token !== state.renderToken || state.page !== "diagnostics") return;
+  if (token !== state.renderToken || state.page !== "diagnostics" || !isCurrentLocalRequest("diagnostics-content", requestVersion)) return;
   host.innerHTML = `${section("运行诊断", `${diagnosticsRangeControl("diagnostics-range", ranges.runs)}<p class="hint-text">显示所选时间范围内的每日研究与过去日报；旧历史维护任务请在“系统 → 历史维护”查看。</p>${pagedTable("operational-runs", [{ label: "任务", value: (row) => diagnosticTaskKindLabel(row.run_kind) }, { label: "状态", value: (row) => diagnosticRunStatusLabel(row.status) }, { label: "开始时间", value: (row) => formatTime(row.started_at) }, { label: "完成时间", value: (row) => formatTime(row.completed_at) }, { label: "论文数", key: "total_papers" }, { label: "问题摘要", value: (row) => row.error_summary || "—" }], runData.runs || [], { empty: "尚无每日研究或过去日报运行记录。" })}`, { icon: "🩺" })}${divider()}${section("LLM 健康", `${diagnosticsRangeControl("llm-range", ranges.llm)}<p class="hint-text">汇总所有真实任务（含历史维护）的 LLM 调用；查看不会发送探针请求，也不会额外消耗 Token。</p>${healthTable("llm-health", "llm", llmData.llm || [])}`, { icon: "🧠" })}${divider()}${section("数据源健康", `${diagnosticsRangeControl("source-range", ranges.sources)}<p class="hint-text">汇总所有真实任务（含历史维护）的数据源请求；查看不会发送探针请求。</p>${healthTable("source-health", "source", sourceData.sources || [])}`, { icon: "🌐" })}`;
   bindCommon(host);
   [["#diagnostics-range", "runs"], ["#llm-range", "llm"], ["#source-range", "sources"]].forEach(([selector, key]) => $(selector, host).addEventListener("change", (event) => {
     state.pageData.diagnosticsRanges = { ...ranges, [key]: event.target.value };
-    refreshDiagnosticsContent(root, token);
+    runLocalRefresh(refreshDiagnosticsContent(root, token));
   }));
   applyLocale(host);
 }
@@ -2763,6 +2782,7 @@ function usageSummaryTable(summary) {
 async function refreshAnalyticsContent(root = $("#page-root"), token = state.renderToken) {
   const host = $("#analytics-content", root);
   if (!host) return;
+  const requestVersion = beginLocalRequest("analytics-content");
   const fallback = { range: "7d", date_from: relativeLocalDateKey(-6), date_to: relativeLocalDateKey(0) };
   const values = { ...fallback, ...(state.pageData.analytics || {}) };
   const params = new URLSearchParams({ range: values.range });
@@ -2772,7 +2792,7 @@ async function refreshAnalyticsContent(root = $("#page-root"), token = state.ren
   }
   host.innerHTML = '<div class="loading">正在读取 Token 使用记录…</div>';
   const data = await api(`/api/analytics?${params.toString()}`);
-  if (token !== state.renderToken || state.page !== "analytics") return;
+  if (token !== state.renderToken || state.page !== "analytics" || !isCurrentLocalRequest("analytics-content", requestVersion)) return;
   const control = analyticsRangeControl(values);
   const summary = data.summary || { prompt: 0, completion: 0, total: 0, runs: 0 };
   const hasUsage = Boolean(data.available && ((data.series || []).length || Number(summary.runs) > 0));
@@ -2795,7 +2815,7 @@ async function refreshAnalyticsContent(root = $("#page-root"), token = state.ren
   bindCommon(host);
   $$('[data-analytics-range]', host).forEach((button) => button.addEventListener("click", () => {
     state.pageData.analytics = { ...values, range: button.dataset.analyticsRange };
-    refreshAnalyticsContent(root, token);
+    runLocalRefresh(refreshAnalyticsContent(root, token));
   }));
   $("#analytics-custom-apply", host)?.addEventListener("click", () => {
     const dateFrom = $("#analytics-from", host).value;
@@ -2805,7 +2825,7 @@ async function refreshAnalyticsContent(root = $("#page-root"), token = state.ren
       return;
     }
     state.pageData.analytics = { ...values, date_from: dateFrom, date_to: dateTo };
-    refreshAnalyticsContent(root, token);
+    runLocalRefresh(refreshAnalyticsContent(root, token));
   });
   applyLocale(host);
 }
@@ -2844,6 +2864,7 @@ function updateLogSelectorSelection(root, selected) {
 async function loadSelectedLog(root, items, selected, token) {
   const host = $("#log-content-region", root);
   if (!host) return;
+  const requestVersion = beginLocalRequest("log-content");
   if (!selected || state.pageData.logClosed) {
     host.innerHTML = '<p class="report-empty-state">选择一个日志文件后可在这里查看内容。</p>';
     return;
@@ -2851,10 +2872,10 @@ async function loadSelectedLog(root, items, selected, token) {
   host.innerHTML = '<div class="loading">正在读取日志内容…</div>';
   try {
     const log = await api(`/api/logs/${encodeURIComponent(selected)}`);
-    if (token !== state.renderToken || state.page !== "logs" || state.pageData.selectedLog !== selected) return;
+    if (token !== state.renderToken || state.page !== "logs" || state.pageData.selectedLog !== selected || !isCurrentLocalRequest("log-content", requestVersion)) return;
     const selectedItem = items.find((item) => item.id === selected);
     host.innerHTML = `<section class="log-content"><div class="toolbar"><p class="report-file-info"><strong>${escapeHtml(log.name)}</strong>${selectedItem ? ` · ${Math.round(Number(selectedItem.size_bytes) / 1024)} KB · ${localeText("修改时间：", "Modified: ")}${escapeHtml(formatTime(selectedItem.modified_at))}` : ""}${log.truncated ? ` · ${localeText("仅显示最后 300 行", "last 300 lines only")}` : ""}</p><div class="action-row"><button id="log-refresh-latest" class="secondary-button compact-button">刷新最新日志</button><button id="log-close" class="secondary-button compact-button">关闭</button></div></div><pre class="log-viewer">${escapeHtml(log.content)}</pre></section>`;
-    $("#log-refresh-latest", host)?.addEventListener("click", () => refreshLogsWorkspace(root, token, { latest: true }));
+    $("#log-refresh-latest", host)?.addEventListener("click", () => runLocalRefresh(refreshLogsWorkspace(root, token, { latest: true })));
     $("#log-close", host)?.addEventListener("click", () => {
       state.pageData.logClosed = true;
       loadSelectedLog(root, items, selected, token);
@@ -2879,9 +2900,10 @@ function bindLogWorkspace(root, items, token) {
 async function refreshLogsWorkspace(root = $("#page-root"), token = state.renderToken, options = {}) {
   const host = $("#logs-workspace", root);
   if (!host) return;
+  const requestVersion = beginLocalRequest("logs-workspace");
   host.innerHTML = '<div class="loading">正在读取日志列表…</div>';
   const data = await api("/api/logs");
-  if (token !== state.renderToken || state.page !== "logs") return;
+  if (token !== state.renderToken || state.page !== "logs" || !isCurrentLocalRequest("logs-workspace", requestVersion)) return;
   const items = data.items || [];
   const nonSystemLogs = items.filter((item) => (item.category || "other") !== "system");
   let selected = options.latest ? nonSystemLogs[0]?.id || "" : state.pageData.selectedLog;
@@ -2919,17 +2941,18 @@ function bindAccounts(root, token) {
     clearTimers();
     window.setTimeout(() => window.location.reload(), 600);
   });
-  bindAccountForm("#add-account-form", "/api/accounts/add", () => { toast("管理员账户已创建。", "success"); refreshAccountsContent(root, token); });
+  bindAccountForm("#add-account-form", "/api/accounts/add", () => { toast("管理员账户已创建。", "success"); runLocalRefresh(refreshAccountsContent(root, token)); });
   bindAccountForm("#reset-account-form", "/api/accounts/reset", () => toast("管理员密码已重置。", "success"));
-  bindAccountForm("#delete-account-form", "/api/accounts/delete", () => { toast("管理员已删除。", "success"); refreshAccountsContent(root, token); });
+  bindAccountForm("#delete-account-form", "/api/accounts/delete", () => { toast("管理员已删除。", "success"); runLocalRefresh(refreshAccountsContent(root, token)); });
 }
 
 async function refreshAccountsContent(root = $("#page-root"), token = state.renderToken) {
   const host = $("#accounts-content", root);
   if (!host) return;
+  const requestVersion = beginLocalRequest("accounts-content");
   host.innerHTML = '<div class="loading">正在读取账户列表…</div>';
   const data = await api("/api/accounts");
-  if (token !== state.renderToken || state.page !== "accounts") return;
+  if (token !== state.renderToken || state.page !== "accounts" || !isCurrentLocalRequest("accounts-content", requestVersion)) return;
   host.innerHTML = accountsContent(data);
   bindCommon(host);
   bindAccounts(root, token);
@@ -3073,7 +3096,7 @@ async function refreshActiveTaskPanels() {
 function bindCommon(root = document) {
   bindFields(root);
   bindPagers(root);
-  $$('[data-refresh-status]', root).forEach((button) => button.addEventListener("click", () => refreshActiveTaskPanels()));
+  $$('[data-refresh-status]', root).forEach((button) => button.addEventListener("click", () => runLocalRefresh(refreshActiveTaskPanels())));
   $$('[data-start-task]', root).forEach((button) => button.addEventListener("click", async () => {
     try { await api(`/api/tasks/${encodeURIComponent(button.dataset.startTask)}`, { method: "POST", body: { args: {} } }); toast("任务已加入队列。", "success"); await refreshActiveTaskPanels(); } catch (error) { toast(error.message, "error"); }
   }));
