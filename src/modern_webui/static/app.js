@@ -2157,11 +2157,6 @@ function tokenTrendChart(rows) {
   const maximum = niceCeiling(rawMax * 1.05);
   const x = (index) => sampled.length === 1 ? left + plotWidth / 2 : left + index * plotWidth / (sampled.length - 1);
   const y = (value) => top + plotHeight * (1 - value / maximum);
-  const polygon = (upper, lower, cssClass) => {
-    const topPoints = upper.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`);
-    const bottomPoints = lower.slice().reverse().map((value, index) => `${x(lower.length - index - 1).toFixed(1)},${y(value).toFixed(1)}`);
-    return `<polygon class="${cssClass}" points="${topPoints.concat(bottomPoints).join(" ")}"/>`;
-  };
   const completions = sampled.map((row) => row.completion);
   const totals = sampled.map((row) => row.prompt + row.completion);
   const grid = Array.from({ length: 5 }, (_, index) => {
@@ -2171,7 +2166,7 @@ function tokenTrendChart(rows) {
   const labelCount = Math.min(6, sampled.length);
   const labels = Array.from({ length: labelCount }, (_, index) => labelCount === 1 ? 0 : Math.round(index * (sampled.length - 1) / (labelCount - 1)));
   const labelText = labels.map((index) => `<text x="${x(index).toFixed(1)}" y="${height - 16}" text-anchor="middle">${escapeHtml(sampled[index].date.slice(5))}</text>`).join("");
-  return `<div class="trend-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Token 使用趋势"><g class="trend-grid">${grid}</g>${polygon(completions, completions.map(() => 0), "completion-area")}${polygon(totals, completions, "prompt-area")}<polyline class="trend-line completion" points="${completions.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ")}"/><polyline class="trend-line prompt" points="${totals.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ")}"/><g class="trend-labels">${labelText}</g><g class="trend-legend"><rect x="${left}" y="4" width="12" height="12" class="prompt"/><text x="${left + 18}" y="14">输入 Token</text><rect x="${left + 110}" y="4" width="12" height="12" class="completion"/><text x="${left + 128}" y="14">输出 Token</text></g></svg></div>`;
+  return `<div class="trend-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Token 使用趋势"><g class="trend-grid">${grid}</g><polyline class="trend-line completion" points="${completions.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ")}"/><polyline class="trend-line prompt" points="${totals.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ")}"/><g class="trend-labels">${labelText}</g><g class="trend-legend"><rect x="${left}" y="4" width="12" height="12" class="prompt"/><text x="${left + 18}" y="14">输入 Token</text><rect x="${left + 110}" y="4" width="12" height="12" class="completion"/><text x="${left + 128}" y="14">输出 Token</text></g></svg></div>`;
 }
 
 function formatCompactNumber(value) {
