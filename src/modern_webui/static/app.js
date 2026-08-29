@@ -396,6 +396,10 @@ function field(options) {
     const configured = secretConfigured(key);
     return `<label class="form-field"><span>${escapeHtml(label)}${hint}</span><input type="password" ${data} data-secret="1" autocomplete="new-password" placeholder="${configured ? "已配置；留空则保持不变" : placeholder}" /></label>`;
   }
+  if (type === "range") {
+    const rangeKey = `${scope}:${key}`;
+    return `<label class="form-field range-field"><span class="range-heading"><span>${escapeHtml(label)}${hint}</span><output data-range-output="${escapeAttribute(rangeKey)}">${escapeHtml(value)}</output></span><input type="range" ${data} data-range-key="${escapeAttribute(rangeKey)}" min="${min ?? ""}" max="${max ?? ""}" step="${step ?? "1"}" value="${escapeAttribute(value)}" /></label>`;
+  }
   const numeric = type === "number" || type === "range";
   const attrs = `${numeric ? ` min="${min ?? ""}" max="${max ?? ""}" step="${step ?? "1"}"` : ""}${required ? " required" : ""}`;
   return `<label class="form-field"><span>${escapeHtml(label)}${hint}</span><input type="${type === "range" ? "range" : type}" ${data}${attrs} value="${escapeAttribute(value)}" placeholder="${escapeAttribute(placeholder)}" /></label>`;
@@ -418,6 +422,14 @@ function bindFields(root = document) {
         else state.draft.env[key] = value;
       } else {
         state.draft.config[key] = value;
+      }
+      if (element.type === "range") {
+        const output = $$('[data-range-output]', root)
+          .find((item) => item.dataset.rangeOutput === element.dataset.rangeKey);
+        // ``HTMLOutputElement.value`` is not rendered consistently by all
+        // engines.  Updating the text node keeps the value visible in the
+        // browser as the slider moves.
+        if (output) output.textContent = element.value;
       }
       if (element.dataset.redraw === "1") renderPage();
     });
@@ -1002,7 +1014,7 @@ async function loadSearchResults(token) {
 async function renderKeywords(token) {
   const root = $("#page-root");
   const context = escapeHtml(String(configValue("research_context", "") || ""));
-  root.innerHTML = `${pageHeader()}<section class="section-card"><p class="hint-text">研究背景会用于评分和参考文献关键词提取。</p><label class="form-field"><textarea data-field="research_context" data-scope="config" aria-label="研究背景" rows="6" placeholder="描述你的研究问题、方法与关注方向">${context}</textarea></label></section>${divider()}${section("主关键词", `${field({ label: "每行一个关键词", key: "primary_keywords", type: "lines", rows: 8, fallback: [] })}${field({ label: "主关键词权重", key: "primary_keyword_weight", type: "number", min: 0.1, max: 5, step: 0.1, fallback: 1 })}`, { icon: "🏷️", hint: "主关键词参与资格判定与排序。" })}${divider()}${renderReferenceExtraction()}`;
+  root.innerHTML = `${pageHeader()}<section class="section-card"><p class="hint-text">研究背景会用于评分和参考文献关键词提取。</p><label class="form-field"><textarea data-field="research_context" data-scope="config" aria-label="研究背景" rows="6" placeholder="描述你的研究问题、方法与关注方向">${context}</textarea></label></section>${divider()}${section("主关键词", `${field({ label: "每行一个关键词", key: "primary_keywords", type: "lines", rows: 8, fallback: [] })}${field({ label: "主关键词权重", key: "primary_keyword_weight", type: "range", min: 0.1, max: 5, step: 0.1, fallback: 1 })}`, { icon: "🏷️", hint: "主关键词参与资格判定与排序。" })}${divider()}${renderReferenceExtraction()}`;
   bindCommon(root);
   try {
     const result = await api("/api/extracted-keywords");
@@ -1024,7 +1036,7 @@ function extractedKeywordList(items) {
 
 function renderReferenceExtraction() {
   const enabled = Boolean(configValue("enable_reference_extraction", false));
-  const content = `${field({ label: "启用参考文献关键词提取", key: "enable_reference_extraction", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "最多关键词数量", key: "max_reference_keywords", type: "number", min: 1, max: 50, fallback: 10 })}${field({ label: "相似度阈值", key: "similarity_threshold", type: "number", min: 0, max: 1, step: 0.05, fallback: 0.75 })}</div><div class="form-grid three">${weightField("高重要度", "high", 1, 3)}${weightField("中重要度", "medium", 0.2, 5)}${weightField("低重要度", "low", 0.1, 2)}</div><div id="extracted-keywords"><div class="loading">正在读取已提取关键词…</div></div>` : '<p class="hint-text">关闭后不会展示或使用此前提取的关键词；缓存会保留，重新开启后可继续复用。</p>'}`;
+  const content = `${field({ label: "启用参考文献关键词提取", key: "enable_reference_extraction", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "最多关键词数量", key: "max_reference_keywords", type: "number", min: 1, max: 50, fallback: 10 })}${field({ label: "相似度阈值", key: "similarity_threshold", type: "range", min: 0, max: 1, step: 0.05, fallback: 0.75 })}</div><div class="form-grid three">${weightField("高重要度", "high", 1, 3)}${weightField("中重要度", "medium", 0.2, 5)}${weightField("低重要度", "low", 0.1, 2)}</div><div id="extracted-keywords"><div class="loading">正在读取已提取关键词…</div></div>` : '<p class="hint-text">关闭后不会展示或使用此前提取的关键词；缓存会保留，重新开启后可继续复用。</p>'}`;
   return section("参考文献 PDF 关键词提取", content, { icon: "📚" });
 }
 
@@ -1237,7 +1249,7 @@ function llmSection(role, title, icon) {
   ];
   const base = envValue(`${prefix}__BASE_URL`, "https://api.openai.com/v1");
   const detected = presets.find(([id, _label, url]) => url && base.includes(url))?.[0] || "custom";
-  return section(title, `<p class="hint-text">${hint}</p><div class="form-grid two"><label class="form-field"><span>服务商预设</span><select id="${keyPrefix}-provider">${presets.map(([id, label]) => `<option value="${id}" ${id === detected ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>${field({ label: "Base URL", key: `${prefix}__BASE_URL`, scope: "env", fallback: base, placeholder: "https://api.example.com/v1" })}${field({ label: "API Key", key: `${prefix}__API_KEY`, scope: "env", type: "secret" })}${field({ label: "模型名称", key: `${prefix}__MODEL_NAME`, scope: "env", fallback: role === "cheap" ? "gpt-4o-mini" : "gpt-4o" })}${field({ label: "Temperature", key: `${prefix}__TEMPERATURE`, scope: "env", type: "number", min: 0, max: 2, step: 0.1, fallback: 0.3 })}</div><div class="action-row"><button class="secondary-button" data-test-llm="${role}">测试连接</button><span id="${keyPrefix}-test-result" class="inline-result"></span></div>`, { icon });
+  return section(title, `<p class="hint-text">${hint}</p><div class="form-grid two"><label class="form-field"><span>服务商预设</span><select id="${keyPrefix}-provider">${presets.map(([id, label]) => `<option value="${id}" ${id === detected ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></label>${field({ label: "Base URL", key: `${prefix}__BASE_URL`, scope: "env", fallback: base, placeholder: "https://api.example.com/v1" })}${field({ label: "API Key", key: `${prefix}__API_KEY`, scope: "env", type: "secret" })}${field({ label: "模型名称", key: `${prefix}__MODEL_NAME`, scope: "env", fallback: role === "cheap" ? "gpt-4o-mini" : "gpt-4o" })}${field({ label: "Temperature", key: `${prefix}__TEMPERATURE`, scope: "env", type: "range", min: 0, max: 2, step: 0.1, fallback: 0.3 })}</div><div class="action-row"><button class="secondary-button" data-test-llm="${role}">测试连接</button><span id="${keyPrefix}-test-result" class="inline-result"></span></div>`, { icon });
 }
 
 function mineruSection() {
