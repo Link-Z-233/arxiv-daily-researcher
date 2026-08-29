@@ -109,6 +109,33 @@ def _scan_sqlite_history(
     progress_callback: Callable[..., None],
 ) -> Dict[str, Any]:
     """Scan every currently available report source without cross-source failure."""
+    aggregate: Dict[str, Any] = {
+        "range_start": None,
+        "range_end": None,
+        "chunks_scanned": 0,
+        "papers_scanned": 0,
+        "missed_found": 0,
+        "backlog_queued": 0,
+        "failed_chunks": 0,
+        "errors": [],
+        "sources": {},
+        "skipped_reason": None,
+    }
+    # A complete legacy import is still useful when the operator has paused
+    # every live source: it can index cards and repair SQLite fields without
+    # making outbound requests.  SearchAgent deliberately rejects an empty
+    # source list for normal daily research, but a history omission scan can
+    # safely become a successful no-op in that configuration.
+    enabled_sources = [
+        str(source).strip()
+        for source in (getattr(settings, "ENABLED_SOURCES", []) or [])
+        if str(source).strip()
+    ]
+    if not enabled_sources:
+        aggregate["skipped_reason"] = "当前未启用数据源，已跳过新的历史遗漏扫描"
+        aggregate["skipped_no_enabled_sources"] = True
+        return aggregate
+
     from sources.search_agent import SearchAgent
 
     def record_optional_source(
@@ -131,7 +158,7 @@ def _scan_sqlite_history(
 
     agent = SearchAgent(
         history_dir=settings.HISTORY_DIR,
-        enabled_sources=settings.ENABLED_SOURCES,
+        enabled_sources=enabled_sources,
         arxiv_domains=settings.TARGET_DOMAINS,
         journals=settings.TARGET_JOURNALS,
         enable_openalex=getattr(settings, "ENABLE_OPENALEX", True),
@@ -142,18 +169,6 @@ def _scan_sqlite_history(
         use_legacy_history_filter=False,
         source_health_recorder=record_optional_source,
     )
-    aggregate: Dict[str, Any] = {
-        "range_start": None,
-        "range_end": None,
-        "chunks_scanned": 0,
-        "papers_scanned": 0,
-        "missed_found": 0,
-        "backlog_queued": 0,
-        "failed_chunks": 0,
-        "errors": [],
-        "sources": {},
-        "skipped_reason": None,
-    }
     try:
         for source in agent.get_enabled_sources():
             logger.info("[HistoryOmission][%s] 开始扫描 SQLite 历史范围", source)

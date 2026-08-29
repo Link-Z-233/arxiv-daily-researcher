@@ -129,6 +129,23 @@ class HistoryOmissionScanTests(unittest.TestCase):
         self.assertEqual(summary["backlog_queued"], 2)
         self.assertEqual(summary["failed_chunks"], 0)
 
+    def test_no_enabled_source_skips_new_scan_without_failing(self):
+        """Full legacy repair can run offline while live sources are paused."""
+        with patch("modes.history_omission_scan.settings.ENABLED_SOURCES", []), patch(
+            "sources.search_agent.SearchAgent"
+        ) as search_agent:
+            summary = _scan_sqlite_history(
+                self.store,
+                run_id="test-history-scan",
+                progress_callback=lambda **_kwargs: None,
+            )
+
+        search_agent.assert_not_called()
+        self.assertEqual(summary["failed_chunks"], 0)
+        self.assertEqual(summary["sources"], {})
+        self.assertTrue(summary["skipped_no_enabled_sources"])
+        self.assertIn("未启用数据源", summary["skipped_reason"])
+
     def test_one_source_failure_does_not_hide_other_source_results(self):
         self._record_delivered("arxiv", "2603.30001v1")
         self._record_delivered("prl", "10.1103/known")
