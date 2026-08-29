@@ -1489,6 +1489,10 @@ async function loadReportPreview(report, reports, token, chooseReport) {
     const previous = report.type === "daily" ? findAdjacentDailyReport(report, reports.daily, -1) : null;
     const next = report.type === "daily" ? findAdjacentDailyReport(report, reports.daily, 1) : null;
     const navigation = report.type === "daily" ? `<div class="report-navigation"><button class="secondary-button compact-button" data-report-nav="${previous ? escapeAttribute(previous.id) : ""}" ${previous ? "" : "disabled"}>← 前一天</button><button class="secondary-button compact-button" data-report-nav="${next ? escapeAttribute(next.id) : ""}" ${next ? "" : "disabled"}>后一天 →</button></div>` : "";
+    // ``#report-preview`` starts as a loading placeholder.  Drop that class
+    // once real content arrives; retaining it wraps the full preview card in
+    // a second, oversized dashed border.
+    preview.className = "report-preview-host";
     preview.innerHTML = section("报告预览", `${reportInfoHtml(report)}${navigation}<iframe class="report-frame" sandbox="allow-scripts allow-popups" referrerpolicy="no-referrer" title="报告预览"></iframe>`);
     const frame = $(".report-frame", preview);
     frame.srcdoc = marked.html;
@@ -1516,6 +1520,7 @@ async function loadReportPreview(report, reports, token, chooseReport) {
       }, { signal: markAbortController.signal });
     }
   } catch (error) {
+    preview.className = "report-preview-host";
     preview.innerHTML = section("报告预览", `<p class="error-message">${escapeHtml(error.message)}</p>`);
   }
 }

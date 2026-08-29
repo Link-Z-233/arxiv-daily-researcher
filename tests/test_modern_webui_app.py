@@ -53,6 +53,15 @@ class ModernWebUIAppTests(unittest.TestCase):
             "en": "📄 Reports",
         })
 
+    def test_report_preview_drops_the_loading_placeholder_style(self) -> None:
+        """Loaded previews must not retain the loading state's dashed frame."""
+        response = self.client.get("/assets/app.js")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(
+            response.text.count('preview.className = "report-preview-host";'), 2
+        )
+
     def test_stale_trigger_cleanup_uses_the_authenticated_api_boundary(self) -> None:
         self.assertEqual(self.client.post("/api/triggers/stale", json={}).status_code, 503)
         self.assertEqual(
