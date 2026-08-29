@@ -340,24 +340,63 @@ function metrics(items) {
 
 async function fetchStatus(kind) { return api(`/api/status/${encodeURIComponent(kind)}`); }
 
+function dailyLaunch(status) {
+  const launchHint = status.can_start ? "" : '<p class="hint-text">已有任务运行或正在等待工作进程接手；完成后可再次启动。</p>';
+  return `<div class="action-row"><button class="primary-button" data-start-task="daily_research" ${status.can_start ? "" : "disabled"}>开始每日研究 <span>→</span></button></div>${launchHint}`;
+}
+
+function dailyQueue(status) {
+  return metrics([
+    { label: "待处理论文", value: formatNumber(status.queue?.pending), help: "会在后续每日研究中处理" },
+    { label: "待重试论文", value: formatNumber(status.queue?.retry), help: "保留阶段状态与问题摘要" },
+  ]);
+}
+
+function updateDailyStatus(root, status) {
+  const launch = $("#daily-launch", root);
+  const statusHost = $("#daily-status-content", root);
+  const queue = $("#daily-queue-content", root);
+  if (!launch || !statusHost || !queue) return false;
+  launch.innerHTML = dailyLaunch(status);
+  statusHost.innerHTML = statusCard(status, { kind: "daily", refresh: false });
+  queue.innerHTML = dailyQueue(status);
+  // Only the newly replaced status/action fragments need event bindings. The
+  // settings form stays in place, keeping unfinished edits and focus intact.
+  bindCommon(launch);
+  bindCommon(statusHost);
+  return true;
+}
+
+async function refreshDailyStatus() {
+  if (state.page !== "daily_research") return;
+  const root = $("#page-root");
+  try {
+    const status = await fetchStatus("daily");
+    if (state.page !== "daily_research" || !updateDailyStatus(root, status)) return;
+    if (status.is_active && state.pageData.dailyAutoRefresh !== false) {
+      scheduleRefresh("daily", refreshDailyStatus, 5000);
+    }
+  } catch (error) {
+    // Preserve the usable page and settings form if a transient status read
+    // fails; the next manual refresh or task update can retry it.
+    toast(`状态刷新失败：${error.message}`, "error");
+  }
+}
+
 async function renderDaily(token) {
   const root = $("#page-root");
   root.innerHTML = `${pageHeader()}<div class="loading">正在读取每日研究状态…</div>`;
   const status = await fetchStatus("daily");
   if (token !== state.renderToken) return;
   const autoRefresh = state.pageData.dailyAutoRefresh !== false;
-  const launchHint = status.can_start ? "" : '<p class="hint-text">已有任务运行或正在等待工作进程接手；完成后可再次启动。</p>';
-  root.innerHTML = `${pageHeader()}${section("每日研究", `<div class="action-row"><button class="primary-button" data-start-task="daily_research" ${status.can_start ? "" : "disabled"}>开始每日研究 <span>→</span></button></div>${launchHint}`, { icon: "🚀" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，仅在任务运行或刚提交等待接手时每 5 秒刷新状态、队列和日志尾部。</small></span><input id="daily-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label>${statusCard(status, { kind: "daily", refresh: false })}${divider()}<h3>每日研究队列</h3>${metrics([
-    { label: "待处理论文", value: formatNumber(status.queue?.pending), help: "会在后续每日研究中处理" },
-    { label: "待重试论文", value: formatNumber(status.queue?.retry), help: "保留阶段状态与问题摘要" },
-  ])}`, { icon: "📊" })}${divider()}${renderDailySettings()}`;
+  root.innerHTML = `${pageHeader()}${section("每日研究", `<div id="daily-launch">${dailyLaunch(status)}</div>`, { icon: "🚀" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，仅在任务运行或刚提交等待接手时每 5 秒刷新状态、队列和日志尾部。</small></span><input id="daily-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label><div id="daily-status-content">${statusCard(status, { kind: "daily", refresh: false })}</div>${divider()}<h3>每日研究队列</h3><div id="daily-queue-content">${dailyQueue(status)}</div>`, { icon: "📊" })}${divider()}${renderDailySettings()}`;
   bindCommon(root);
   $("#daily-auto-refresh", root)?.addEventListener("change", (event) => {
     state.pageData.dailyAutoRefresh = event.target.checked;
     if (!event.target.checked) window.clearTimeout(state.timers.get("daily"));
-    else if (status.is_active) scheduleRefresh("daily", () => renderPage(), 5000);
+    else if (status.is_active) scheduleRefresh("daily", refreshDailyStatus, 5000);
   });
-  if (status.is_active && autoRefresh) scheduleRefresh("daily", () => renderPage(), 5000);
+  if (status.is_active && autoRefresh) scheduleRefresh("daily", refreshDailyStatus, 5000);
 }
 
 function renderDailySettings() {
