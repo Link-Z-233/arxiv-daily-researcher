@@ -624,7 +624,11 @@ function renderTrendForm(templates = []) {
   const configuredPrompt = String(config("trend_analysis_prompt", "") || "");
   const matchingTemplate = templates.find((item) => item.text === configuredPrompt)?.name || "";
   const configuredSkills = Array.isArray(config("trend_enabled_skills", ["comprehensive_analysis"])) ? config("trend_enabled_skills", ["comprehensive_analysis"]) : [];
-  const values = state.pageData.trend || { keywords: "", date_from: defaultFrom, date_to: today, categories: [], max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"), analysis_prompt: matchingTemplate ? configuredPrompt : "", template: matchingTemplate, skills: configuredSkills };
+  // Keep a previously saved custom prompt even when it has not been stored
+  // in the template library.  The Streamlit collector preserves that value
+  // until the operator explicitly selects a template (or “no template”);
+  // merely opening this page and saving another setting must not erase it.
+  const values = state.pageData.trend || { keywords: "", date_from: defaultFrom, date_to: today, categories: [], max_results: config("trend_max_results", 500), sort_order: config("trend_sort_order", "ascending"), analysis_prompt: configuredPrompt, template: matchingTemplate, skills: configuredSkills };
   const selectedSkills = Array.isArray(values.skills) ? values.skills : configuredSkills;
   const categories = arxivCategories().map((item) => `<option value="${escapeAttribute(item.code)}" ${values.categories.includes(item.code) ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
   const templateOptions = templates.map((item) => `<option value="${escapeAttribute(item.name)}" ${values.template === item.name ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("");
