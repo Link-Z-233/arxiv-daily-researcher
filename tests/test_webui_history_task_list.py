@@ -131,6 +131,38 @@ class HistoryTaskListTests(unittest.TestCase):
         self.assertIn("正在补全 TLDR", rows[0]["progress"])
         self.assertIn("2/5", rows[0]["progress"])
 
+    def test_running_receipt_is_not_downgraded_by_handoff_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            request = enqueue_trigger(data_dir, "history_data_repair")
+            request_id = request.stem.rsplit("_", 1)[-1]
+            request.rename(request.with_suffix(".running"))
+            status_dir = trigger_status_directory(data_dir)
+            status_dir.mkdir(parents=True, exist_ok=True)
+            (status_dir / f"{request_id}.json").write_text(
+                json.dumps(
+                    {
+                        "request_id": request_id,
+                        "mode": "history_data_repair",
+                        "state": "running",
+                        "created_at": "2026-08-29T00:00:00+00:00",
+                        "started_at": "2026-08-29T00:00:03+00:00",
+                        "updated_at": "2026-08-29T00:00:03+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(data_management, "t", side_effect=lambda key: key):
+                rows = data_management._read_history_task_records(
+                    {},
+                    queue_dir=request.parent,
+                    status_dir=status_dir,
+                    store=_ProgressStore(None),
+                )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["state"], "running")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -546,9 +546,19 @@ def _read_history_task_records(
                 payload = read_trigger_payload(path)
             except (OSError, ValueError):
                 continue
+            request_id = str(payload.get("request_id") or "").strip()
+            existing = records.get(request_id)
+            # ``*.running`` remains until the child exits, whereas the
+            # watcher writes its durable ``running`` receipt immediately
+            # before launching the child.  Do not regress an active task to
+            # the transitional “starting” label just because that hand-off
+            # file is still present.
+            replace = existing is None or not (
+                state == "starting" and str(existing.get("state") or "") == "running"
+            )
             add_record(
                 {
-                    "request_id": payload.get("request_id"),
+                    "request_id": request_id,
                     "mode": payload.get("mode"),
                     "state": state,
                     "created_at": payload.get("created_at"),
@@ -559,9 +569,9 @@ def _read_history_task_records(
                 "retry_of": str(payload.get("retry_of") or "").strip(),
                 "sort_at": payload.get("created_at") or "",
                 },
-                # The live queue is newer authority than a status file that
-                # was written during watcher hand-off.
-                replace=True,
+                # A queue entry is authoritative until the watcher has
+                # recorded the durable running receipt described above.
+                replace=replace,
             )
 
     rows = list(records.values())
