@@ -105,9 +105,7 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .group-button.is-active::before { background: var(--brand); }
 .sidebar-actions { display: grid; gap: 8px; margin-top: 30px; }
 .sidebar-meta { margin-top: auto; padding: 19px 9px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: .72rem; }
-.sidebar-meta p { margin-bottom: 12px; line-height: 1.5; }
-.text-button { border: 0; background: none; color: var(--muted); font-size: .78rem; padding: 0; }
-.text-button:hover { color: var(--brand); }
+.sidebar-meta p { margin: 0; line-height: 1.5; }
 
 .main-area { min-width: 0; }
 .top-tabs {
