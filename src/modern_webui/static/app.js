@@ -700,13 +700,13 @@ function field(options) {
     // well so the shared control remains clear for future callers rather
     // than silently rendering an empty select element.
     choices: suppliedChoices, options: optionChoices,
-    placeholder = "", rows = 4, redraw = false, required = false,
+    placeholder = "", rows = 4, required = false,
   } = options;
   const choices = Array.isArray(suppliedChoices)
     ? suppliedChoices
     : (Array.isArray(optionChoices) ? optionChoices : []);
   const value = scope === "env" ? envValue(key, fallback) : configValue(key, fallback);
-  const data = `data-field="${escapeAttribute(key)}" data-scope="${scope}"${redraw ? ' data-redraw="1"' : ""}`;
+  const data = `data-field="${escapeAttribute(key)}" data-scope="${scope}"`;
   const hint = help ? `<span class="field-help">${escapeHtml(help)}</span>` : "";
   if (type === "checkbox") {
     return `<label class="toggle-field"><span>${escapeHtml(label)}${hint}</span><input type="checkbox" ${data} ${booleanValue(value, fallback) ? "checked" : ""}/><i></i></label>`;
@@ -764,7 +764,6 @@ function bindFields(root = document) {
         // browser as the slider moves.
         if (output) output.textContent = element.value;
       }
-      if (element.dataset.redraw === "1") renderPage({ preserveScroll: true });
     });
   });
 }
@@ -1830,8 +1829,16 @@ async function renderScoring(token) {
   const strategy = configValue("score_strategy", "core_relevance_v2");
   const authorEditor = authorBonusEditor();
   const root = $("#page-root");
-  root.innerHTML = `${pageHeader()}${section("评价策略", `<p class="hint-text">选择论文如何获得资格，以及通过后如何排序。新配置建议使用核心相关性 V2。</p>${field({ label: "评分策略", key: "score_strategy", type: "select", choices: [{ value: "core_relevance_v2", label: "核心相关性 V2（推荐）" }, { value: "legacy_weighted_keyword_v1", label: "加权关键词 V1（兼容）" }, { value: "learned_preference_v1", label: "偏好学习 V1（个性化）" }], fallback: "core_relevance_v2", redraw: true })}${strategyDescription(strategy)}${strategyQualificationNotice(strategy)}${renderStrategyFields(strategy)}${legacyFormulaPreview(strategy)}`, { icon: "🧮" })}${divider()}${renderAuthorBonus(authorEditor)}`;
+  const strategyFields = (value) => `${strategyDescription(value)}${strategyQualificationNotice(value)}${renderStrategyFields(value)}${legacyFormulaPreview(value)}`;
+  root.innerHTML = `${pageHeader()}${section("评价策略", `<p class="hint-text">选择论文如何获得资格，以及通过后如何排序。新配置建议使用核心相关性 V2。</p>${field({ label: "评分策略", key: "score_strategy", type: "select", choices: [{ value: "core_relevance_v2", label: "核心相关性 V2（推荐）" }, { value: "legacy_weighted_keyword_v1", label: "加权关键词 V1（兼容）" }, { value: "learned_preference_v1", label: "偏好学习 V1（个性化）" }], fallback: "core_relevance_v2" })}<div id="scoring-strategy-fields">${strategyFields(strategy)}</div>`, { icon: "🧮" })}${divider()}${renderAuthorBonus(authorEditor)}`;
   bindCommon(root);
+  $('[data-field="score_strategy"]', root)?.addEventListener("change", (event) => {
+    const host = $("#scoring-strategy-fields", root);
+    if (!host) return;
+    host.innerHTML = strategyFields(event.target.value);
+    bindCommon(host);
+    applyLocale(host);
+  });
   bindWeightedEntryEditor(root, authorEditor);
   $('[data-field="enable_author_bonus"]', root)?.addEventListener("change", (event) => {
     const region = $("#author-bonus-entry-region", root);
@@ -2045,9 +2052,9 @@ function renderNotifications() {
   // delivery switch is off.  This is the compatibility-panel workflow: an
   // operator can prepare and test a channel first, then enable notifications
   // only when every credential is ready.
-  const channel = (key, label, fields) => `<details class="channel-card" ${configValue(key, false) ? "open" : ""}><summary>${escapeHtml(label)}</summary>${field({ label: `启用${label}`, key, type: "checkbox", fallback: false, redraw: true })}${fields}</details>`;
+  const channel = (key, label, fields) => `<details class="channel-card" ${configValue(key, false) ? "open" : ""}><summary>${escapeHtml(label)}</summary>${field({ label: `启用${label}`, key, type: "checkbox", fallback: false })}${fields}</details>`;
   const emailFields = `<div class="form-grid three">${field({ label: "SMTP 主机", key: "SMTP_HOST", scope: "env" })}${field({ label: "端口", key: "SMTP_PORT", scope: "env", type: "number", min: 1, max: 65535, fallback: 587 })}${field({ label: "使用 TLS", key: "SMTP_USE_TLS", scope: "env", type: "checkbox", fallback: true })}${field({ label: "用户名", key: "SMTP_USER", scope: "env" })}${field({ label: "密码", key: "SMTP_PASSWORD", scope: "env", type: "secret" })}${field({ label: "发件人", key: "SMTP_FROM", scope: "env" })}${field({ label: "收件人（逗号分隔）", key: "SMTP_TO", scope: "env" })}</div><div class="action-row"><button id="smtp-test" class="secondary-button">测试 SMTP 连接</button><span id="smtp-test-result" class="inline-result"></span></div>`;
-  const mainBody = `<p class="hint-text">配置任务完成、失败和阶段异常通知。可先准备渠道并测试连接，再启用全局通知。</p>${field({ label: "启用通知", key: "notifications_enabled", type: "checkbox", fallback: false, redraw: true })}<div class="form-grid three">${field({ label: "任务成功通知", key: "notify_on_success", type: "checkbox", fallback: true })}${field({ label: "任务失败通知", key: "notify_on_failure", type: "checkbox", fallback: true })}${field({ label: "通知中展示论文数量", key: "notification_top_n", type: "number", min: 1, max: 50, fallback: 5 })}</div>${field({ label: "附加报告文件", key: "notify_attach_reports", type: "checkbox", fallback: false })}`;
+  const mainBody = `<p class="hint-text">配置任务完成、失败和阶段异常通知。可先准备渠道并测试连接，再启用全局通知。</p>${field({ label: "启用通知", key: "notifications_enabled", type: "checkbox", fallback: false })}<div class="form-grid three">${field({ label: "任务成功通知", key: "notify_on_success", type: "checkbox", fallback: true })}${field({ label: "任务失败通知", key: "notify_on_failure", type: "checkbox", fallback: true })}${field({ label: "通知中展示论文数量", key: "notification_top_n", type: "number", min: 1, max: 50, fallback: 5 })}</div>${field({ label: "附加报告文件", key: "notify_attach_reports", type: "checkbox", fallback: false })}`;
   const channels = section("通知渠道", `${channel("notify_email_enabled", "邮件", emailFields)}${channel("notify_wechat_enabled", "企业微信", field({ label: "Webhook URL", key: "WECHAT_WEBHOOK_URL", scope: "env", type: "secret" }))}${channel("notify_dingtalk_enabled", "钉钉", `${field({ label: "Webhook URL", key: "DINGTALK_WEBHOOK_URL", scope: "env", type: "secret" })}${field({ label: "签名密钥（可选）", key: "DINGTALK_SECRET", scope: "env", type: "secret" })}`)}${channel("notify_telegram_enabled", "Telegram", `<div class="form-grid two">${field({ label: "Bot Token", key: "TELEGRAM_BOT_TOKEN", scope: "env", type: "secret" })}${field({ label: "Chat ID", key: "TELEGRAM_CHAT_ID", scope: "env" })}</div>`)}${channel("notify_slack_enabled", "Slack", field({ label: "Webhook URL", key: "SLACK_WEBHOOK_URL", scope: "env", type: "secret" }))}${channel("notify_generic_webhook_enabled", "通用 Webhook", field({ label: "Webhook URL", key: "GENERIC_WEBHOOK_URL", scope: "env", type: "secret" }))}`, { icon: "📣" });
   return `${section("通知设置", mainBody, { icon: "🔔" })}${divider()}${channels}`;
 }
@@ -2067,7 +2074,8 @@ function proxyNoProxyEditor() {
 
 function renderProxySettings() {
   const enabled = Boolean(configValue("proxy_enabled", false));
-  return section("网络代理设置", `${field({ label: "启用网络代理", key: "proxy_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `${field({ label: "代理地址", key: "proxy_url", fallback: "", placeholder: "http://127.0.0.1:7890", help: "支持 HTTP 代理（http://host:port）和 SOCKS5 代理（socks5://host:port）。" })}${proxyNoProxyEditor()}${divider()}<h3>🎯 代理范围控制</h3><p class="hint-text">选择哪些服务使用代理。可以按需为不同服务分别启用或禁用代理。</p><div class="form-grid two">${field({ label: "ArXiv API", key: "proxy_arxiv", type: "checkbox", fallback: true, help: "ArXiv 论文抓取 API（export.arxiv.org）。" })}${field({ label: "OpenAlex API", key: "proxy_openalex", type: "checkbox", fallback: false, help: "OpenAlex 期刊论文数据源。" })}${field({ label: "Hugging Face Papers API", key: "proxy_huggingface_papers", type: "checkbox", fallback: false, help: "Hugging Face Papers 可选补充论文流。" })}${field({ label: "Semantic Scholar API", key: "proxy_semantic_scholar", type: "checkbox", fallback: false, help: "Semantic Scholar TL;DR 增强功能。" })}${field({ label: "LLM API", key: "proxy_llm_api", type: "checkbox", fallback: false, help: "LLM 大模型 API（评分、分析等）。" })}${field({ label: "通知 Webhook", key: "proxy_notifications", type: "checkbox", fallback: false, help: "企业微信、钉钉、Telegram 等通知推送。" })}${field({ label: "WebDAV 同步", key: "proxy_webdav", type: "checkbox", fallback: true, help: "WebDAV 配置和数据备份/恢复请求。" })}${field({ label: "检查更新", key: "proxy_update_check", type: "checkbox", fallback: false, help: "GitHub 版本更新检查（需访问 api.github.com）。" })}</div>` : ""}`, { icon: "🌐" });
+  const dependent = `${field({ label: "代理地址", key: "proxy_url", fallback: "", placeholder: "http://127.0.0.1:7890", help: "支持 HTTP 代理（http://host:port）和 SOCKS5 代理（socks5://host:port）。" })}${proxyNoProxyEditor()}${divider()}<h3>🎯 代理范围控制</h3><p class="hint-text">选择哪些服务使用代理。可以按需为不同服务分别启用或禁用代理。</p><div class="form-grid two">${field({ label: "ArXiv API", key: "proxy_arxiv", type: "checkbox", fallback: true, help: "ArXiv 论文抓取 API（export.arxiv.org）。" })}${field({ label: "OpenAlex API", key: "proxy_openalex", type: "checkbox", fallback: false, help: "OpenAlex 期刊论文数据源。" })}${field({ label: "Hugging Face Papers API", key: "proxy_huggingface_papers", type: "checkbox", fallback: false, help: "Hugging Face Papers 可选补充论文流。" })}${field({ label: "Semantic Scholar API", key: "proxy_semantic_scholar", type: "checkbox", fallback: false, help: "Semantic Scholar TL;DR 增强功能。" })}${field({ label: "LLM API", key: "proxy_llm_api", type: "checkbox", fallback: false, help: "LLM 大模型 API（评分、分析等）。" })}${field({ label: "通知 Webhook", key: "proxy_notifications", type: "checkbox", fallback: false, help: "企业微信、钉钉、Telegram 等通知推送。" })}${field({ label: "WebDAV 同步", key: "proxy_webdav", type: "checkbox", fallback: true, help: "WebDAV 配置和数据备份/恢复请求。" })}${field({ label: "检查更新", key: "proxy_update_check", type: "checkbox", fallback: false, help: "GitHub 版本更新检查（需访问 api.github.com）。" })}</div>`;
+  return section("网络代理设置", `${field({ label: "启用网络代理", key: "proxy_enabled", type: "checkbox", fallback: false })}<div id="proxy-dependent" ${enabled ? "" : "hidden"}>${dependent}</div>`, { icon: "🌐" });
 }
 
 function keywordTrendDefaultDaysFields() {
@@ -2083,17 +2091,15 @@ function keywordTrendDefaultDaysFields() {
     type: "select",
     choices: options,
     fallback: savedChoice,
-    redraw: true,
   });
-  if (choice !== "custom") return select;
-  return `${select}${field({
+  return `${select}<div id="keyword-trend-custom-days" ${choice === "custom" ? "" : "hidden"}>${field({
     label: localeText("自定义趋势视图天数", "Custom trend view days"),
     key: "keyword_trend_default_days_custom",
     type: "number",
     min: 1,
     step: 1,
     fallback: savedDays,
-  })}`;
+  })}</div>`;
 }
 
 function renderAdvanced() {
@@ -2104,23 +2110,39 @@ function renderAdvanced() {
   const downloadLimit = Math.max(1, Math.floor(Number(configValue("pdf_download_max_bytes", 52428800)) / 1048576));
   const pdfParser = section("PDF 解析器", [
     '<p class="hint-text">选择解析研究论文 PDF 的方式。</p>',
-    field({ label: "解析器模式", key: "pdf_parser_mode", type: "select", choices: [{ value: "pymupdf", label: "pymupdf" }, { value: "mineru", label: "mineru" }], fallback: "pymupdf", redraw: true, help: "mineru：云端 API（质量更高）｜pymupdf：本地（无需网络）。" }),
-    mineru ? field({ label: "MinerU 模型版本", key: "mineru_model_version", type: "select", choices: [{ value: "pipeline", label: "pipeline" }, { value: "vlm", label: "vlm" }], fallback: "pipeline", help: "pipeline：速度快｜vlm：更精准（消耗更多配额）。" }) : "",
+    field({ label: "解析器模式", key: "pdf_parser_mode", type: "select", choices: [{ value: "pymupdf", label: "pymupdf" }, { value: "mineru", label: "mineru" }], fallback: "pymupdf", help: "mineru：云端 API（质量更高）｜pymupdf：本地（无需网络）。" }),
+    `<div id="mineru-model-version" ${mineru ? "" : "hidden"}>${field({ label: "MinerU 模型版本", key: "mineru_model_version", type: "select", choices: [{ value: "pipeline", label: "pipeline" }, { value: "vlm", label: "vlm" }], fallback: "pipeline", help: "pipeline：速度快｜vlm：更精准（消耗更多配额）。" })}</div>`,
     field({ label: "PDF 下载大小上限（MB）", key: "pdf_download_max_mb_ui", type: "number", min: 1, max: 1024, fallback: downloadLimit, help: "深度分析下载的单个 PDF 上限；超限或非 PDF 响应会保留论文供后续重试。" }),
   ].join(""), { icon: "📄" });
   const concurrency = section("并发设置", `<p class="hint-text">LLM 评分的并行处理，注意 API 速率限制。</p><div class="form-grid two">${field({ label: "启用并发处理", key: "concurrency_enabled", type: "checkbox", fallback: false })}${field({ label: "工作线程数", key: "concurrency_workers", type: "number", min: 1, max: 10, fallback: 3, help: "推荐：3–5，过高可能触发速率限制。" })}</div>`, { icon: "⚡" });
   const requestPool = section("LLM 请求池", `<p class="hint-text">全局限制 LLM 请求速率，避免并发任务触发 API 限流。</p><div class="form-grid three">${field({ label: "启用 LLM 请求池", key: "llm_request_pool_enabled", type: "checkbox", fallback: true })}${field({ label: "每分钟请求数", key: "llm_requests_per_minute", type: "number", min: 1, max: 600, fallback: 30 })}${field({ label: "慢等待日志阈值（秒）", key: "llm_request_pool_log_slow_wait_seconds", type: "number", min: 0, max: 120, step: 0.5, fallback: 5 })}</div>`, { icon: "🚦" });
   const persistence = section("每日研究持久化", `<p class="hint-text">保存论文级评分与分析进度，用于断点续跑和失败恢复。</p>${field({ label: "启用每日深度分析", key: "daily_enable_deep_analysis", type: "checkbox", fallback: true })}${field({ label: "持久化数据库路径", key: "daily_research_db_path", fallback: "data/daily_research/daily_research.db" })}`, { icon: "💾" });
   const featureToggles = section("功能开关", `${field({ label: "Token 用量追踪", key: "token_tracking_enabled", type: "checkbox", fallback: true })}${field({ label: "检查新版本并通知", key: "auto_update_enabled", type: "checkbox", fallback: true, help: "只检查 GitHub Release，不会自动拉取代码、重建镜像或重启容器。发现比当前版本更新的发布版时，经已启用的通知渠道提醒；若所有渠道未送达，后续检查会重试。" })}`, { icon: "📊" });
-  const keywordTracker = section("关键词趋势追踪", `${field({ label: "启用关键词追踪", key: "keyword_tracker_enabled", type: "checkbox", fallback: true, redraw: true })}${tracker ? `${field({ label: "AI 归一化", key: "keyword_normalization_enabled", type: "checkbox", fallback: true, redraw: true })}${normalizationEnabled ? `<div class="form-grid two">${field({ label: "归一化批次大小", key: "keyword_normalization_batch_size", type: "number", min: 5, max: 100, fallback: 25 })}${field({ label: "归一化使用的 LLM", key: "keyword_normalization_llm_role", type: "select", choices: [{ value: "cheap", label: "低成本 LLM" }, { value: "smart", label: "高性能 LLM" }], fallback: "cheap", help: "该选择会用于每日关键词标准化，并同步记录到 LLM 健康统计。" })}</div>` : ""}${keywordTrendDefaultDaysFields()}<div class="form-grid two">${field({ label: "柱状图 Top-N", key: "keyword_chart_top_n", type: "number", min: 5, max: 50, fallback: 15 })}${field({ label: "趋势图 Top-N", key: "keyword_trend_top_n", type: "number", min: 3, max: 20, fallback: 5 })}</div>${field({ label: "启用趋势报告", key: "keyword_report_enabled", type: "checkbox", fallback: true, redraw: true })}${keywordReportEnabled ? field({ label: "报告频率", key: "keyword_report_frequency", type: "select", choices: ["daily", "weekly", "monthly", "always"], fallback: "weekly" }) : ""}` : ""}`, { icon: "🧩" });
+  const keywordTracker = section("关键词趋势追踪", `${field({ label: "启用关键词追踪", key: "keyword_tracker_enabled", type: "checkbox", fallback: true })}<div id="keyword-tracker-dependent" ${tracker ? "" : "hidden"}>${field({ label: "AI 归一化", key: "keyword_normalization_enabled", type: "checkbox", fallback: true })}<div id="keyword-normalization-dependent" class="trend-dependent-fields" ${normalizationEnabled ? "" : "hidden"}><div class="form-grid two">${field({ label: "归一化批次大小", key: "keyword_normalization_batch_size", type: "number", min: 5, max: 100, fallback: 25 })}${field({ label: "归一化使用的 LLM", key: "keyword_normalization_llm_role", type: "select", choices: [{ value: "cheap", label: "低成本 LLM" }, { value: "smart", label: "高性能 LLM" }], fallback: "cheap", help: "该选择会用于每日关键词标准化，并同步记录到 LLM 健康统计。" })}</div></div>${keywordTrendDefaultDaysFields()}<div class="form-grid two">${field({ label: "柱状图 Top-N", key: "keyword_chart_top_n", type: "number", min: 5, max: 50, fallback: 15 })}${field({ label: "趋势图 Top-N", key: "keyword_trend_top_n", type: "number", min: 3, max: 20, fallback: 5 })}</div>${field({ label: "启用趋势报告", key: "keyword_report_enabled", type: "checkbox", fallback: true })}<div id="keyword-report-frequency" ${keywordReportEnabled ? "" : "hidden"}>${field({ label: "报告频率", key: "keyword_report_frequency", type: "select", choices: ["daily", "weekly", "monthly", "always"], fallback: "weekly" })}</div></div>`, { icon: "🧩" });
   const retryAndLogs = section("重试与日志", `<div class="form-grid three">${field({ label: "最大重试次数", key: "retry_max_attempts", type: "number", min: 1, max: 10, fallback: 3 })}${field({ label: "最短等待（秒）", key: "retry_min_wait", type: "number", min: 1, max: 60, fallback: 2 })}${field({ label: "最长等待（秒）", key: "retry_max_wait", type: "number", min: 5, max: 300, fallback: 30 })}</div>${field({ label: "运行锁超龄告警阈值（小时）", key: "run_lock_max_age_hours", type: "number", min: 1, max: 168, fallback: 12, help: "同一任务超过该时长时，后续同类任务会告警并跳过；不会按 PID 自动终止进程。" })}<div class="form-grid two">${field({ label: "日志轮转方式", key: "log_rotation_type", type: "select", choices: [{ value: "time", label: "time" }, { value: "size", label: "size" }], fallback: "time" })}${field({ label: "日志保留天数", key: "log_keep_days", type: "number", min: 1, max: 365, fallback: 30 })}</div>`, { icon: "♻️" });
   return [pdfParser, concurrency, requestPool, persistence, featureToggles, keywordTracker, retryAndLogs, renderProxySettings()].join(divider());
+}
+
+function bindAdvancedInteractions(root) {
+  const toggle = (selector, target, visible) => {
+    $(selector, root)?.addEventListener("change", (event) => {
+      const host = $(target, root);
+      if (host) host.hidden = !visible(event);
+    });
+  };
+  toggle('[data-field="pdf_parser_mode"]', "#mineru-model-version", (event) => event.target.value === "mineru");
+  toggle('[data-field="proxy_enabled"]', "#proxy-dependent", (event) => event.target.checked);
+  toggle('[data-field="keyword_tracker_enabled"]', "#keyword-tracker-dependent", (event) => event.target.checked);
+  toggle('[data-field="keyword_normalization_enabled"]', "#keyword-normalization-dependent", (event) => event.target.checked);
+  toggle('[data-field="keyword_report_enabled"]', "#keyword-report-frequency", (event) => event.target.checked);
+  toggle('[data-field="keyword_trend_default_days_ui"]', "#keyword-trend-custom-days", (event) => event.target.value === "custom");
 }
 
 async function renderAdvancedPage(_token) {
   const root = $("#page-root");
   root.innerHTML = `${pageHeader()}${renderAdvanced()}`;
   bindCommon(root);
+  bindAdvancedInteractions(root);
 }
 
 function webdavScheduleTime(cron) {
@@ -2191,35 +2213,65 @@ function webdavSettings() {
   const database = configValue("daily_research_db_path", "data/daily_research/daily_research.db").split("/").pop();
   const historyLabel = localeText(`历史数据（${database}）`, `Historical data (${database})`);
   const scheduled = configValue("webdav_sync_mode", "after_report") === "scheduled";
-  return `${section("配置导出", `<p class="hint-text">导出当前 config.json 与 .env。导出文件含凭据，请妥善保存。</p><button id="config-export" class="secondary-button">导出配置</button>`, { icon: "📦" })}${divider()}${section("WebDAV", `<p class="hint-text">按需同步配置、SQLite 历史、关键词和报告文件。</p>${field({ label: "启用 WebDAV 同步", key: "webdav_enabled", type: "checkbox", fallback: false, redraw: true })}${enabled ? `<div class="form-grid two">${field({ label: "WebDAV URL", key: "WEBDAV_URL", scope: "env", placeholder: "https://dav.example.com/dav/" })}${field({ label: "用户名", key: "WEBDAV_USERNAME", scope: "env" })}${field({ label: "密码", key: "WEBDAV_PASSWORD", scope: "env", type: "secret" })}</div><div class="action-row"><button class="secondary-button" data-webdav="test">测试连接</button><button class="secondary-button" data-webdav="upload">上传</button><button class="secondary-button" data-webdav="download">下载</button><span id="webdav-result" class="inline-result"></span></div><h3>⚙️ 同步设置</h3><div class="form-grid two">${field({ label: "远程目录", key: "webdav_remote_path", fallback: "/arxiv-daily-researcher/" })}${field({ label: "同步时机", key: "webdav_sync_mode", type: "select", choices: [{ value: "manual", label: "手动" }, { value: "scheduled", label: "定时" }, { value: "after_report", label: "报告完成后" }], fallback: "after_report", redraw: true })}${scheduled ? `<label class="form-field"><span>定时同步时间<span class="field-help">每天在此时间执行同步。</span></span><input id="webdav-scheduled-time" type="time" value="${escapeAttribute(webdavScheduleTime(configValue("webdav_cron_schedule", "0 23 * * *")))}" /></label>` : ""}</div><h3>📂 同步范围</h3><div class="form-grid two">${field({ label: "配置文件", key: "webdav_sync_configs", type: "checkbox", fallback: true })}${field({ label: historyLabel, key: "webdav_sync_history", type: "checkbox", fallback: true })}${field({ label: "关键词数据", key: "webdav_sync_keywords", type: "checkbox", fallback: true })}${field({ label: "报告文件", key: "webdav_sync_reports", type: "checkbox", fallback: false })}</div>` : '<p class="hint-text">启用后可展开连接凭据、同步设置和同步范围。</p>'}`, { icon: "☁️" })}${divider()}${section("本地备份", `<p class="hint-text">本地备份按保留策略自动整理；启用 WebDAV 后会在本地快照成功后增量镜像到远端。</p>${field({ label: "启用自动备份", key: "backup_enabled", type: "checkbox", fallback: true, redraw: true })}${backupEnabled ? `<div class="form-grid two">${field({ label: "本地保存天数（0 永久保存）", key: "backup_local_retention_days", type: "number", min: 0, fallback: 7 })}${field({ label: "当天最多数量（0 不限）", key: "backup_local_same_day_max_count", type: "number", min: 0, fallback: 0 })}</div>` : ""}<div class="action-row"><button id="backup-create" class="primary-button">生成本地备份</button><button id="backup-export" class="secondary-button">导出备份</button></div><div class="action-row"><label class="file-button">导入备份<input id="backup-file" type="file" accept=".zip,.gz,.db" hidden /></label><button id="backup-restore" class="secondary-button" disabled>上传并恢复</button><span id="backup-result" class="inline-result"></span></div><div id="backup-list"><div class="loading">正在读取备份列表…</div></div>`, { icon: "🗄️" })}`;
+  const webdavDependent = `<div class="form-grid two">${field({ label: "WebDAV URL", key: "WEBDAV_URL", scope: "env", placeholder: "https://dav.example.com/dav/" })}${field({ label: "用户名", key: "WEBDAV_USERNAME", scope: "env" })}${field({ label: "密码", key: "WEBDAV_PASSWORD", scope: "env", type: "secret" })}</div><div class="action-row"><button class="secondary-button" data-webdav="test">测试连接</button><button class="secondary-button" data-webdav="upload">上传</button><button class="secondary-button" data-webdav="download">下载</button><span id="webdav-result" class="inline-result"></span></div><h3>⚙️ 同步设置</h3><div class="form-grid two">${field({ label: "远程目录", key: "webdav_remote_path", fallback: "/arxiv-daily-researcher/" })}${field({ label: "同步时机", key: "webdav_sync_mode", type: "select", choices: [{ value: "manual", label: "手动" }, { value: "scheduled", label: "定时" }, { value: "after_report", label: "报告完成后" }], fallback: "after_report" })}<label id="webdav-scheduled-time-field" class="form-field" ${scheduled ? "" : "hidden"}><span>定时同步时间<span class="field-help">每天在此时间执行同步。</span></span><input id="webdav-scheduled-time" type="time" value="${escapeAttribute(webdavScheduleTime(configValue("webdav_cron_schedule", "0 23 * * *")))}" /></label></div><h3>📂 同步范围</h3><div class="form-grid two">${field({ label: "配置文件", key: "webdav_sync_configs", type: "checkbox", fallback: true })}${field({ label: historyLabel, key: "webdav_sync_history", type: "checkbox", fallback: true })}${field({ label: "关键词数据", key: "webdav_sync_keywords", type: "checkbox", fallback: true })}${field({ label: "报告文件", key: "webdav_sync_reports", type: "checkbox", fallback: false })}</div>`;
+  const localBackupSettings = `<div id="local-backup-settings" class="form-grid two" ${backupEnabled ? "" : "hidden"}>${field({ label: "本地保存天数（0 永久保存）", key: "backup_local_retention_days", type: "number", min: 0, fallback: 7 })}${field({ label: "当天最多数量（0 不限）", key: "backup_local_same_day_max_count", type: "number", min: 0, fallback: 0 })}</div>`;
+  return `${section("配置导出", `<p class="hint-text">导出当前 config.json 与 .env。导出文件含凭据，请妥善保存。</p><button id="config-export" class="secondary-button">导出配置</button>`, { icon: "📦" })}${divider()}${section("WebDAV", `<p class="hint-text">按需同步配置、SQLite 历史、关键词和报告文件。</p>${field({ label: "启用 WebDAV 同步", key: "webdav_enabled", type: "checkbox", fallback: false })}<div id="webdav-dependent" ${enabled ? "" : "hidden"}>${webdavDependent}</div><p id="webdav-disabled-hint" class="hint-text" ${enabled ? "hidden" : ""}>启用后可展开连接凭据、同步设置和同步范围。</p>`, { icon: "☁️" })}${divider()}${section("本地备份", `<p class="hint-text">本地备份按保留策略自动整理；启用 WebDAV 后会在本地快照成功后增量镜像到远端。</p>${field({ label: "启用自动备份", key: "backup_enabled", type: "checkbox", fallback: true })}${localBackupSettings}<div class="action-row"><button id="backup-create" class="primary-button">生成本地备份</button><button id="backup-export" class="secondary-button">导出备份</button></div><div class="action-row"><label class="file-button">导入备份<input id="backup-file" type="file" accept=".zip,.gz,.db" hidden /></label><button id="backup-restore" class="secondary-button" disabled>上传并恢复</button><span id="backup-result" class="inline-result"></span></div><div id="backup-list"><div class="loading">正在读取备份列表…</div></div>`, { icon: "🗄️" })}`;
 }
 
 async function renderBackupSync(token) {
   const root = $("#page-root");
   root.innerHTML = `${pageHeader()}${webdavSettings()}`;
   bindCommon(root);
+  $('[data-field="webdav_enabled"]', root)?.addEventListener("change", (event) => {
+    const enabled = event.target.checked;
+    const dependent = $("#webdav-dependent", root);
+    const hint = $("#webdav-disabled-hint", root);
+    if (dependent) dependent.hidden = !enabled;
+    if (hint) hint.hidden = enabled;
+  });
+  $('[data-field="webdav_sync_mode"]', root)?.addEventListener("change", (event) => {
+    const timeField = $("#webdav-scheduled-time-field", root);
+    if (timeField) timeField.hidden = event.target.value !== "scheduled";
+  });
+  $('[data-field="backup_enabled"]', root)?.addEventListener("change", (event) => {
+    const settings = $("#local-backup-settings", root);
+    if (settings) settings.hidden = !event.target.checked;
+  });
   $("#webdav-scheduled-time", root)?.addEventListener("change", (event) => {
     const [hour, minute] = String(event.target.value || "").split(":").map(Number);
     if (Number.isInteger(hour) && hour >= 0 && hour <= 23 && Number.isInteger(minute) && minute >= 0 && minute <= 59) {
       state.draft.config.webdav_cron_schedule = `${minute} ${hour} * * *`;
+      markConfigurationDirty();
     }
   });
   $("#config-export", root).addEventListener("click", () => { window.location.assign("/api/configuration/export"); });
   $$("[data-webdav]", root).forEach((button) => button.addEventListener("click", async () => {
     try { const result = await api("/api/webdav", { method: "POST", body: { operation: button.dataset.webdav, ...webdavOperationDraft() } }); $("#webdav-result").textContent = webdavOperationMessage(button.dataset.webdav, result); $("#webdav-result").className = `inline-result ${result.ok ? "success" : "error"}`; } catch (error) { toast(error.message, "error"); }
   }));
-  $("#backup-create", root).addEventListener("click", async () => { try { const result = await api("/api/backups/create", { method: "POST", body: localBackupDraft() }); toast(localBackupMessage(result), result.created && !result.upload_error ? "success" : "error"); renderPage(); } catch (error) { toast(error.message, "error"); } });
+  $("#backup-create", root).addEventListener("click", async () => { try { const result = await api("/api/backups/create", { method: "POST", body: localBackupDraft() }); toast(localBackupMessage(result), result.created && !result.upload_error ? "success" : "error"); await refreshBackupList(root); } catch (error) { toast(error.message, "error"); } });
   $("#backup-export", root).addEventListener("click", () => { window.location.assign("/api/backups/export"); });
   $("#backup-file", root).addEventListener("change", (event) => { $("#backup-restore").disabled = !event.target.files?.[0]; });
   $("#backup-restore", root).addEventListener("click", async () => {
     const file = $("#backup-file").files?.[0]; if (!file) return;
     if (!window.confirm("确认恢复该 SQLite 备份？当前数据库会被归档后替换。")) return;
-    try { const result = await api("/api/backups/restore", { method: "POST", body: file, headers: { "X-File-Name": file.name } }); toast(restoreBackupMessage(result), "success"); renderPage(); } catch (error) { $("#backup-result").textContent = error.message; $("#backup-result").className = "inline-result error"; }
+    try { const result = await api("/api/backups/restore", { method: "POST", body: file, headers: { "X-File-Name": file.name } }); toast(restoreBackupMessage(result), "success"); await refreshBackupList(root); } catch (error) { $("#backup-result").textContent = error.message; $("#backup-result").className = "inline-result error"; }
   });
+  await refreshBackupList(root, token);
+}
+
+async function refreshBackupList(root = $("#page-root"), token = state.renderToken) {
   try {
-    const backups = await api("/api/backups"); if (token !== state.renderToken) return;
-    $("#backup-list").innerHTML = pagedTable("backups", [{ label: "文件名", key: "name" }, { label: "大小", value: (row) => `${Math.round(Number(row.size_bytes) / 1024)} KB` }, { label: "时间", value: (row) => formatTime(row.modified_at) }], backups.items || [], { empty: "暂无本地备份" }); bindPagers(root);
-  } catch (error) { $("#backup-list").innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`; }
+    const backups = await api("/api/backups");
+    if (token !== state.renderToken || state.page !== "backup_sync") return;
+    const host = $("#backup-list", root);
+    if (!host) return;
+    host.innerHTML = pagedTable("backups", [{ label: "文件名", key: "name" }, { label: "大小", value: (row) => `${Math.round(Number(row.size_bytes) / 1024)} KB` }, { label: "时间", value: (row) => formatTime(row.modified_at) }], backups.items || [], { empty: "暂无本地备份" });
+    bindPagers(host);
+    applyLocale(host);
+  } catch (error) {
+    const host = $("#backup-list", root);
+    if (host) host.innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`;
+  }
 }
 
 function importSummary(summary) {
@@ -2253,12 +2305,18 @@ function historyIsLive(data) {
   return Boolean(data?.status?.is_active) || historyTasks(data).some((task) => ["queued", "starting", "running"].includes(task.state));
 }
 
+function historyFullRepairHint(enabled) {
+  return enabled
+    ? "开启后会在导入后安排缺失字段补全、遗漏扫描和补充报告。"
+    : "关闭后仅导入 HTML 已包含的论文，避免新的每日研究重复处理。";
+}
+
 function historyActions(data) {
   const pendingModes = new Set(historyTasks(data)
     .filter((task) => ["queued", "starting", "running"].includes(task.state))
     .map((task) => task.mode));
   const fullRepair = Boolean(configValue("legacy_import_full_repair_enabled", false));
-  return `<p class="hint-text">导入旧版本 HTML 报告中的论文。SQLite 是历史论文数据的唯一索引；HTML 解析与新报告生成都会同步写入。</p>${field({ label: "启用完整补全流程", key: "legacy_import_full_repair_enabled", type: "checkbox", fallback: false, redraw: true })}<p class="hint-text">${fullRepair ? "开启后会在导入后安排缺失字段补全、遗漏扫描和补充报告。" : "关闭后仅导入 HTML 已包含的论文，避免新的每日研究重复处理。"}</p><div class="action-row"><button id="history-import" class="primary-button" ${pendingModes.has("legacy_import") ? "disabled" : ""}>读取旧历史 <span>→</span></button></div><h3>历史维护</h3><div class="action-row history-maintenance-actions"><button id="history-repair" class="secondary-button compact-button" ${pendingModes.has("history_data_repair") ? "disabled" : ""}>补全历史数据</button><button id="history-omission" class="secondary-button compact-button" ${pendingModes.has("history_omission_scan") ? "disabled" : ""}>扫描历史遗漏</button></div>`;
+  return `<p class="hint-text">导入旧版本 HTML 报告中的论文。SQLite 是历史论文数据的唯一索引；HTML 解析与新报告生成都会同步写入。</p>${field({ label: "启用完整补全流程", key: "legacy_import_full_repair_enabled", type: "checkbox", fallback: false })}<p id="history-full-repair-hint" class="hint-text">${historyFullRepairHint(fullRepair)}</p><div class="action-row"><button id="history-import" class="primary-button" ${pendingModes.has("legacy_import") ? "disabled" : ""}>读取旧历史 <span>→</span></button></div><h3>历史维护</h3><div class="action-row history-maintenance-actions"><button id="history-repair" class="secondary-button compact-button" ${pendingModes.has("history_data_repair") ? "disabled" : ""}>补全历史数据</button><button id="history-omission" class="secondary-button compact-button" ${pendingModes.has("history_omission_scan") ? "disabled" : ""}>扫描历史遗漏</button></div>`;
 }
 
 function historyStatusPanel(data) {
@@ -2349,6 +2407,12 @@ async function renderHistory(token) {
   bindCommon(root);
   bindHistoryLaunchers(root);
   bindHistoryRetries(root);
+  $('[data-field="legacy_import_full_repair_enabled"]', root)?.addEventListener("change", (event) => {
+    const hint = $("#history-full-repair-hint", root);
+    if (!hint) return;
+    hint.textContent = historyFullRepairHint(event.target.checked);
+    applyLocale(hint);
+  });
   $("#history-auto-refresh", root)?.addEventListener("change", (event) => {
     state.pageData.historyAutoRefresh = event.target.checked;
     if (!event.target.checked) window.clearTimeout(state.timers.get("history"));
