@@ -7,6 +7,7 @@ import json
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,28 @@ from utils.webui_trigger import enqueue_trigger, trigger_status_directory
 
 
 class ModernBackendTests(unittest.TestCase):
+    def test_analytics_windows_keep_rolling_and_calendar_ranges_distinct(self) -> None:
+        now = datetime(2026, 8, 30, 15, 45, 30)
+        start, end, bucket, key = backend._analytics_window("24h", now=now)
+        self.assertEqual(start, datetime(2026, 8, 29, 15, 45, 30))
+        self.assertEqual(end, now)
+        self.assertEqual(bucket, "hour")
+        self.assertEqual(key, "24h")
+
+        start, end, bucket, key = backend._analytics_window("7d", now=now)
+        self.assertEqual(start, datetime(2026, 8, 24))
+        self.assertEqual(end, now)
+        self.assertEqual(bucket, "day")
+        self.assertEqual(key, "7d")
+
+        start, end, bucket, key = backend._analytics_window(
+            "custom", "2026-08-01", "2026-08-03", now=now
+        )
+        self.assertEqual(start, datetime(2026, 8, 1))
+        self.assertEqual(end, datetime(2026, 8, 4))
+        self.assertEqual(bucket, "day")
+        self.assertEqual(key, "custom")
+
     def test_public_settings_never_returns_a_secret_value(self) -> None:
         with patch.object(backend, "flat_config", return_value={"daily_run_time": "12:00"}), patch.object(
             backend,

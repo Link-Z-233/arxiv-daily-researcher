@@ -16,7 +16,7 @@ import os
 import re
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -1319,17 +1319,80 @@ def diagnostics(days: int | None) -> dict[str, Any]:
         raise ModernWebUIError(f"读取运行诊断失败：{exc}") from exc
 
 
-def analytics(days: int | None) -> dict[str, Any]:
-    if days is not None and days not in {7, 30, 90, 365}:
+def _analytics_window(
+    range_key: object,
+    date_from: object = None,
+    date_to: object = None,
+    *,
+    now: datetime | None = None,
+) -> tuple[datetime, datetime, str, str]:
+    """Resolve an analytics picker value into one explicit local-time window."""
+
+    current = (now or datetime.now()).replace(microsecond=0)
+    key = str(range_key or "30d").strip().lower()
+    if key == "24h":
+        return current - timedelta(hours=24), current, "hour", key
+    if key == "today":
+        return current.replace(hour=0, minute=0, second=0), current, "hour", key
+    if key in {"3d", "7d", "14d", "30d"}:
+        days = int(key[:-1])
+        start = current.replace(hour=0, minute=0, second=0) - timedelta(days=days - 1)
+        return start, current, "day", key
+    if key != "custom":
         raise ModernWebUIError("数据分析时间范围无效。")
+    try:
+        start_date = datetime.strptime(str(date_from or ""), "%Y-%m-%d")
+        end_date = datetime.strptime(str(date_to or ""), "%Y-%m-%d")
+    except ValueError as exc:
+        raise ModernWebUIError("自定义时间段需要有效的开始和结束日期。") from exc
+    if end_date < start_date:
+        raise ModernWebUIError("自定义时间段的结束日期不能早于开始日期。")
+    # A date picker describes complete local dates, so an end date is
+    # inclusive and the SQL range endpoint is the following midnight.
+    end = end_date + timedelta(days=1)
+    bucket = "hour" if end - start_date <= timedelta(days=1) else "day"
+    return start_date, end, bucket, key
+
+
+def analytics(
+    range_key: object = "30d", date_from: object = None, date_to: object = None
+) -> dict[str, Any]:
+    start_at, end_at, bucket, normalized_key = _analytics_window(
+        range_key, date_from, date_to
+    )
     store = open_store()
     if store is None:
-        return {"available": False, "daily": [], "models": []}
+        return {
+            "available": False,
+            "series": [],
+            "models": [],
+            "summary": {"prompt": 0, "completion": 0, "total": 0, "runs": 0},
+            "window": {
+                "range": normalized_key,
+                "start": start_at.isoformat(),
+                "end": end_at.isoformat(),
+                "bucket": bucket,
+            },
+            "heatmap_daily": [],
+        }
     try:
         return {
             "available": True,
-            "daily": store.get_daily_token_totals(days),
-            "models": store.get_token_usage_by_model(days),
+            "series": store.get_token_usage_series(
+                start_at=start_at, end_at=end_at, bucket=bucket
+            ),
+            "models": store.get_token_usage_by_model_range(
+                start_at=start_at, end_at=end_at
+            ),
+            "summary": store.get_token_usage_summary(
+                start_at=start_at, end_at=end_at
+            ),
+            "window": {
+                "range": normalized_key,
+                "start": start_at.isoformat(),
+                "end": end_at.isoformat(),
+                "bucket": bucket,
+            },
             # The Streamlit dashboard always renders a one-year activity
             # heatmap independently of the selected trend range.
             "heatmap_daily": store.get_daily_token_totals(days=365),

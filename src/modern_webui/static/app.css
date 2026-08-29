@@ -433,7 +433,28 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .heat-cell { display: block; width: 12px; height: 12px; border-radius: 3px; background: #edf0f4; }
 .heat-cell.level-1 { background: #cad5fc; }.heat-cell.level-2 { background: #97aaf3; }.heat-cell.level-3 { background: #6c82df; }.heat-cell.level-4 { background: var(--brand); }
 .heatmap-legend { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 10px; color: var(--muted); font-size: .71rem; }
-.trend-chart { overflow-x: auto; }.trend-chart svg { display: block; width: 100%; min-width: 640px; height: auto; }.trend-grid line { stroke: #e3e8f0; stroke-width: 1; }.trend-grid text { fill: var(--muted); font-size: 11px; }.trend-line { fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }.trend-line.prompt, .trend-legend .prompt { stroke: var(--brand); fill: var(--brand); }.trend-line.completion, .trend-legend .completion { stroke: var(--success); fill: var(--success); }.trend-labels text, .trend-legend text { fill: var(--muted); font-size: 11px; }
+.analytics-range-control { display: grid; gap: 10px; margin-bottom: 22px; }
+.analytics-range-label { color: var(--text-secondary); font-size: .79rem; font-weight: 750; }
+.segmented-control { display: flex; flex-wrap: wrap; gap: 6px; width: fit-content; max-width: 100%; padding: 5px; border: 1px solid var(--line); border-radius: 12px; background: var(--card-soft); }
+.segmented-button { min-height: 34px; padding: 0 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font-size: .76rem; font-weight: 700; transition: background .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease; }
+.segmented-button:hover { background: #fff; color: var(--text-secondary); }
+.segmented-button.is-active { border-color: var(--brand-line); background: #fff; box-shadow: var(--shadow-xs); color: #344bb9; }
+.analytics-custom-range { margin-top: 3px; }
+.analytics-custom-action { margin-top: 0; }
+.trend-chart { overflow-x: auto; padding: 2px 0; }
+.trend-chart svg { display: block; width: 100%; min-width: 680px; height: auto; }
+.trend-grid line { stroke: #e3e8f0; stroke-width: 1; }
+.trend-grid text { fill: var(--muted); font-size: 11px; }
+.trend-line { fill: none !important; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.trend-line.total { stroke: #465fd5; stroke-width: 2.35; }
+.trend-line.prompt { stroke: #5d8ee7; }
+.trend-line.completion { stroke: var(--success); }
+.trend-point { stroke: #fff; stroke-width: 1.1; }
+.trend-point.total { fill: #465fd5; }
+.trend-point.prompt { fill: #5d8ee7; }
+.trend-point.completion { fill: var(--success); }
+.trend-legend .total { fill: #465fd5; }.trend-legend .prompt { fill: #5d8ee7; }.trend-legend .completion { fill: var(--success); }
+.trend-labels text, .trend-legend text { fill: var(--muted); font-size: 11px; }
 
 .auth-shell { display: grid; min-height: 100vh; place-items: center; padding: 20px; background: radial-gradient(circle at 50% -10%, #e9edff 0, transparent 36rem), var(--canvas); }
 .auth-card { width: min(100%, 420px); padding: 42px; border: 1px solid var(--line); border-radius: 21px; background: rgba(255, 255, 255, .95); box-shadow: var(--shadow-md); }

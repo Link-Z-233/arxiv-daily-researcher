@@ -3115,6 +3115,123 @@ class DailyResearchStore:
             for row in rows
         ]
 
+    @staticmethod
+    def _token_usage_time_filter(
+        start_at: Optional[datetime], end_at: Optional[datetime]
+    ) -> tuple[str, list[str]]:
+        """Build a lexicographically-safe ISO timestamp range for token rows.
+
+        ``recorded_at`` is persisted with ``datetime.isoformat()``, so SQLite
+        can compare the local, zero-padded ISO strings directly.  Keeping the
+        query range here avoids each WebUI endpoint inventing subtly different
+        definitions for a day or a rolling 24-hour window.
+        """
+
+        clauses: list[str] = []
+        params: list[str] = []
+        if start_at is not None:
+            clauses.append("recorded_at >= ?")
+            params.append(start_at.isoformat())
+        if end_at is not None:
+            clauses.append("recorded_at < ?")
+            params.append(end_at.isoformat())
+        return (f" WHERE {' AND '.join(clauses)}" if clauses else "", params)
+
+    def get_token_usage_series(
+        self,
+        *,
+        start_at: Optional[datetime] = None,
+        end_at: Optional[datetime] = None,
+        bucket: str = "day",
+    ) -> list[Dict[str, Any]]:
+        """Aggregate token use for a precise local-time range.
+
+        ``bucket`` is either ``day`` or ``hour``.  The caller supplies the
+        complete display window, which lets the modern WebUI accurately show
+        both "today" and a rolling 24-hour chart without approximating either
+        from calendar-day totals.
+        """
+
+        if bucket not in {"day", "hour"}:
+            raise ValueError("token usage bucket must be 'day' or 'hour'")
+        label = "substr(recorded_at, 1, 10)" if bucket == "day" else "substr(recorded_at, 1, 13)"
+        where, params = self._token_usage_time_filter(start_at, end_at)
+        query = (
+            f"SELECT {label} AS bucket, "
+            "SUM(prompt_tokens) AS prompt, "
+            "SUM(completion_tokens) AS completion, "
+            "SUM(total_tokens) AS total, "
+            "COUNT(DISTINCT run_id) AS runs "
+            "FROM run_token_usage"
+            f"{where} GROUP BY bucket ORDER BY bucket"
+        )
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "bucket": row["bucket"],
+                "prompt": row["prompt"] or 0,
+                "completion": row["completion"] or 0,
+                "total": row["total"] or 0,
+                "runs": row["runs"] or 0,
+            }
+            for row in rows
+        ]
+
+    def get_token_usage_summary(
+        self,
+        *,
+        start_at: Optional[datetime] = None,
+        end_at: Optional[datetime] = None,
+    ) -> Dict[str, int]:
+        """Return compact totals for the same exact token-use window."""
+
+        where, params = self._token_usage_time_filter(start_at, end_at)
+        query = (
+            "SELECT SUM(prompt_tokens) AS prompt, "
+            "SUM(completion_tokens) AS completion, "
+            "SUM(total_tokens) AS total, "
+            "COUNT(DISTINCT run_id) AS runs "
+            "FROM run_token_usage"
+            f"{where}"
+        )
+        with self._connect() as conn:
+            row = conn.execute(query, params).fetchone()
+        return {
+            "prompt": int(row["prompt"] or 0),
+            "completion": int(row["completion"] or 0),
+            "total": int(row["total"] or 0),
+            "runs": int(row["runs"] or 0),
+        }
+
+    def get_token_usage_by_model_range(
+        self,
+        *,
+        start_at: Optional[datetime] = None,
+        end_at: Optional[datetime] = None,
+    ) -> list[Dict[str, Any]]:
+        """Aggregate token use by model for a precise local-time range."""
+
+        where, params = self._token_usage_time_filter(start_at, end_at)
+        query = (
+            "SELECT model, SUM(prompt_tokens) AS prompt, "
+            "SUM(completion_tokens) AS completion, "
+            "SUM(total_tokens) AS total "
+            "FROM run_token_usage"
+            f"{where} GROUP BY model ORDER BY total DESC"
+        )
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "model": row["model"],
+                "prompt": row["prompt"] or 0,
+                "completion": row["completion"] or 0,
+                "total": row["total"] or 0,
+            }
+            for row in rows
+        ]
+
     # ==================== LLM health ====================
 
     def record_llm_health_event(

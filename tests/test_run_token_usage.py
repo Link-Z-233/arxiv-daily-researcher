@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -62,6 +63,42 @@ class RunTokenUsageTests(unittest.TestCase):
                 )
             self.assertEqual(store.get_daily_token_totals(days=30), [])
             self.assertEqual(len(store.get_daily_token_totals()), 1)
+
+    def test_precise_token_windows_support_hourly_charts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DailyResearchStore(Path(temp_dir) / "state.db")
+            store.record_token_usage("morning", {"cheap": {"prompt": 100, "completion": 20}})
+            store.record_token_usage("midmorning", {"smart": {"prompt": 40, "completion": 10}})
+            store.record_token_usage("previous_day", {"cheap": {"prompt": 8, "completion": 2}})
+            import sqlite3
+
+            with sqlite3.connect(store.db_path) as conn:
+                conn.execute(
+                    "UPDATE run_token_usage SET recorded_at = ? WHERE run_id = ?",
+                    ("2026-08-30T08:15:00", "morning"),
+                )
+                conn.execute(
+                    "UPDATE run_token_usage SET recorded_at = ? WHERE run_id = ?",
+                    ("2026-08-30T09:40:00", "midmorning"),
+                )
+                conn.execute(
+                    "UPDATE run_token_usage SET recorded_at = ? WHERE run_id = ?",
+                    ("2026-08-29T23:15:00", "previous_day"),
+                )
+
+            start = datetime(2026, 8, 30, 8)
+            end = datetime(2026, 8, 30, 10)
+            series = store.get_token_usage_series(start_at=start, end_at=end, bucket="hour")
+            self.assertEqual([row["bucket"] for row in series], ["2026-08-30T08", "2026-08-30T09"])
+            self.assertEqual(series[0]["total"], 120)
+            self.assertEqual(series[1]["total"], 50)
+            self.assertEqual(store.get_token_usage_summary(start_at=start, end_at=end), {
+                "prompt": 140, "completion": 30, "total": 170, "runs": 2,
+            })
+            self.assertEqual(
+                [row["model"] for row in store.get_token_usage_by_model_range(start_at=start, end_at=end)],
+                ["cheap", "smart"],
+            )
 
 
 if __name__ == "__main__":

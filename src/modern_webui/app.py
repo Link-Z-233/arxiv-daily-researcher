@@ -469,10 +469,15 @@ async def diagnostics_get(request: Request) -> JSONResponse:
 
 async def analytics_get(request: Request) -> JSONResponse:
     _require_session(request)
-    raw_days = request.query_params.get("days", "30")
     try:
-        days = None if raw_days == "all" else int(raw_days)
-        return JSONResponse(await _blocking_call(backend.analytics, days))
+        return JSONResponse(
+            await _blocking_call(
+                backend.analytics,
+                request.query_params.get("range", "30d"),
+                request.query_params.get("date_from"),
+                request.query_params.get("date_to"),
+            )
+        )
     except Exception as exc:
         raise _safe_error(exc) from exc
 

@@ -2158,23 +2158,49 @@ function tokenHeatmap(rows) {
   return `<div class="heatmap-wrap"><div class="heatmap-calendar" aria-label="${localeText("近一年 Token 使用热力图", "Token usage heatmap for the past year")}"><table><thead><tr><th></th>${monthCells.join("")}</tr></thead><tbody>${calendarRows}</tbody></table></div><div class="heatmap-legend"><span>${localeText("少", "Low")}</span><i class="heat-cell level-0"></i><i class="heat-cell level-1"></i><i class="heat-cell level-2"></i><i class="heat-cell level-3"></i><i class="heat-cell level-4"></i><span>${localeText("多", "High")}</span></div></div>`;
 }
 
-function tokenTrendChart(rows) {
-  const source = (rows || []).filter((row) => row && row.date).slice().sort((left, right) => String(left.date).localeCompare(String(right.date)));
-  if (!source.length) return '<p class="empty-state">所选范围内没有 Token 使用记录。</p>';
-  const byDate = new Map(source.map((row) => [String(row.date), row]));
-  const start = new Date(`${source[0].date}T00:00:00`);
-  const end = new Date(`${source[source.length - 1].date}T00:00:00`);
-  const values = [];
-  for (let day = new Date(start); day <= end; day.setDate(day.getDate() + 1)) {
-    const key = localDateKey(day);
-    const row = byDate.get(key) || {};
-    values.push({ date: key, prompt: Number(row.prompt || 0), completion: Number(row.completion || 0) });
+function analyticsBucketKey(date, bucket) {
+  const day = localDateKey(date);
+  if (bucket !== "hour") return day;
+  return `${day}T${String(date.getHours()).padStart(2, "0")}`;
+}
+
+function analyticsSeriesRows(rows, window) {
+  const supplied = (rows || []).filter((row) => row && (row.bucket || row.date));
+  if (!supplied.length) return [];
+  const bucket = window?.bucket === "hour" ? "hour" : "day";
+  const byBucket = new Map(supplied.map((row) => [String(row.bucket || row.date), row]));
+  const start = new Date(String(window?.start || ""));
+  const end = new Date(String(window?.end || ""));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+    return supplied.slice().sort((left, right) => String(left.bucket || left.date).localeCompare(String(right.bucket || right.date)));
   }
-  // Keep long all-time histories readable just like the Streamlit chart.
+  const values = [];
+  const cursor = new Date(start);
+  if (bucket === "hour") cursor.setMinutes(0, 0, 0);
+  else cursor.setHours(0, 0, 0, 0);
+  for (let guard = 0; cursor < end && guard < 9000; guard += 1) {
+    const key = analyticsBucketKey(cursor, bucket);
+    const row = byBucket.get(key) || {};
+    values.push({ bucket: key, prompt: Number(row.prompt || 0), completion: Number(row.completion || 0), total: Number(row.total || 0), runs: Number(row.runs || 0) });
+    if (bucket === "hour") cursor.setHours(cursor.getHours() + 1);
+    else cursor.setDate(cursor.getDate() + 1);
+  }
+  return values;
+}
+
+function analyticsBucketLabel(value, bucket) {
+  const text = String(value || "");
+  if (bucket === "hour") return text.slice(5).replace("T", " ");
+  return text.slice(5);
+}
+
+function tokenTrendChart(rows, window) {
+  const values = analyticsSeriesRows(rows, window);
+  if (!values.length) return '<p class="empty-state">所选范围内没有 Token 使用记录。</p>';
   const sampled = values.length > 366 ? values.filter((_, index) => index % Math.ceil(values.length / 366) === 0) : values;
-  const width = 760; const height = 280; const left = 64; const right = 16; const top = 16; const bottom = 40;
+  const width = 840; const height = 306; const left = 64; const right = 18; const top = 30; const bottom = 43;
   const plotWidth = width - left - right; const plotHeight = height - top - bottom;
-  const rawMax = Math.max(0, ...sampled.map((row) => row.prompt + row.completion));
+  const rawMax = Math.max(0, ...sampled.map((row) => Math.max(row.prompt, row.completion, row.total)));
   const niceCeiling = (value) => {
     if (value <= 0) return 1;
     const exponent = Math.floor(Math.log10(value));
@@ -2186,16 +2212,16 @@ function tokenTrendChart(rows) {
   const maximum = niceCeiling(rawMax * 1.05);
   const x = (index) => sampled.length === 1 ? left + plotWidth / 2 : left + index * plotWidth / (sampled.length - 1);
   const y = (value) => top + plotHeight * (1 - value / maximum);
-  const completions = sampled.map((row) => row.completion);
-  const totals = sampled.map((row) => row.prompt + row.completion);
+  const linePoints = (key) => sampled.map((row, index) => `${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`).join(" ");
+  const points = (key) => sampled.map((row, index) => `<circle class="trend-point ${key}" cx="${x(index).toFixed(1)}" cy="${y(row[key]).toFixed(1)}" r="${sampled.length > 90 ? "1.5" : "2.25"}"><title>${escapeHtml(`${analyticsBucketLabel(row.bucket, window?.bucket)} · ${key === "prompt" ? "输入" : key === "completion" ? "输出" : "合计"} ${formatNumber(row[key])} tokens`)}</title></circle>`).join("");
   const grid = Array.from({ length: 5 }, (_, index) => {
     const value = maximum * index / 4;
     return `<line x1="${left}" x2="${width - right}" y1="${y(value).toFixed(1)}" y2="${y(value).toFixed(1)}"/><text x="${left - 8}" y="${(y(value) + 4).toFixed(1)}" text-anchor="end">${escapeHtml(formatCompactNumber(value))}</text>`;
   }).join("");
   const labelCount = Math.min(6, sampled.length);
   const labels = Array.from({ length: labelCount }, (_, index) => labelCount === 1 ? 0 : Math.round(index * (sampled.length - 1) / (labelCount - 1)));
-  const labelText = labels.map((index) => `<text x="${x(index).toFixed(1)}" y="${height - 16}" text-anchor="middle">${escapeHtml(sampled[index].date.slice(5))}</text>`).join("");
-  return `<div class="trend-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Token 使用趋势"><g class="trend-grid">${grid}</g><polyline class="trend-line completion" points="${completions.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ")}"/><polyline class="trend-line prompt" points="${totals.map((value, index) => `${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ")}"/><g class="trend-labels">${labelText}</g><g class="trend-legend"><rect x="${left}" y="4" width="12" height="12" class="prompt"/><text x="${left + 18}" y="14">输入 Token</text><rect x="${left + 110}" y="4" width="12" height="12" class="completion"/><text x="${left + 128}" y="14">输出 Token</text></g></svg></div>`;
+  const labelText = labels.map((index) => `<text x="${x(index).toFixed(1)}" y="${height - 16}" text-anchor="middle">${escapeHtml(analyticsBucketLabel(sampled[index].bucket, window?.bucket))}</text>`).join("");
+  return `<div class="trend-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Token 使用趋势"><g class="trend-grid">${grid}</g><polyline class="trend-line total" points="${linePoints("total")}"/><polyline class="trend-line prompt" points="${linePoints("prompt")}"/><polyline class="trend-line completion" points="${linePoints("completion")}"/><g class="trend-points">${points("total")}${points("prompt")}${points("completion")}</g><g class="trend-labels">${labelText}</g><g class="trend-legend"><rect x="${left}" y="6" width="11" height="11" class="total"/><text x="${left + 17}" y="15">合计</text><rect x="${left + 74}" y="6" width="11" height="11" class="prompt"/><text x="${left + 91}" y="15">输入</text><rect x="${left + 148}" y="6" width="11" height="11" class="completion"/><text x="${left + 165}" y="15">输出</text></g></svg></div>`;
 }
 
 function formatCompactNumber(value) {
@@ -2206,29 +2232,59 @@ function formatCompactNumber(value) {
   return String(Math.round(number));
 }
 
+function analyticsRangeControl(values) {
+  const choices = [
+    ["24h", "24 小时内"], ["today", "当天"], ["3d", "3 天"],
+    ["7d", "7 天"], ["14d", "14 天"], ["30d", "30 天"], ["custom", "自定义时间段"],
+  ];
+  return `<div class="analytics-range-control"><span class="analytics-range-label">时间段</span><div class="segmented-control" role="group" aria-label="时间段">${choices.map(([value, label]) => `<button type="button" class="segmented-button ${values.range === value ? "is-active" : ""}" data-analytics-range="${value}" aria-pressed="${values.range === value}">${escapeHtml(label)}</button>`).join("")}</div>${values.range === "custom" ? `<div class="form-grid two analytics-custom-range"><label class="form-field"><span>开始日期</span><input id="analytics-from" type="date" value="${escapeAttribute(values.date_from)}" /></label><label class="form-field"><span>结束日期</span><input id="analytics-to" type="date" value="${escapeAttribute(values.date_to)}" /></label></div><div class="action-row analytics-custom-action"><button id="analytics-custom-apply" type="button" class="secondary-button">应用时间段</button></div>` : ""}</div>`;
+}
+
 async function renderAnalytics(token) {
   const root = $("#page-root");
-  const range = state.pageData.analyticsRange || "30";
-  root.innerHTML = `${pageHeader()}<div class="loading">正在读取 Token 使用记录…</div>`;
-  const data = await api(`/api/analytics?days=${range}`);
-  if (token !== state.renderToken) return;
-  const control = `<label class="form-field narrow-field"><span>时间段</span><select id="analytics-range"><option value="7" ${range === "7" ? "selected" : ""}>近 7 天</option><option value="30" ${range === "30" ? "selected" : ""}>近 30 天</option><option value="90" ${range === "90" ? "selected" : ""}>近 90 天</option><option value="365" ${range === "365" ? "selected" : ""}>近 365 天</option><option value="all" ${range === "all" ? "selected" : ""}>全部</option></select></label>`;
-  if (!data.available || !(data.heatmap_daily || []).length) {
-    root.innerHTML = `${pageHeader()}${section("LLM Token 用量", '<p class="empty-state">暂无用量数据——完成一次每日研究或趋势分析后，这里会出现统计。</p>', { icon: "📊" })}`;
-    return;
+  const fallback = { range: "30d", date_from: relativeLocalDateKey(-29), date_to: relativeLocalDateKey(0) };
+  const values = { ...fallback, ...(state.pageData.analytics || {}) };
+  const params = new URLSearchParams({ range: values.range });
+  if (values.range === "custom") {
+    params.set("date_from", values.date_from);
+    params.set("date_to", values.date_to);
   }
-  const totals = (data.daily || []).reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const today = (data.heatmap_daily || []).find((row) => row.date === localDateKey(new Date())) || { prompt: 0, completion: 0 };
-  const recentCutoff = new Date(); recentCutoff.setDate(recentCutoff.getDate() - 29);
-  const lastThirty = (data.heatmap_daily || []).filter((row) => new Date(`${row.date}T00:00:00`) >= recentCutoff).reduce((sum, row) => sum + Number(row.total || 0), 0);
-  const promptTotal = (data.daily || []).reduce((sum, row) => sum + Number(row.prompt || 0), 0);
-  const completionTotal = (data.daily || []).reduce((sum, row) => sum + Number(row.completion || 0), 0);
-  const usageSummary = state.language === "en"
-    ? `Selected range · input ${formatNumber(promptTotal)} · output ${formatNumber(completionTotal)} · total ${formatNumber(totals)} tokens`
-    : `所选区间 · 输入 ${formatNumber(promptTotal)} · 输出 ${formatNumber(completionTotal)} · 合计 ${formatNumber(totals)} tokens`;
-  root.innerHTML = `${pageHeader()}${section("LLM Token 用量", metrics([{ label: "当日输入 tokens", value: formatNumber(today.prompt), help: "" }, { label: "当日输出 tokens", value: formatNumber(today.completion), help: "" }, { label: "近30天累计用量", value: formatNumber(lastThirty), help: "" }]), { icon: "📊" })}${divider()}${section("每日用量热力图（近一年）", tokenHeatmap(data.heatmap_daily || []), { icon: "🗓" })}${divider()}${section("用量趋势", `${control}${tokenTrendChart(data.daily || [])}<p class="hint-text">${usageSummary}</p>`, { icon: "📈" })}${divider()}${section("按模型汇总", pagedTable("analytics-models", [{ label: "模型", key: "model" }, { label: "输入 tokens", value: (row) => formatNumber(row.prompt) }, { label: "输出 tokens", value: (row) => formatNumber(row.completion) }, { label: "总 tokens", value: (row) => formatNumber(row.total) }], data.models || [], { empty: "暂无模型使用记录。" }), { icon: "🧠" })}`;
+  root.innerHTML = `${pageHeader()}<div class="loading">正在读取 Token 使用记录…</div>`;
+  const data = await api(`/api/analytics?${params.toString()}`);
+  if (token !== state.renderToken) return;
+  const control = analyticsRangeControl(values);
+  const summary = data.summary || { prompt: 0, completion: 0, total: 0, runs: 0 };
+  const hasUsage = Boolean(data.available && ((data.series || []).length || Number(summary.runs) > 0));
+  const usage = hasUsage
+    ? metrics([
+      { label: "所选输入 tokens", value: formatNumber(summary.prompt), help: "" },
+      { label: "所选输出 tokens", value: formatNumber(summary.completion), help: "" },
+      { label: "所选合计 tokens", value: formatNumber(summary.total), help: "" },
+      { label: "涉及运行", value: formatNumber(summary.runs), help: "" },
+    ])
+    : '<p class="empty-state">所选时间段内暂无用量数据——完成一次每日研究、补充任务或趋势分析后，这里会出现统计。</p>';
+  const trend = hasUsage
+    ? tokenTrendChart(data.series || [], data.window || {})
+    : '<p class="empty-state">所选时间段内没有可绘制的 Token 使用趋势。</p>';
+  const heatmap = (data.heatmap_daily || []).length
+    ? `${divider()}${section("每日用量热力图（近一年）", tokenHeatmap(data.heatmap_daily || []), { icon: "🗓" })}`
+    : "";
+  root.innerHTML = `${pageHeader()}${section("LLM Token 用量", `${control}${usage}`, { icon: "📊" })}${divider()}${section("用量趋势", trend, { icon: "📈" })}${heatmap}${divider()}${section("按模型汇总", pagedTable("analytics-models", [{ label: "模型", key: "model" }, { label: "输入 tokens", value: (row) => formatNumber(row.prompt) }, { label: "输出 tokens", value: (row) => formatNumber(row.completion) }, { label: "总 tokens", value: (row) => formatNumber(row.total) }], data.models || [], { empty: "所选时间段内暂无模型使用记录。" }), { icon: "🧠" })}`;
   bindCommon(root);
-  $("#analytics-range", root).addEventListener("change", (event) => { state.pageData.analyticsRange = event.target.value; renderPage(); });
+  $$('[data-analytics-range]', root).forEach((button) => button.addEventListener("click", () => {
+    state.pageData.analytics = { ...values, range: button.dataset.analyticsRange };
+    renderPage();
+  }));
+  $("#analytics-custom-apply", root)?.addEventListener("click", () => {
+    const dateFrom = $("#analytics-from", root).value;
+    const dateTo = $("#analytics-to", root).value;
+    if (!dateFrom || !dateTo || dateFrom > dateTo) {
+      toast("请填写有效的开始和结束日期。", "error");
+      return;
+    }
+    state.pageData.analytics = { ...values, date_from: dateFrom, date_to: dateTo };
+    renderPage();
+  });
 }
 
 async function renderLogs(token) {
