@@ -1411,6 +1411,16 @@ function localBackupMessage(result) {
   return `已创建本地备份：${result.name}`;
 }
 
+function restoreBackupMessage(result) {
+  const source = String(result?.source_member || "备份文件");
+  const archived = String(result?.archived_previous || "").trim();
+  if (!archived) return `已恢复：${source}。当前没有需要归档的旧数据库。`;
+  // The archive has already been placed in the local backup directory. Show
+  // its filename rather than leaking an absolute host/container path.
+  const name = archived.split(/[\\/]/).filter(Boolean).pop() || archived;
+  return `已恢复：${source}。此前数据库已归档为：${name}`;
+}
+
 function webdavOperationDraft() {
   const configKeys = [
     "webdav_enabled", "webdav_remote_path", "webdav_sync_configs",
@@ -1463,7 +1473,7 @@ async function renderBackupSync(token) {
   $("#backup-restore", root).addEventListener("click", async () => {
     const file = $("#backup-file").files?.[0]; if (!file) return;
     if (!window.confirm("确认恢复该 SQLite 备份？当前数据库会被归档后替换。")) return;
-    try { const result = await api("/api/backups/restore", { method: "POST", body: file, headers: { "X-File-Name": file.name } }); $("#backup-result").textContent = `已恢复：${result.source_member}`; $("#backup-result").className = "inline-result success"; renderPage(); } catch (error) { $("#backup-result").textContent = error.message; $("#backup-result").className = "inline-result error"; }
+    try { const result = await api("/api/backups/restore", { method: "POST", body: file, headers: { "X-File-Name": file.name } }); toast(restoreBackupMessage(result), "success"); renderPage(); } catch (error) { $("#backup-result").textContent = error.message; $("#backup-result").className = "inline-result error"; }
   });
   try {
     const backups = await api("/api/backups"); if (token !== state.renderToken) return;
