@@ -44,7 +44,7 @@ from utils.config_io import (
     write_env,
 )
 from utils.daily_research_store import DailyResearchStore
-from utils.run_lock import is_lock_held
+from utils.run_lock import DatabaseRestoreBusyError, database_restore_activity_gate, is_lock_held
 from utils.source_registry import (
     OPENALEX_JOURNAL_CATALOG,
     OPENALEX_JOURNAL_TYPE,
@@ -1881,12 +1881,23 @@ def restore_database_backup(content: bytes, filename: str) -> dict[str, Any]:
         raise ModernWebUIError("仅支持 zip、gz 或 db 备份文件。")
     settings = flat_config()
     try:
-        return restore_backup_archive(
-            configured_data_dir(settings),
-            content,
-            safe_name,
-            database=configured_db_path(settings),
-        )
+        data_dir = configured_data_dir(settings)
+        # A restore swaps the live SQLite file.  Never let it race a worker
+        # task that already owns a shared activity gate: return a clear UI
+        # error and let the operator retry after the task is idle.
+        with database_restore_activity_gate(
+            exclusive=True,
+            nonblocking=True,
+            data_dir=data_dir,
+        ):
+            return restore_backup_archive(
+                data_dir,
+                content,
+                safe_name,
+                database=configured_db_path(settings),
+            )
+    except DatabaseRestoreBusyError as exc:
+        raise ModernWebUIError("有运行中的任务正在使用数据库，请等待任务完成后再恢复备份。") from exc
     except (OSError, ValueError) as exc:
         raise ModernWebUIError(f"导入备份失败：{exc}") from exc
 

@@ -3,7 +3,7 @@ import multiprocessing
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,7 +26,57 @@ def _hold_lock(lock_path: str, ready, release) -> None:
         release.wait(10)
 
 
+def _hold_database_activity_gate(data_dir: str, ready, release) -> None:
+    """Hold a worker-style shared gate from another process for restore tests."""
+    with run_lock_module.database_restore_activity_gate(data_dir=Path(data_dir)):
+        ready.set()
+        release.wait(10)
+
+
 class RunLockSafetyTests(unittest.TestCase):
+    def test_database_restore_rejects_a_live_worker_activity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ready = multiprocessing.Event()
+            release = multiprocessing.Event()
+            holder = multiprocessing.Process(
+                target=_hold_database_activity_gate,
+                args=(temp_dir, ready, release),
+            )
+            holder.start()
+            self.addCleanup(lambda: holder.join(timeout=5))
+            self.addCleanup(release.set)
+            self.assertTrue(ready.wait(5))
+
+            with self.assertRaises(run_lock_module.DatabaseRestoreBusyError):
+                with run_lock_module.database_restore_activity_gate(
+                    exclusive=True,
+                    nonblocking=True,
+                    data_dir=Path(temp_dir),
+                ):
+                    self.fail("an active worker must block database replacement")
+
+            self.assertTrue(holder.is_alive())
+
+    def test_run_lock_holds_shared_database_restore_gate(self):
+        calls = []
+
+        @contextmanager
+        def observed_gate(**kwargs):
+            calls.append(kwargs)
+            yield
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            run_lock_module, "_lock_dir", return_value=Path(temp_dir)
+        ), patch(
+            "config.settings", SimpleNamespace(RUN_LOCK_MAX_AGE_HOURS=1)
+        ), patch.object(
+            run_lock_module, "database_restore_activity_gate", observed_gate
+        ):
+            with run_lock_module.run_lock("daily_research"):
+                pass
+
+        self.assertEqual(calls, [{}])
+
     def test_stale_diagnostic_file_does_not_block_or_get_deleted(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             lock_path = Path(temp_dir) / "daily_research.lock"

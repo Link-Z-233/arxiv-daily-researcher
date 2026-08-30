@@ -465,6 +465,21 @@ class ModernBackendTests(unittest.TestCase):
             webdav_sync=client,
         )
 
+    def test_restore_backup_refuses_an_active_worker_database_gate(self) -> None:
+        with patch.object(backend, "flat_config", return_value={}), patch.object(
+            backend, "configured_data_dir", return_value=Path("/data")
+        ), patch.object(
+            backend, "configured_db_path", return_value=Path("/data/daily_research.db")
+        ), patch.object(
+            backend,
+            "database_restore_activity_gate",
+            side_effect=backend.DatabaseRestoreBusyError("busy"),
+        ), patch.object(backend, "restore_backup_archive") as restore:
+            with self.assertRaisesRegex(backend.ModernWebUIError, "运行中的任务"):
+                backend.restore_database_backup(b"SQLite format 3\\x00fixture", "backup.db")
+
+        restore.assert_not_called()
+
     def test_smtp_connection_test_keeps_tls_enabled_for_a_blank_optional_value(self) -> None:
         with patch.object(backend, "read_env", return_value={}), patch.object(
             backend, "validate_smtp_connection", return_value=(True, "连接正常")

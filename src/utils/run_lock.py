@@ -48,6 +48,16 @@ LEGACY_IMPORT_ACTIVITY_GATE = ".legacy_import_activity.gate"
 # 家族，后者让历史导入与所有普通 worker 活动隔离。
 DAILY_WORKFLOW_GATE = ".daily_workflow.gate"
 
+# 数据库恢复会以原子替换的方式切换 SQLite 文件。它不能与任何正在使用
+# SQLite 的 worker 任务重叠，否则任务可能继续向已被替换的旧 inode 写入。
+# 所有 ``run_lock`` 持有共享锁；WebUI 恢复持非阻塞独占锁，遇到活动任务时
+# 明确拒绝恢复，由用户在任务完成后重新提交。
+DATABASE_RESTORE_ACTIVITY_GATE = ".database_restore_activity.gate"
+
+
+class DatabaseRestoreBusyError(RuntimeError):
+    """Raised when an exclusive database restore overlaps a worker activity."""
+
 
 def _lock_dir() -> Path:
     try:
@@ -293,6 +303,49 @@ def daily_workflow_gate(*, logger=None, wait_note: str = ""):
 
 
 @contextmanager
+def database_restore_activity_gate(
+    *,
+    exclusive: bool = False,
+    nonblocking: bool = False,
+    data_dir: Optional[Path] = None,
+):
+    """Coordinate an SQLite restore with all worker tasks across containers.
+
+    Worker task contexts take a shared lock through :func:`run_lock`.  A
+    WebUI restore takes an exclusive lock and deliberately uses
+    ``nonblocking=True``: a browser request must report that a task is active
+    instead of waiting for an arbitrary LLM run and then replacing its
+    database unexpectedly.
+
+    ``data_dir`` lets the thin WebUI use a configured non-default data
+    directory without importing the full worker settings module.
+    """
+    directory = Path(data_dir) / "run" if data_dir is not None else _lock_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    gate_path = directory / DATABASE_RESTORE_ACTIVITY_GATE
+    gate_file = gate_path.open("a+")
+    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    if nonblocking:
+        operation |= fcntl.LOCK_NB
+    acquired = False
+    try:
+        try:
+            fcntl.flock(gate_file.fileno(), operation)
+        except (IOError, OSError) as exc:
+            if exclusive and nonblocking:
+                raise DatabaseRestoreBusyError("数据库正被运行任务使用") from exc
+            raise
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired:
+                fcntl.flock(gate_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            gate_file.close()
+
+
+@contextmanager
 def run_lock(
     mode: str,
     keywords: Optional[List[str]] = None,
@@ -379,7 +432,11 @@ def run_lock(
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
     try:
-        yield
+        # The visible task lock remains the status/stop authority.  This
+        # shared gate is only for atomic coordination with a database restore
+        # requested by the separate WebUI process.
+        with database_restore_activity_gate():
+            yield
     finally:
         signal.signal(signal.SIGTERM, _old_sigterm)
         try:
