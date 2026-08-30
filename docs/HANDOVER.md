@@ -59,7 +59,7 @@
    gpg --decrypt arxiv-daily-researcher-handover-*.tar.gz.gpg | tar -xzvf -
    ```
 
-   归档会恢复 `.env`、`runtime/`、`data/`、`logs/`、`promo/` 和本机 `.vscode/` 设置；不会覆盖 Git 代码。
+   完整归档会恢复 `.env`、`runtime/`、`data/`、`logs/`、`promo/` 和本机 `.vscode/` 设置；还会保留在 `handover_worktrees/arxiv-daily-researcher-modern/` 下的历史现代 WebUI worktree 数据与日志。归档不会覆盖 Git 代码。
 
 4. 按新主机实际用户调整 `.env` 中的 `PUID` 与 `PGID`，然后构建并启动：
 
