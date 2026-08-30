@@ -6,6 +6,21 @@
 
 ---
 
+## 🚀 v4.2 — 2026-08-30
+
+### ✨ 新功能
+
+1. **运行配置目录** — 主配置迁入 Git 忽略的 `runtime/config.json`，仓库保留 `configs/config.example.json` 作为可复制示例；WebUI、CLI、cron、Docker 和配置导出统一使用运行路径。
+2. **兼容迁移与 WebDAV 连续性** — v4.1 及更早版本的 `configs/config.json` 会在首次启动时安全复制到运行目录并保留原文件；WebDAV 仍使用稳定的远端对象名 `configs/config.json`，已有归档无需迁移。
+
+### 🐛 修复与优化
+
+1. **数据库恢复互斥保护** — 所有运行任务持有共享数据库活动锁；WebUI 恢复备份在任务运行时立即拒绝并说明原因，避免替换正在使用的 SQLite 文件。
+2. **Docker 运行目录权限** — Worker 与 WebUI 共同挂载 `runtime/`，按 `PUID` / `PGID` 校验可写性；新克隆保留空目录占位文件，避免 Docker 自动创建 root 所有目录。
+3. **配置迁移回归覆盖** — 增加旧路径单次复制、运行路径优先、默认 Settings 加载、WebDAV 上传/恢复路径与恢复互斥的测试。
+
+---
+
 ## 🚀 v4.1 — 2026-08-30
 
 ### ✨ 新功能
