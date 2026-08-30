@@ -195,7 +195,18 @@ docker compose up -d --build
 
 打开 <http://127.0.0.1:8501>，填写 LLM、数据源、关键词、评分、通知和运行时间。WebUI 默认绑定本机地址，适合配合 VPN 或带认证的反向代理访问。
 
-Docker 会以 `.env` 中的 `PUID` / `PGID` 写入 `data`、`logs`、`configs` 和 `.env`，避免 NAS 挂载目录出现 root 所有文件。升级自旧镜像且已有 root 所有文件时，可临时加入 `ADR_REPAIR_OWNERSHIP=true` 启动一次，确认权限恢复后删除该项。
+Docker 会以 `.env` 中的 `PUID` / `PGID` 写入 `data`、`logs`、`configs`、`runtime` 和 `.env`，避免 NAS 挂载目录出现 root 所有文件。升级自旧镜像且已有 root 所有文件时，可临时加入 `ADR_REPAIR_OWNERSHIP=true` 启动一次，确认权限恢复后删除该项。
+
+运行配置保存在被 Git 忽略的 <code>runtime/config.json</code>；仓库内的 <code>configs/config.example.json</code> 仅作示例。升级 v4.1 及更早版本时，首次启动会安全复制旧的 <code>configs/config.json</code>，原文件保留以便回滚。
+
+通过 Git 拉取源码升级的 v4.1 用户，请在第一次 <code>git pull</code> 前执行一次迁移，避免 Git 删除旧的受跟踪配置文件：
+
+~~~bash
+if [ -f configs/config.json ] && [ ! -f runtime/config.json ]; then
+  mkdir -p runtime
+  mv configs/config.json runtime/config.json
+fi
+~~~
 
 WebUI 默认启用管理员登录。首次仅在本机地址完成账户初始化，密码以加盐哈希写入 `.env`；会话默认有效期为 7 天，并对连续错误尝试限流。可信内网可在首次初始化时选择跳过登录；面板仍建议置于 VPN 或带 HTTPS 与访问控制的反向代理之后。
 
@@ -215,6 +226,11 @@ SMART_LLM__MODEL_NAME=gpt-4o
 ~~~
 
 **2）设置研究主题与 ArXiv 分类：**
+
+~~~bash
+mkdir -p runtime
+cp configs/config.example.json runtime/config.json
+~~~
 
 ~~~json
 {
@@ -236,7 +252,7 @@ SMART_LLM__MODEL_NAME=gpt-4o
 }
 ~~~
 
-<code>configs/config.json</code> 支持 JSONC 注释。面板保存配置时会保留已有注释与当前会话之外页签的设置。
+<code>runtime/config.json</code> 支持 JSONC 注释。面板保存配置时会保留已有注释与当前会话之外页签的设置。
 
 </details>
 
@@ -441,7 +457,7 @@ WebUI 通过共享卷写入任务触发请求，worker 监听触发队列并启�
 | 参数或设置                         | 默认值          | 说明                                                        |
 | :--------------------------------- | :-------------- | :---------------------------------------------------------- |
 | <code>TZ</code>                    | <code>Asia/Shanghai</code> | 容器时区                                                     |
-| <code>daily_research.run_time</code> | <code>12:00</code> | 每日研究时间，在 WebUI 或 <code>configs/config.json</code> 中设置 |
+| <code>daily_research.run_time</code> | <code>12:00</code> | 每日研究时间，在 WebUI 或 <code>runtime/config.json</code> 中设置 |
 | <code>RUN_ON_STARTUP</code>        | <code>false</code> | 容器启动后立即执行一轮每日研究                              |
 | <code>MODE</code>                  | <code>cron</code> | <code>cron</code> 为常驻调度，<code>run-once</code> 为单次运行 |
 | <code>SETUP_WIZARD</code>          | <code>auto</code> | 首次部署时检查并启动配置向导                                |
@@ -688,8 +704,10 @@ arxiv-daily-researcher/
 │   ├── Dockerfile                # worker / webui 多阶段镜像
 │   └── entrypoint.sh             # cron、trigger watcher 与 worker 启动
 ├── configs/
-│   ├── config.json               # JSONC 主配置
+│   ├── config.example.json       # JSONC 示例配置
 │   └── templates/                # 报告、邮件与通知模板
+├── runtime/
+│   └── config.json               # 本机运行配置（Git 忽略）
 ├── src/
 │   ├── modes/                    # daily / trend / legacy / supplement / backfill
 │   ├── agents/                   # 评分、分析、关键词与趋势 Agent

@@ -48,7 +48,7 @@ adr_configure_runtime_user() {
         1|true|TRUE|yes|YES|on|ON)
             echo "Repairing bind-mount ownership once for $PUID:$PGID..."
             local path
-            for path in /app/data /app/logs /app/configs /app/.env; do
+            for path in /app/data /app/logs /app/configs /app/runtime /app/.env; do
                 if [ -e "$path" ]; then
                     chown -R "$PUID:$PGID" "$path"
                 fi

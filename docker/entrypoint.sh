@@ -9,16 +9,48 @@ echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "================================================"
 
 # Configuration with defaults.
-# The daily run time is configured from the WebUI (configs/config.json,
+# The daily run time is configured from the WebUI (runtime/config.json,
 # "daily_research.run_time" as HH:MM) and installed at container start;
 # there is deliberately no environment-variable override anymore.
 CRON_SCHEDULE=""
-if [ -f /app/configs/config.json ]; then
+
+adr_configure_runtime_user
+
+# Create and verify all host-mounted application paths as the mapped NAS user.
+# Root only touches container-internal cron/account files below, so new reports,
+# SQLite files, logs and configuration backups never become root-owned.
+for APP_DIRECTORY in \
+    /app/data \
+    /app/data/daily_research \
+    /app/data/keywords \
+    /app/data/reports/daily_research/markdown \
+    /app/data/reports/daily_research/html \
+    /app/data/reports/trend_research/markdown \
+    /app/data/reports/trend_research/html \
+    /app/data/reports/keyword_trend/markdown \
+    /app/data/reports/keyword_trend/html \
+    /app/data/history \
+    /app/data/reference_pdfs \
+    /app/data/downloaded_pdfs \
+    /app/logs \
+    /app/configs \
+    /app/runtime; do
+    adr_prepare_writable_directory "$APP_DIRECTORY"
+done
+adr_require_writable_file_if_present /app/.env
+
+# Upgrade v4.1 deployments before cron reads the schedule. The helper only
+# copies configs/config.json when runtime/config.json is still absent and
+# leaves the source untouched for a safe rollback.
+adr_run_as_user bash -c \
+    'cd /app && PYTHONPATH=/app/src exec /usr/local/bin/python -c "from utils.config_io import ensure_runtime_config_path; ensure_runtime_config_path()"'
+
+if [ -f /app/runtime/config.json ]; then
     CRON_SCHEDULE=$(python - <<'PYEOF'
 import json, re
 
 try:
-    raw = open("/app/configs/config.json", encoding="utf-8").read()
+    raw = open("/app/runtime/config.json", encoding="utf-8").read()
     raw = re.sub(r"^\s*//.*$", "", raw, flags=re.M)
     value = json.loads(raw).get("daily_research", {}).get("run_time")
     if isinstance(value, str) and re.fullmatch(r"\d{1,2}:\d{2}", value.strip()):
@@ -43,30 +75,6 @@ echo "Mode: $MODE"
 echo "Timezone: $TZ"
 echo "Cron Schedule: $CRON_SCHEDULE"
 echo "Run on Startup: $RUN_ON_STARTUP"
-
-adr_configure_runtime_user
-
-# Create and verify all host-mounted application paths as the mapped NAS user.
-# Root only touches container-internal cron/account files below, so new reports,
-# SQLite files, logs and configuration backups never become root-owned.
-for APP_DIRECTORY in \
-    /app/data \
-    /app/data/daily_research \
-    /app/data/keywords \
-    /app/data/reports/daily_research/markdown \
-    /app/data/reports/daily_research/html \
-    /app/data/reports/trend_research/markdown \
-    /app/data/reports/trend_research/html \
-    /app/data/reports/keyword_trend/markdown \
-    /app/data/reports/keyword_trend/html \
-    /app/data/history \
-    /app/data/reference_pdfs \
-    /app/data/downloaded_pdfs \
-    /app/logs \
-    /app/configs; do
-    adr_prepare_writable_directory "$APP_DIRECTORY"
-done
-adr_require_writable_file_if_present /app/.env
 
 # Clean up stale log files
 LOG_KEEP_DAYS="${LOG_KEEP_DAYS:-30}"

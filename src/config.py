@@ -14,6 +14,7 @@ from utils.source_registry import (
     source_codes_from_definitions,
     validate_source_definitions,
 )
+from utils.config_io import ConfigMigrationError, ensure_runtime_config_path
 
 # 1. 定义基础路径：获取项目根目录（src/ 的上级目录）
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -141,7 +142,7 @@ class Settings(BaseSettings):
     """
     系统全局配置类，集中管理所有应用配置参数。
 
-    优先级：configs/config.json > .env文件 > 默认值
+    优先级：runtime/config.json > .env文件 > 默认值
     """
 
     # ==================== 路径配置 ====================
@@ -455,18 +456,22 @@ class Settings(BaseSettings):
 
     def load_from_search_config(self, config_path: Optional[Path] = None) -> Dict[str, Any]:
         """
-        从 configs/config.json 加载配置并覆盖默认值。
+        从 runtime/config.json 加载配置并覆盖默认值。
 
         注意：LLM 配置完全从 .env 文件加载，不从此配置文件加载。
 
         参数:
-            config_path: 配置文件路径，默认为 PROJECT_ROOT/configs/config.json
+            config_path: 配置文件路径，默认为 PROJECT_ROOT/runtime/config.json。
+                首次升级时会从旧的 configs/config.json 复制一份，旧文件保留。
 
         返回:
             dict: 配置字典
         """
         if config_path is None:
-            config_path = self.PROJECT_ROOT / "configs" / "config.json"
+            try:
+                config_path = ensure_runtime_config_path(self.PROJECT_ROOT)
+            except ConfigMigrationError as exc:
+                raise ConfigurationLoadError(str(exc)) from exc
         else:
             config_path = Path(config_path)
 
@@ -1244,7 +1249,7 @@ class Settings(BaseSettings):
 # 实例化全局配置单例对象，应用程序全局共享
 settings = Settings()
 
-# 从 configs/config.json 加载配置（会覆盖默认值）
+# 从 runtime/config.json 加载配置（会覆盖默认值；旧路径首次启动时自动迁移）
 settings.load_from_search_config()
 
 # 自动创建所有必需的工作目录

@@ -40,6 +40,14 @@ class _ConfigDownloadClient:
         Path(local_file).write_text(self.content, encoding="utf-8")
 
 
+class _ConfigUploadClient:
+    def __init__(self):
+        self.calls = []
+
+    def upload_file(self, remote_file: str, local_file: str) -> None:
+        self.calls.append((remote_file, local_file))
+
+
 def _sync_shell(project_root: Path) -> WebDAVSync:
     """Create a WebDAVSync object without importing the optional client library."""
     sync = WebDAVSync.__new__(WebDAVSync)
@@ -287,7 +295,7 @@ class WebDAVReliabilityTests(unittest.TestCase):
     def test_invalid_webdav_config_download_keeps_the_existing_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            config_path = root / "configs" / "config.json"
+            config_path = root / "runtime" / "config.json"
             config_path.parent.mkdir(parents=True)
             config_path.write_text('{"old": true}\n', encoding="utf-8")
 
@@ -303,6 +311,22 @@ class WebDAVReliabilityTests(unittest.TestCase):
             self.assertFalse(result["configs/config.json"])
             self.assertEqual(config_path.read_text(encoding="utf-8"), '{"old": true}\n')
             self.assertEqual(list(config_path.parent.glob("*.download")), [])
+
+    def test_config_upload_uses_runtime_file_and_stable_remote_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "runtime" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('{"target_domains": {"domains": ["quant-ph"]}}\n', encoding="utf-8")
+
+            sync = _sync_shell(root)
+            client = _ConfigUploadClient()
+            sync.client = client
+            sync._ensure_remote_dir = lambda _remote: True
+            sync._remote = lambda relative: f"remote/{relative}"
+
+            self.assertEqual(sync.upload_configs(), {"configs/config.json": True})
+            self.assertEqual(client.calls, [("remote/configs/config.json", str(config_path))])
 
     def test_history_scope_syncs_sqlite_only_and_leaves_legacy_json_local(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -387,7 +411,7 @@ class WebDAVReliabilityTests(unittest.TestCase):
     def test_unsafe_webdav_config_download_keeps_the_existing_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            config_path = root / "configs" / "config.json"
+            config_path = root / "runtime" / "config.json"
             config_path.parent.mkdir(parents=True)
             config_path.write_text('{"old": true}\n', encoding="utf-8")
             remote_content = '{paths: {reports: "../outside"}}'

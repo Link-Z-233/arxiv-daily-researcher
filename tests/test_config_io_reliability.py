@@ -14,8 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from utils.config_io import (  # noqa: E402
     _atomic_write_text,
     build_config_dict,
+    ensure_runtime_config_path,
     flatten_config_dict,
+    legacy_config_path,
     read_config_json,
+    runtime_config_path,
     validate_config_document,
     write_config_json,
     write_env,
@@ -28,6 +31,39 @@ from config import (  # noqa: E402
 
 
 class ConfigIOReliabilityTests(unittest.TestCase):
+    def test_legacy_config_is_copied_once_to_ignored_runtime_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            legacy = legacy_config_path(root)
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text('{target_domains: {domains: ["quant-ph"]}}\n', encoding="utf-8")
+
+            runtime = ensure_runtime_config_path(root)
+
+            self.assertEqual(runtime, runtime_config_path(root))
+            self.assertEqual(runtime.read_text(encoding="utf-8"), legacy.read_text(encoding="utf-8"))
+            self.assertTrue(legacy.exists(), "legacy source must remain available for rollback")
+
+            runtime.write_text('{target_domains: {domains: ["hep-th"]}}\n', encoding="utf-8")
+            legacy.write_text('{target_domains: {domains: ["quant-ph", "hep-ex"]}}\n', encoding="utf-8")
+            self.assertEqual(
+                ensure_runtime_config_path(root).read_text(encoding="utf-8"),
+                '{target_domains: {domains: ["hep-th"]}}\n',
+            )
+
+    def test_default_settings_path_migrates_an_existing_legacy_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            legacy = legacy_config_path(root)
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text('{target_domains: {domains: ["hep-th"]}}\n', encoding="utf-8")
+
+            settings = Settings(PROJECT_ROOT=root)
+            settings.load_from_search_config()
+
+            self.assertEqual(settings.TARGET_DOMAINS, ["hep-th"])
+            self.assertTrue(runtime_config_path(root).is_file())
+
     def test_existing_invalid_config_fails_closed_without_partial_settings(self):
         """A broken user config must not silently restart with default scope."""
         with tempfile.TemporaryDirectory() as temp_dir:

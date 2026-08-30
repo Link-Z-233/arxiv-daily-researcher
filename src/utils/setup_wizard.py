@@ -4,7 +4,7 @@ ArXiv Daily Researcher - Interactive Setup Wizard
 
 Usage: python src/utils/setup_wizard.py
 
-Guides first-time users through configuring .env and configs/config.json
+Guides first-time users through configuring .env and runtime/config.json
 with a step-by-step terminal wizard.
 """
 

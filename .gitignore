@@ -22,6 +22,12 @@ __pycache__/
 .env.local
 !.env.example
 
+# Runtime configuration (contains local settings; .gitkeep creates a
+# user-owned bind-mount directory on fresh clones)
+/runtime/*
+!/runtime/.gitkeep
+/configs/config.json
+
 # Runtime-generated data
 /logs/
 *.log

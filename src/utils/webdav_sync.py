@@ -857,7 +857,7 @@ class WebDAVSync:
         """
         上传配置文件到 WebDAV。
 
-        上传: configs/config.json
+        上传: runtime/config.json（远端对象名保持 configs/config.json）
         不上传: .env（安全考虑）
 
         返回:
@@ -865,17 +865,19 @@ class WebDAVSync:
         """
         results = {}
 
-        # 尝试多个可能路径（本地 vs Docker 卷挂载）
-        config_path = None
-        for candidate in [
-            self._project_root / "configs" / "config.json",
-            Path("/app/configs/config.json"),
-        ]:
-            if candidate.exists():
-                config_path = candidate
-                break
+        # The remote object name is intentionally stable so existing WebDAV
+        # archives stay compatible. Locally, all writes now use runtime/;
+        # this call copies an old v4.1 config once when an installation first
+        # upgrades.
+        from utils.config_io import ensure_runtime_config_path
 
-        if config_path:
+        try:
+            config_path = ensure_runtime_config_path(self._project_root)
+        except RuntimeError as exc:
+            logger.error("准备运行配置同步失败: %s", exc)
+            config_path = None
+
+        if config_path and config_path.is_file():
             try:
                 remote_file = self._remote("configs/config.json")
                 if not self._ensure_remote_dir(self._remote("configs") + "/"):
@@ -888,7 +890,7 @@ class WebDAVSync:
                 logger.error(f"上传 configs/config.json 失败: {e}")
         else:
             results["configs/config.json"] = False
-            logger.warning("configs/config.json 不存在，跳过")
+            logger.warning("runtime/config.json 不存在，跳过")
 
         return results
 
@@ -954,7 +956,13 @@ class WebDAVSync:
             Dict[str, bool]: 各文件下载结果
         """
         results = {}
-        config_path = self._project_root / "configs" / "config.json"
+        from utils.config_io import ensure_runtime_config_path
+
+        try:
+            config_path = ensure_runtime_config_path(self._project_root)
+        except RuntimeError as exc:
+            logger.error("准备运行配置恢复失败: %s", exc)
+            return {"configs/config.json": False}
         remote_file = self._remote("configs/config.json")
 
         try:

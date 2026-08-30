@@ -195,7 +195,18 @@ docker compose up -d --build
 
 Open <http://127.0.0.1:8501> and configure LLMs, sources, keywords, scoring, notifications, and the run time. The WebUI binds to the local host, which works well with a VPN or an authenticated reverse proxy.
 
-Docker writes `data`, `logs`, `configs`, and `.env` as the `PUID` / `PGID` in `.env`, preventing root-owned files on NAS bind mounts. When upgrading from an old root-running image, set `ADR_REPAIR_OWNERSHIP=true` for one start, verify ownership, then remove it.
+Docker writes `data`, `logs`, `configs`, `runtime`, and `.env` as the `PUID` / `PGID` in `.env`, preventing root-owned files on NAS bind mounts. When upgrading from an old root-running image, set `ADR_REPAIR_OWNERSHIP=true` for one start, verify ownership, then remove it.
+
+The live configuration is the Git-ignored <code>runtime/config.json</code>; <code>configs/config.example.json</code> remains the tracked example. On the first v4.2 start, an existing v4.1-or-earlier <code>configs/config.json</code> is copied safely and retained for rollback.
+
+For a source checkout upgraded from v4.1 with Git, run this once before the first <code>git pull</code> so Git does not remove the formerly tracked configuration file:
+
+~~~bash
+if [ -f configs/config.json ] && [ ! -f runtime/config.json ]; then
+  mkdir -p runtime
+  mv configs/config.json runtime/config.json
+fi
+~~~
 
 The WebUI enables administrator login by default. Initialize the account from the local address on first use; the password is written to `.env` only as a salted hash. Sessions are valid for seven days by default and repeated failed attempts are rate-limited. A trusted LAN installation can skip login during first setup; keep the panel behind a VPN or an HTTPS reverse proxy with access control as well.
 
@@ -215,6 +226,11 @@ SMART_LLM__MODEL_NAME=gpt-4o
 ~~~
 
 **2) Set a research topic and ArXiv categories:**
+
+~~~bash
+mkdir -p runtime
+cp configs/config.example.json runtime/config.json
+~~~
 
 ~~~json
 {
@@ -236,7 +252,7 @@ SMART_LLM__MODEL_NAME=gpt-4o
 }
 ~~~
 
-<code>configs/config.json</code> supports JSONC comments. WebUI saves preserve existing comments and settings from tabs outside the current session.
+<code>runtime/config.json</code> supports JSONC comments. WebUI saves preserve existing comments and settings from tabs outside the current session.
 
 </details>
 
@@ -441,7 +457,7 @@ The WebUI writes task requests through shared volumes, and the worker watches th
 | Setting | Default | Description |
 | :------ | :------ | :---------- |
 | <code>TZ</code> | <code>Asia/Shanghai</code> | Container timezone |
-| <code>daily_research.run_time</code> | <code>12:00</code> | Daily research time, configured in WebUI or <code>configs/config.json</code> |
+| <code>daily_research.run_time</code> | <code>12:00</code> | Daily research time, configured in WebUI or <code>runtime/config.json</code> |
 | <code>RUN_ON_STARTUP</code> | <code>false</code> | Run daily research once when the container starts |
 | <code>MODE</code> | <code>cron</code> | <code>cron</code> for the resident scheduler; <code>run-once</code> for a single run |
 | <code>SETUP_WIZARD</code> | <code>auto</code> | Check and start the setup wizard during first deployment |
@@ -688,8 +704,10 @@ arxiv-daily-researcher/
 │   ├── Dockerfile                # worker / webui multi-stage images
 │   └── entrypoint.sh             # cron, trigger watcher, and worker startup
 ├── configs/
-│   ├── config.json               # JSONC main configuration
+│   ├── config.example.json       # JSONC example configuration
 │   └── templates/                # report, email, and notification templates
+├── runtime/
+│   └── config.json               # local runtime configuration (Git ignored)
 ├── src/
 │   ├── modes/                    # daily / trend / legacy / supplement / backfill
 │   ├── agents/                   # scoring, analysis, keyword, and trend agents

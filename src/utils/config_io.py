@@ -1,5 +1,5 @@
 """
-Config I/O module - shared read/write logic for .env and configs/config.json.
+Config I/O module - shared read/write logic for .env and runtime/config.json.
 
 Used by: src/utils/setup_wizard.py, src/modern_webui/app.py
 """
@@ -24,13 +24,32 @@ from utils.source_registry import (
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "config.json"
+RUNTIME_CONFIG_DIR = PROJECT_ROOT / "runtime"
+DEFAULT_CONFIG_PATH = RUNTIME_CONFIG_DIR / "config.json"
+LEGACY_CONFIG_PATH = PROJECT_ROOT / "configs" / "config.json"
+CONFIG_EXAMPLE_PATH = PROJECT_ROOT / "configs" / "config.example.json"
 ENV_EXAMPLE_PATH = PROJECT_ROOT / ".env.example"
 # A single-file ``.env`` bind mount is writable even when its container parent
 # directory is not.  In that layout a sibling ``/app/.env.bak`` cannot be
 # created by the mapped NAS user, so retain the backup in an application-owned
 # writable volume instead.
 DEFAULT_ENV_BACKUP_DIR = PROJECT_ROOT / "data" / "config_backups"
+
+
+class ConfigMigrationError(RuntimeError):
+    """The one-time legacy configuration migration could not finish safely."""
+
+
+def runtime_config_path(project_root: Optional[Path] = None) -> Path:
+    """Return the ignored, writable config location for one installation."""
+    root = Path(project_root) if project_root is not None else PROJECT_ROOT
+    return root / "runtime" / "config.json"
+
+
+def legacy_config_path(project_root: Optional[Path] = None) -> Path:
+    """Return the v4.1-and-earlier configuration location."""
+    root = Path(project_root) if project_root is not None else PROJECT_ROOT
+    return root / "configs" / "config.json"
 
 # These are the only file-location fields accepted from portable config.json
 # exports.  Keeping the rule here as well as in config.Settings means WebUI
@@ -513,10 +532,55 @@ def write_env(values: Dict[str, str], path: Optional[Path] = None) -> None:
 # ==================== config.json Read / Write ====================
 
 
+def ensure_runtime_config_path(project_root: Optional[Path] = None) -> Path:
+    """Return the runtime config path, copying a legacy file once when needed.
+
+    ``configs/config.json`` was the live configuration path through v4.1.
+    Keeping it as a read-only compatibility source lets an existing Docker or
+    NAS deployment upgrade without manual file moves. The copy is made only
+    when ``runtime/config.json`` does not exist; the legacy file is retained,
+    so a failed or interrupted upgrade never removes the operator's only
+    configuration. Subsequent reads and writes use the ignored runtime path.
+    """
+    destination = runtime_config_path(project_root)
+    if destination.exists():
+        if not destination.is_file():
+            raise ConfigMigrationError(f"运行配置路径不是普通文件：{destination}")
+        return destination
+
+    source = legacy_config_path(project_root)
+    if not source.exists():
+        return destination
+    if not source.is_file():
+        raise ConfigMigrationError(f"旧配置路径不是普通文件：{source}")
+
+    try:
+        source_text = source.read_text(encoding="utf-8")
+        source_mode = source.stat().st_mode & 0o777
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Worker and WebUI can start together. They may both reach this
+        # branch, but both copy the same legacy document; a second existence
+        # check avoids replacing a file already created by the other process.
+        if not destination.exists():
+            _atomic_write_text(
+                destination,
+                source_text,
+                mode=source_mode or 0o600,
+            )
+    except (OSError, UnicodeError) as exc:
+        raise ConfigMigrationError(
+            f"无法把旧配置迁移到运行目录：{source} -> {destination}"
+        ) from exc
+
+    if not destination.is_file():
+        raise ConfigMigrationError(f"运行配置迁移后不可读取：{destination}")
+    return destination
+
+
 def read_config_json(path: Optional[Path] = None) -> Dict[str, Any]:
     """Read and validate config.json using json5 (supports comments)."""
     if path is None:
-        path = DEFAULT_CONFIG_PATH
+        path = ensure_runtime_config_path()
     path = Path(path)
     if not path.exists():
         return {}
@@ -614,7 +678,7 @@ def write_config_json(config: Dict[str, Any], path: Optional[Path] = None) -> No
     writing.
     """
     if path is None:
-        path = DEFAULT_CONFIG_PATH
+        path = ensure_runtime_config_path()
     path = Path(path)
 
     # Validate before creating a backup.  An unsafe imported/edited document
