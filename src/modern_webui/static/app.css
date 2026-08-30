@@ -321,6 +321,11 @@ h3 { margin: 0 0 14px; font-size: .92rem; line-height: 1.45; }
 .trend-settings-block { margin-top: 22px; padding: 17px 18px; border: 1px solid #e2e7ef; border-radius: 13px; background: var(--card-soft); }
 .trend-settings-block .toggle-field + .trend-dependent-fields { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
 .trend-dependent-fields { margin-top: 20px; }
+.advanced-settings-stack { display: grid; gap: 22px; }
+.advanced-settings-stack > .hint-text { margin-bottom: 0; }
+.advanced-settings-stack > .trend-dependent-fields { margin-top: 0; }
+.advanced-settings-card .form-field { gap: 13px; }
+.advanced-settings-card .form-grid { gap: 22px; }
 .trend-template-editor { display: grid; gap: 18px; }
 .template-action-buttons { display: flex; flex-wrap: wrap; gap: 9px; }
 .trend-template-editor .action-row { margin-top: 0; }
