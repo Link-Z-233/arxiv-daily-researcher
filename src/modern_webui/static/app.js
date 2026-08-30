@@ -970,7 +970,7 @@ async function renderDaily(token) {
   const status = await fetchStatus("daily");
   if (token !== state.renderToken) return;
   const autoRefresh = state.pageData.dailyAutoRefresh !== false;
-  root.innerHTML = `${pageHeader()}${section("每日研究", `<div id="daily-launch">${dailyLaunch(status)}</div>`, { icon: "🚀" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，仅在任务运行或刚提交等待接手时每 5 秒刷新状态、队列和日志尾部。</small></span><input id="daily-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label><div id="daily-status-content">${statusCard(status, { kind: "daily", refresh: false })}</div>${divider()}<h3>每日研究队列</h3><div id="daily-queue-content">${dailyQueue(status)}</div>`, { icon: "📊" })}${divider()}${renderDailySettings()}`;
+  root.innerHTML = `${pageHeader()}${section("每日研究", `<div id="daily-launch">${dailyLaunch(status)}</div>`, { icon: "🚀" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，仅在任务运行或刚提交等待接手时每 5 秒刷新状态、队列和日志尾部。</small></span><input id="daily-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label><div id="daily-status-content" class="task-status-region">${statusCard(status, { kind: "daily", refresh: false })}</div>${divider()}<h3>每日研究队列</h3><div id="daily-queue-content">${dailyQueue(status)}</div>`, { icon: "📊" })}${divider()}${renderDailySettings()}`;
   bindCommon(root);
   $("#daily-auto-refresh", root)?.addEventListener("change", (event) => {
     state.pageData.dailyAutoRefresh = event.target.checked;
@@ -1122,7 +1122,7 @@ async function renderTrend(token) {
   if (token !== state.renderToken) return;
   let templates = Array.isArray(templateData.items) ? templateData.items : [];
   const form = renderTrendForm(templates);
-  root.innerHTML = `${pageHeader()}${section("趋势研究", `${form.run}<div id="trend-launch"><div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button></div></div><div id="trend-status-content">${statusCard(status, { kind: "trend", refresh: false })}</div>`, { icon: "📈" })}${divider()}${section("分析参数", form.parameters, { icon: "🔍" })}${divider()}${section("趋势研究配置", form.configuration, { icon: "⚙️", hint: "输出格式会在保存时转换为兼容配置。" })}`;
+  root.innerHTML = `${pageHeader()}${section("趋势研究", `${form.run}<div id="trend-launch"><div class="action-row"><button id="trend-start" class="primary-button" ${status.can_start ? "" : "disabled"}>开始运行 <span>→</span></button></div></div><div id="trend-status-content" class="task-status-region">${statusCard(status, { kind: "trend", refresh: false })}</div>`, { icon: "📈" })}${divider()}${section("分析参数", form.parameters, { icon: "🔍" })}${divider()}${section("趋势研究配置", form.configuration, { icon: "⚙️", hint: "输出格式会在保存时转换为兼容配置。" })}`;
   bindCommon(root);
   const preserveTrend = () => {
     const prior = state.pageData.trend || {};
@@ -2538,7 +2538,7 @@ async function renderHistory(token) {
   const data = await api("/api/history");
   if (token !== state.renderToken) return;
   const autoRefresh = state.pageData.historyAutoRefresh !== false;
-  root.innerHTML = `${pageHeader()}${section("旧版本历史导入", `<div id="history-actions">${historyActions(data)}</div>`, { icon: "📜" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，在历史任务运行或等待工作进程接手时每 5 秒刷新状态、进度和日志尾部。</small></span><input id="history-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label><div id="history-status-content">${historyStatusPanel(data)}</div>`, { icon: "📊" })}`;
+  root.innerHTML = `${pageHeader()}${section("旧版本历史导入", `<div id="history-actions">${historyActions(data)}</div>`, { icon: "📜" })}${divider()}${section("状态面板", `<label class="toggle-field refresh-row"><span><strong>状态自动刷新</strong><small>开启后，在历史任务运行或等待工作进程接手时每 5 秒刷新状态、进度和日志尾部。</small></span><input id="history-auto-refresh" type="checkbox" ${autoRefresh ? "checked" : ""}/><i></i></label><div id="history-status-content" class="task-status-region">${historyStatusPanel(data)}</div>`, { icon: "📊" })}`;
   bindCommon(root);
   bindHistoryLaunchers(root);
   bindHistoryRetries(root);
