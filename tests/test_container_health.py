@@ -77,5 +77,18 @@ class ContainerHealthTests(unittest.TestCase):
                 _check_trigger_consumer(data, max_age_seconds=5)
 
 
+class WorkerEntrypointLayoutTests(unittest.TestCase):
+    """Fresh bind mounts must include parents checked by worker health."""
+
+    def test_entrypoint_creates_default_sqlite_parent_directories(self):
+        project_root = Path(__file__).resolve().parents[1]
+        entrypoint = (project_root / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
+        dockerfile = (project_root / "docker" / "Dockerfile").read_text(encoding="utf-8")
+
+        for directory in ("/app/data/daily_research", "/app/data/keywords"):
+            self.assertIn(directory, entrypoint)
+            self.assertIn(directory, dockerfile)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -91,6 +91,7 @@ RUN mkdir -p /app/data/reports/daily_research/markdown \
              /app/data/reports/trend_research/html \
              /app/data/reports/keyword_trend/markdown \
              /app/data/reports/keyword_trend/html \
+             /app/data/daily_research /app/data/keywords \
              /app/data/history /app/data/reference_pdfs \
              /app/data/downloaded_pdfs /app/logs \
     && chown -R adr:adr /app/data /app/logs

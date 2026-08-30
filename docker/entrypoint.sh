@@ -51,6 +51,8 @@ adr_configure_runtime_user
 # SQLite files, logs and configuration backups never become root-owned.
 for APP_DIRECTORY in \
     /app/data \
+    /app/data/daily_research \
+    /app/data/keywords \
     /app/data/reports/daily_research/markdown \
     /app/data/reports/daily_research/html \
     /app/data/reports/trend_research/markdown \
