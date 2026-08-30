@@ -89,6 +89,9 @@ def main() -> int:
         show_page(page, "configuration", "scoring")
         capture(page, "webui_scoring_v4.png")
 
+        show_page(page, "configuration", "advanced")
+        capture(page, "webui_advanced_v4.png")
+
         show_page(page, "system", "backup_sync")
         hide_card(page, "WebDAV")
         page.locator(".section-card", has=page.get_by_role("heading", name="本地备份")).scroll_into_view_if_needed()

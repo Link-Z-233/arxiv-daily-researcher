@@ -20,15 +20,15 @@
 
 ArXiv Daily Researcher collects papers from ArXiv and optional additional sources, evaluates them against a research profile, produces translated summaries and PDF analysis, tracks research trends, and delivers Markdown/HTML reports through multiple notification channels.
 
-v4.1 uses SQLite for candidate papers, processing stages, report delivery, notification outbox rows, legacy-import backlogs, and historical-daily-report queues. Each workflow can resume from completed stages, which makes the system suitable for long-running deployments.
+v4.1 uses SQLite for candidate papers, processing stages, report delivery, notification outbox rows, history-maintenance backlogs, and historical-daily-report queues. A paper can combine metadata and analysis variants from multiple sources, and each workflow can resume from completed stages for long-running deployments.
 
 The current release includes:
 
 - **Daily research**: a fixed three-day lookback for new papers and revisions
 - **Trend research**: topic, date-range, and category-based research reports
-- **Legacy import and supplement reports**: indexes legacy HTML deliveries by default, with an optional complete repair path
+- **Legacy import and supplement reports**: an HTML delivery ledger by default, with complete repair, field repair, and omission scans available independently
 - **Past daily-report queues**: replays full daily workflows over a selected date range
-- **Modern management WebUI**: configuration, execution, reports, and diagnostics through four sidebar groups and top-level page tabs
+- **Modern management WebUI**: configuration, execution, reports, diagnostics, and account management through four sidebar groups and 18 top-level pages
 
 ---
 
@@ -43,7 +43,7 @@ The current release includes:
 
 ### 📡 Multi-Source Fetching
 
-**ArXiv** is the primary source. The scanner paginates both first submissions and last updates, records scan receipts, and supports categories, announcement-delay rescans, and recovery watermarks. Optional sources include PRL, PRA/PRB, Nature, Science, Hugging Face Papers, and declarative journal definitions, with optional OpenAlex and Semantic Scholar enrichment.
+**ArXiv** is the primary source. The scanner paginates both first submissions and last updates, records scan receipts, and supports categories, announcement-delay rescans, and recovery watermarks. Optional sources include PRL, PRA/PRB, Nature, Science, Hugging Face Papers, and declarative journal definitions, with optional OpenAlex and Semantic Scholar enrichment. When the same paper appears in several sources, SQLite merges it by stable identity and retains source variants.
 
 </td>
 <td width="50%" valign="top">
@@ -69,7 +69,7 @@ Choose **Core Relevance V2**, **Weighted Keywords V1**, or **Learned Preference 
 
 ### 🗃️ SQLite Queues and Exact Delivery
 
-Papers enter SQLite before downstream processing. Source, canonical identity, and version provide exact de-duplication; failed stages remain retryable, and report delivery, scan watermarks, and notification outbox rows are committed together after a report is written.
+Papers enter SQLite before downstream processing. Stable identity, source, and version control de-duplication; mergeable fields are unified while source-specific abstracts and analyses remain variants. Failed stages remain retryable, and report delivery, scan watermarks, and notification outbox rows are committed together after a report is written.
 
 </td>
 </tr>
@@ -88,7 +88,7 @@ Papers enter SQLite before downstream processing. Source, canonical identity, an
 
 ### 📜 Legacy Import and Past Daily Reports
 
-Legacy HTML reports can be indexed into the SQLite delivery ledger in one click, preventing future daily runs from repeating those papers. Complete repair additionally reads compatible JSON. HTML remains authoritative for report keywords, while the old keyword cache only fills a missing keyword section for the same reported paper. It then fills missing fields, patches original reports, and produces calendar-week supplement reports for omissions. Past daily reports use a durable date-range queue and run the complete research pipeline day by day.
+Legacy HTML reports can be indexed into the SQLite delivery ledger in one click, preventing future daily runs from repeating those papers. Complete repair additionally reads compatible JSON. HTML remains authoritative for report keywords, while the old keyword cache only fills a missing keyword section for the same reported paper. Field repair, report patching, and omission scans use SQLite as their source of truth; omissions produce calendar-week supplement reports. Past daily reports use a durable date-range queue and run the complete research pipeline day by day.
 
 </td>
 </tr>
@@ -119,14 +119,14 @@ Supports **email, WeCom, DingTalk, Telegram, Slack, and generic webhooks**. Dail
 
 ### 🧙 Setup Wizard and Modern WebUI
 
-The CLI wizard covers LLMs, sources, keywords, scoring, notifications, and advanced settings. The modern WebUI runs as a standalone ASGI service with Run, Content, Configuration, and System groups, all backed by the same persistent worker data.
+The CLI wizard covers LLMs, sources, keywords, scoring, notifications, and advanced settings. The modern WebUI runs as a standalone ASGI service with Run, Content, Configuration, and System groups, bilingual light/dark themes, and account management, all backed by the same persistent worker data.
 
 </td>
 <td width="50%" valign="top">
 
 ### 🛡️ Backups, Sync, and Diagnostics
 
-SQLite automatically creates consistent gzip snapshots: all copies from today are retained, while older dates retain the newest copy per day. WebDAV uses content-change uploads; Diagnostics provides run, LLM, and source health, while Analytics provides token line trends for selectable time ranges.
+SQLite automatically creates consistent gzip snapshots: all copies from today are retained, while older dates retain the newest copy per day. WebDAV uses content-change uploads; Runtime Diagnostics provides run, LLM, and source health, while Usage Statistics provides token line trends for selectable time ranges.
 
 </td>
 </tr>
@@ -193,7 +193,7 @@ Docker users can also start the WebUI and configure the system in a browser:
 docker compose up -d --build
 ~~~
 
-Open <http://127.0.0.1:8503> and configure LLMs, sources, keywords, scoring, notifications, and the run time. The WebUI binds to the local host, which works well with a VPN or an authenticated reverse proxy.
+Open <http://127.0.0.1:8501> and configure LLMs, sources, keywords, scoring, notifications, and the run time. The WebUI binds to the local host, which works well with a VPN or an authenticated reverse proxy.
 
 Docker writes `data`, `logs`, `configs`, and `.env` as the `PUID` / `PGID` in `.env`, preventing root-owned files on NAS bind mounts. When upgrading from an old root-running image, set `ADR_REPAIR_OWNERSHIP=true` for one start, verify ownership, then remove it.
 
@@ -220,8 +220,10 @@ SMART_LLM__MODEL_NAME=gpt-4o
 {
   "keywords": {
     "primary_keywords": {
-      "weight": 1.0,
-      "keywords": ["quantum error correction", "surface code"]
+      "entries": [
+        {"keyword": "quantum error correction", "weight": 1.0},
+        {"keyword": "surface code", "weight": 0.8}
+      ]
     },
     "research_context": "fault-tolerant quantum computing and quantum error-correcting codes"
   },
@@ -296,13 +298,13 @@ The wizard shows a configuration summary before writing and creates a backup for
 
 ~~~bash
 # Local
-uvicorn src.modern_webui.app:app --host 127.0.0.1 --port 8503
+uvicorn src.modern_webui.app:app --host 127.0.0.1 --port 8501
 
 # Docker
 docker compose up -d config-panel
 ~~~
 
-Docker and local panel: <http://127.0.0.1:8503>
+Docker and local panel: <http://127.0.0.1:8501>
 
 The WebUI and worker share <code>.env</code>, <code>configs/</code>, <code>data/</code>, and <code>logs/</code>. The primary sidebar groups pages as Run, Content, Configuration, and System; the secondary pages remain in the top bar, retaining context on long configuration pages. A saved configuration is loaded by the next task. After changing the run time, use the sidebar worker-restart control to reinstall cron.
 
@@ -313,7 +315,7 @@ The WebUI and worker share <code>.env</code>, <code>configs/</code>, <code>data/
 | **Run** | **Daily Research**, **Past Daily Reports**, **Trend Tasks** | Launch research and inspect status and queues; replay past dates one day at a time; configure trend keywords, ranges, categories, and analysis independently |
 | **Content** | **Reports**, **Favorites**, **Search** | Browse and preview HTML reports, mark papers 👍/👎 inside a report, review preference profiles, and search the SQLite archive with source variants |
 | **Configuration** | **Keywords**, **Data Sources**, **Scoring**, **API**, **Notifications**, **Advanced**, **Accounts** | Manage research topics, sources, scoring, LLM/PDF/third-party APIs, notifications, runtime controls, and administrator accounts |
-| **System** | **Backup & Sync**, **History Maintenance**, **Diagnostics**, **Analytics**, **Logs** | Manage exports, WebDAV, and local backups; run legacy maintenance; inspect run/LLM/source health, token line trends, and native log views |
+| **System** | **Backup & Sync**, **History Maintenance**, **Runtime Diagnostics**, **Usage Statistics**, **Logs** | Manage exports, WebDAV, and local backups; run legacy maintenance; inspect run/LLM/source health, token line trends, and native log views |
 
 ### 🖼️ WebUI Screenshots
 
@@ -325,7 +327,7 @@ The WebUI and worker share <code>.env</code>, <code>configs/</code>, <code>data/
       <sub>Daily research, status panel, and queue</sub>
     </td>
     <td align="center" width="33%">
-      <img src="assets/webui_analytics_v4.png" alt="Analytics and token usage trends" width="100%" />
+      <img src="assets/webui_analytics_v4.png" alt="Usage statistics and token trends" width="100%" />
       <br />
       <sub>Token usage, range controls, and line trends</sub>
     </td>
@@ -336,12 +338,17 @@ The WebUI and worker share <code>.env</code>, <code>configs/</code>, <code>data/
     </td>
   </tr>
   <tr>
-    <td align="center" width="50%">
+    <td align="center" width="33%">
+      <img src="assets/webui_advanced_v4.png" alt="PDF parsing and keyword trend settings" width="100%" />
+      <br />
+      <sub>PDF parsing and keyword trend settings</sub>
+    </td>
+    <td align="center" width="33%">
       <img src="assets/webui_data_management_v4.png" alt="Database backups" width="100%" />
       <br />
       <sub>Local backup and retention settings</sub>
     </td>
-    <td align="center" width="50%" colspan="2">
+    <td align="center" width="33%">
       <img src="assets/webui_history_import_v4.png" alt="Legacy history import" width="100%" />
       <br />
       <sub>v3.2 legacy history import entry point</sub>
@@ -372,7 +379,7 @@ The wizard is a convenient starting point, while the panel offers a practical da
 Docker Compose starts two services:
 
 - <code>arxiv-daily-researcher</code>: worker, cron, queue watcher, and research tasks
-- <code>config-panel</code>: modern management WebUI bound to <code>127.0.0.1:8503</code>
+- <code>config-panel</code>: modern management WebUI bound to <code>127.0.0.1:8501</code>
 
 #### Build from source
 
@@ -386,7 +393,7 @@ docker compose ps
 
 #### Use GHCR hosted images
 
-After v4.1 is released, x86_64 and ARM64 images will be available. Pin a production deployment to its matching version tag:
+v4.1 provides both x86_64 and ARM64 images. Pin a production deployment to its matching version tag:
 
 ~~~bash
 export ADR_WORKER_IMAGE=ghcr.io/yzr278892/arxiv-daily-researcher:4.1
@@ -454,7 +461,7 @@ CHEAP_LLM__BASE_URL=http://127.0.0.1:11434/v1
 CHEAP_LLM__MODEL_NAME=qwen2.5:7b
 ~~~
 
-The worker and WebUI both use host-network semantics, so they reach host-local LLMs, proxies, and DNS through the same addresses. The panel itself listens only on <code>127.0.0.1:8503</code>; configure reverse proxies and VPN access for the deployment topology.
+The worker and WebUI both use host-network semantics, so they reach host-local LLMs, proxies, and DNS through the same addresses. The panel itself listens only on <code>127.0.0.1:8501</code>; configure reverse proxies and VPN access for the deployment topology.
 
 </details>
 
@@ -524,7 +531,7 @@ Use one project directory for the worker, WebUI, SQLite database, reports, and l
 
 | Mode | Entry and coordination | Result |
 | :--- | :--------------------- | :----- |
-| <code>legacy_import</code> | System → History Maintenance → Read Legacy History; waits for related work to become idle | By default indexes existing HTML deliveries; complete repair reads compatible JSON, fills missing fields, and schedules follow-up maintenance |
+| <code>legacy_import</code> | System → History Maintenance → Read Legacy History; waits for related work to become idle | By default indexes existing HTML deliveries; complete repair reads compatible JSON, fills missing keywords for the same HTML paper, and schedules follow-up maintenance |
 | <code>history_data_repair</code> | System → History Maintenance → Repair Historical Data | Uses SQLite to fill missing scores, TLDRs, translations, or deep analyses and patches original reports |
 | <code>history_omission_scan</code> | System → History Maintenance → Scan Historical Omissions | Scans source-aware SQLite coverage and creates capped supplements by calendar week |
 | <code>supplement_run</code> | Automatically after import or manually through CLI | Processes supplement backlog and produces supplement reports |
@@ -569,7 +576,7 @@ The V1 threshold is configured as:
 pass threshold = base_score + weight_coefficient × Σ(keyword weights)
 ~~~
 
-V2 thresholds, strong-match conditions, and ranking signals are configured in **Scoring**. Scoring results retain non-sensitive audit evidence for review in reports and Analytics.
+V2 thresholds, strong-match conditions, and ranking signals are configured in **Scoring**. Scoring results retain non-sensitive audit evidence for review in reports and Runtime Diagnostics.
 
 ### 📡 Sources and Scan Receipts
 
@@ -577,7 +584,7 @@ V2 thresholds, strong-match conditions, and ranking signals are configured in **
 - **Additional sources**: built-in and declarative definitions behind an independent switch
 - **OpenAlex**: additional journal data; an API key can use the provider's official quota
 - **Semantic Scholar**: optional TLDR, citation, and related enrichment
-- **Source health**: every scan produces a terminal receipt; Analytics shows recent status, success rate, candidate count, and safe error summaries
+- **Source health**: every scan produces a terminal receipt; Runtime Diagnostics shows recent status, success rate, candidate count, and safe error summaries
 
 Watermarks advance after a complete and safe delivery. Transient network conditions are handled through retries, backoff, and later recovery windows.
 
@@ -599,7 +606,7 @@ The keyword module:
 3. generates keyword-trend reports on the configured schedule
 4. aggregates favorite keywords and Top authors in Favorites & Search
 
-Reference-PDF keyword extraction has its own switch. Disabled extraction stays outside scoring, and extracted keyword lists use a fixed-height scrolling container.
+Reference-PDF keyword extraction has its own switch. Disabled extraction stays outside scoring, and extracted keyword lists are presented in pages for long lists.
 
 ### 🔒 Mutual Exclusion and Recovery
 
@@ -706,7 +713,7 @@ arxiv-daily-researcher/
 <details>
 <summary><b>1. How should I handle empty LLM responses, timeouts, or papers in the retry queue?</b></summary>
 
-Open **System → Diagnostics → LLM Health** to review recent final outcomes, consecutive failures, success rate, last success time, and redacted error summaries.
+Open **System → Runtime Diagnostics → LLM Health** to review recent final outcomes, consecutive failures, success rate, last success time, and redacted error summaries.
 
 - 401, 403, 404, and 400: verify API key, base URL, model name, and gateway compatibility
 - 429, 5xx, timeouts, and empty responses: the shared retry/backoff policy retains incomplete stages
@@ -748,7 +755,7 @@ Check **System → History Maintenance** or **System → Logs** and <code>legacy
 <details>
 <summary><b>4. How does legacy import handle repeated analyses, missing data, and missed papers?</b></summary>
 
-The default **Read Legacy History** action parses only ArXiv cards already present in legacy HTML and creates delivery-ledger rows. It makes no LLM calls and does not scan for omissions, which is useful immediately after an upgrade.
+The default **Read Legacy History** action parses paper cards already present in legacy HTML and creates delivery-ledger rows. It makes no LLM calls and does not scan for omissions, which is useful immediately after an upgrade.
 
 **Fully repair legacy history** merges records by stable paper identity and selects the newest report analysis. Compatible JSON is written into SQLite. Extracted keywords from HTML cards are written directly to paper score records; only an already analyzed HTML card with no keyword section may read <code>data/keywords/keywords.db</code> as a read-only fallback for that same paper. The old cache's normalized terms, aliases, and derived counts are not migrated: the current SQLite normalization workflow owns them. **Check and Repair History** fills missing TLDRs, translations, or deep analyses from SQLite and patches original reports. Range-scan omissions enter the supplement queue by ISO calendar week. Each report follows the configured run cap, and remaining rows stay retryable.
 
@@ -774,7 +781,7 @@ Recommended steps:
 2. export a current zip from System → Backup & Sync as a protection copy
 3. import the target zip, gz, or db archive and review validation results
 4. restore reports, keywords, and configuration as required
-5. restart the worker and inspect System → Diagnostics and queue state
+5. restart the worker and inspect System → Runtime Diagnostics and queue state
 </details>
 
 <details>
@@ -816,7 +823,7 @@ docker compose up -d --no-build --force-recreate
 docker compose ps
 ~~~
 
-After the upgrade, inspect Analytics, queues, and recent logs to confirm compatibility with the current configuration.
+After the upgrade, inspect Runtime Diagnostics, queues, and recent logs to confirm compatibility with the current configuration.
 </details>
 
 ---
@@ -876,7 +883,7 @@ See **[CHANGELOG.md](CHANGELOG.md)** for the complete version history.
 
 <table>
 <tr><th>Version</th><th>Date</th><th>Type</th><th>Highlights</th></tr>
-<tr><td><b>v4.1</b></td><td>2026-08-30</td><td>✨ Enhancements + fixes</td><td>Modern WebUI is the default panel: four navigation groups, 18 focused pages, native selectors, contextual settings, and precise Token line trends. Legacy import and SQLite maintenance remain available under System → History Maintenance.</td></tr>
+<tr><td><b>v4.1</b></td><td>2026-08-30</td><td>✨ Enhancements + fixes</td><td>Modern WebUI is the default panel with four navigation groups, 18 focused pages, account management, and local updates. Legacy maintenance, cross-source merging, LLM endpoint capability detection, runtime diagnostics, and Token line trends are expanded together.</td></tr>
 <tr><td><b>v4.0</b></td><td>2026-08-25</td><td>🚀 Major release</td><td>SQLite daily-history system, durable candidate and retry queues, complete scan receipts, Core Relevance V2, favorites, legacy import with automatic supplement reports, past-daily date-range queues, SQLite backups with incremental WebDAV archive, LLM health, workflow notifications, GHCR AMD64/ARM64 images, and release regression.</td></tr>
 <tr><td><b>v3.2</b></td><td>2026-04-26</td><td>✨ Enhancements + fixes</td><td>Network proxy, WebDAV data sync, configuration export, Docker update notifications, Daily Push tab, Markdown/HTML output switches, and trend-analysis output settings.</td></tr>
 <tr><td><b>v3.1</b></td><td>2026-04-15</td><td>✨ Enhancements + fixes</td><td>Run management, log viewer, Trend Analysis tab, report-view improvements, ArXiv timeout guard, and run-lock improvements.</td></tr>
