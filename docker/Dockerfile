@@ -128,10 +128,10 @@ RUN mkdir -p /app/data /app/logs /app/.modern-webui && \
 COPY docker/webui-entrypoint.sh /webui-entrypoint.sh
 RUN chmod 0755 /webui-entrypoint.sh
 
-EXPOSE 8503
+EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=15s --retries=3 --start-period=20s \
-    CMD python /app/src/utils/container_health.py webui --url http://127.0.0.1:8503/api/health || exit 1
+    CMD python /app/src/utils/container_health.py webui --url http://127.0.0.1:8501/api/health || exit 1
 
 ENTRYPOINT ["/webui-entrypoint.sh"]
-CMD ["uvicorn", "src.modern_webui.app:app", "--host", "127.0.0.1", "--port", "8503"]
+CMD ["uvicorn", "src.modern_webui.app:app", "--host", "127.0.0.1", "--port", "8501"]

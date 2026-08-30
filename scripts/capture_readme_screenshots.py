@@ -16,7 +16,7 @@ from pathlib import Path
 from playwright.sync_api import Page, sync_playwright
 
 
-BASE_URL = os.environ.get("ADR_SCREENSHOT_BASE_URL", "http://127.0.0.1:8503").rstrip("/")
+BASE_URL = os.environ.get("ADR_SCREENSHOT_BASE_URL", "http://127.0.0.1:8501").rstrip("/")
 OUTPUT_DIR = Path(
     os.environ.get("ADR_SCREENSHOT_OUTPUT_DIR", str(Path(__file__).resolve().parents[1] / "assets"))
 )

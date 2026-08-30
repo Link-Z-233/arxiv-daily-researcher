@@ -243,7 +243,7 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--runtime-user", default="adr")
     parser.add_argument(
         "--url",
-        default="http://127.0.0.1:8503/api/health",
+        default="http://127.0.0.1:8501/api/health",
         help="WebUI health endpoint for webui mode",
     )
     return parser.parse_args(argv)
