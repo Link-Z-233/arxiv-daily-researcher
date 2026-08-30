@@ -78,6 +78,14 @@ class ModernWebUIAppTests(unittest.TestCase):
         self.assertIn('<thead><tr>${metrics.map(([label])', summary)
         self.assertIn('<tbody><tr>${metrics.map(([, value])', summary)
 
+    def test_extracted_keywords_use_a_paged_table_with_group_spacing(self) -> None:
+        script = self.client.get("/assets/app.js").text
+        stylesheet = self.client.get("/assets/app.css").text
+
+        self.assertIn('pagedTable("reference-extracted-keywords"', script)
+        self.assertNotIn("native-scroll-list", script)
+        self.assertIn(".reference-extraction-fields { display: grid; gap: 24px;", stylesheet)
+
     def test_stale_trigger_cleanup_uses_the_authenticated_api_boundary(self) -> None:
         self.assertEqual(self.client.post("/api/triggers/stale", json={}).status_code, 503)
         self.assertEqual(

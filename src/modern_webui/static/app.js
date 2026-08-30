@@ -225,6 +225,7 @@ const MODERN_EN_TRANSLATIONS = Object.freeze({
   "论文": "Paper",
   "论文标识": "Paper ID",
   "暂无 👍 收藏论文。": "No liked papers yet.",
+  "权重": "Weight",
   "收藏次数": "Favorites",
   "收藏关键词": "Favorite Keywords",
   "次数": "Count",
@@ -1769,24 +1770,30 @@ async function loadExtractedKeywords(root, token) {
   try {
     const result = await api("/api/extracted-keywords");
     if (token !== state.renderToken || !booleanValue(configValue("enable_reference_extraction", false), false)) return;
-    if (host) host.innerHTML = extractedKeywordList(result.items || []);
+    if (host) {
+      host.innerHTML = extractedKeywordList(result.items || []);
+      bindPagers(host);
+      applyLocale(host);
+    }
   } catch (error) { /* cache visibility should not prevent configuration */ }
 }
 
 function extractedKeywordList(items) {
   if (!items.length) return '<p class="empty-state">尚未提取关键词。</p>';
-  // This is intentionally a native scroll container instead of a paged
-  // table.  The compatibility panel keeps the full extracted-keyword cache
-  // in one compact, fixed-height box so users can scan its ordering without
-  // growing the entire configuration page.
-  const visibleRows = Math.min(10, items.length);
-  const height = 54 + visibleRows * 46;
-  return `<div class="native-scroll-list" style="height:${height}px"><p class="hint-text">已提取 ${formatNumber(items.length)} 个关键词</p>${items.map((item) => `<div class="native-scroll-row"><span>${escapeHtml(item.keyword)}</span><small>${escapeHtml(Number(item.weight).toFixed(2))}</small></div>`).join("")}</div>`;
+  const count = formatNumber(items.length);
+  const countLabel = localeText(`已提取 ${count} 个关键词`, `${count} extracted keywords`);
+  return `<div class="extracted-keywords-table"><p class="hint-text">${escapeHtml(countLabel)}</p>${pagedTable("reference-extracted-keywords", [
+    { label: "关键词", value: (row) => row.keyword || "—" },
+    { label: "权重", value: (row) => {
+      const weight = Number(row.weight);
+      return Number.isFinite(weight) ? weight.toFixed(2) : "—";
+    } },
+  ], items, { empty: "尚未提取关键词。" })}</div>`;
 }
 
 function renderReferenceExtraction() {
   const enabled = booleanValue(configValue("enable_reference_extraction", false), false);
-  const fields = `<div class="form-grid two">${field({ label: "最多关键词数量", key: "max_reference_keywords", type: "number", min: 1, max: 50, fallback: 10 })}${field({ label: "相似度阈值", key: "similarity_threshold", type: "range", min: 0, max: 1, step: 0.05, fallback: 0.75 })}</div><div class="form-grid three">${weightField("高重要度", "high", 1, 3)}${weightField("中重要度", "medium", 0.2, 5)}${weightField("低重要度", "low", 0.1, 2)}</div><div id="extracted-keywords"><div class="loading">正在读取已提取关键词…</div></div>`;
+  const fields = `<div class="reference-extraction-fields"><div class="form-grid two">${field({ label: "最多关键词数量", key: "max_reference_keywords", type: "number", min: 1, max: 50, fallback: 10 })}${field({ label: "相似度阈值", key: "similarity_threshold", type: "range", min: 0, max: 1, step: 0.05, fallback: 0.75 })}</div><div class="form-grid three">${weightField("高重要度", "high", 1, 3)}${weightField("中重要度", "medium", 0.2, 5)}${weightField("低重要度", "low", 0.1, 2)}</div><div id="extracted-keywords"><div class="loading">正在读取已提取关键词…</div></div></div>`;
   const content = `${field({ label: "启用参考文献关键词提取", key: "enable_reference_extraction", type: "checkbox", fallback: false })}<div id="reference-extraction-dependent" ${enabled ? "" : "hidden"}>${fields}</div><p id="reference-extraction-disabled-hint" class="hint-text" ${enabled ? "hidden" : ""}>关闭后不会展示或使用此前提取的关键词；缓存会保留，重新开启后可继续复用。</p>`;
   return section("参考文献 PDF 关键词提取", content, { icon: "📚" });
 }
