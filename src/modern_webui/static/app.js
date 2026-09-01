@@ -1864,7 +1864,17 @@ function renderSources() {
     ? `<div class="source-custom source-custom-panel"><h3>自定义 OpenAlex 期刊来源</h3><p class="hint-text">通过 ISSN 添加需要跟踪的期刊；保存后会与内置来源一起参与额外数据源任务。</p>${customRows}<div class="form-grid two"><label class="form-field"><span>来源代码</span><input id="custom-code" placeholder="optica_express" /></label><label class="form-field"><span>展示名称</span><input id="custom-display" placeholder="Opt. Express" /></label><label class="form-field"><span>完整名称</span><input id="custom-full" placeholder="Optics Express" /></label><label class="form-field"><span>ISSN（逗号分隔）</span><input id="custom-issn" placeholder="1094-4087" /></label></div><div class="action-row"><button id="custom-add" class="secondary-button">添加来源</button></div></div>`
     : "";
   const sourceReportGrouping = hasExtraSource
-    ? `<div class="source-report-group">${field({ label: "按数据源分类整理报告", key: "reports_by_source", type: "checkbox", fallback: true })}</div>`
+    ? `<div class="source-report-group">${field({
+        label: "报告目录结构",
+        key: "directory_structure",
+        type: "select",
+        fallback: "by_source",
+        help: "按数据源：每个数据源一个独立目录；按运行时间：一次运行的全部报告存入同一个时间戳目录",
+        choices: [
+          { value: "by_source", label: "按数据源分目录" },
+          { value: "date_grouped", label: "按运行时间分目录" },
+        ],
+      })}</div>`
     : "";
   return `${section("arXiv", `<label class="toggle-field"><span>启动 arXiv 来源</span><input id="source-arxiv" type="checkbox" ${data.arxiv ? "checked" : ""}/><i></i></label>${data.arxiv ? `<p class="hint-text">选择需要扫描的 arXiv 分类。</p>${tagMultiSelect({ id: "source-domains", label: "arXiv 分类", selected: data.domains, choices: categoryChoices, addLabel: localeText("添加分类", "Add category"), emptyLabel: localeText("尚未选择分类", "No categories selected") })}<div class="form-grid two">${field({ label: "请求超时（秒）", key: "arxiv_fetch_timeout_seconds", type: "number", min: 30, max: 1800, fallback: 180 })}${field({ label: "公告回看宽限（天）", key: "arxiv_announcement_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}</div>` : ""}`)}${divider()}${section("额外数据源", `<label class="toggle-field"><span>启动额外数据源</span><input id="extra-enabled" type="checkbox" ${data.extraEnabled ? "checked" : ""}/><i></i></label>${data.extraEnabled ? `${tagMultiSelect({ id: "extra-builtins", label: "内置来源", selected: data.builtins, choices: builtinChoices, addLabel: localeText("添加内置来源", "Add built-in source"), emptyLabel: localeText("尚未选择内置来源", "No built-in sources selected") })}${sourceReportGrouping}${customOpenAlex}${data.builtins.includes("huggingface_papers") ? `<div class="form-grid two">${field({ label: "Hugging Face 可用性滞后（天）", key: "huggingface_papers_availability_lag_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "回看宽限（天）", key: "huggingface_papers_lookback_grace_days", type: "number", min: 0, max: 30, fallback: 2 })}${field({ label: "请求超时（秒）", key: "huggingface_papers_request_timeout_seconds", type: "number", min: 5, max: 600, fallback: 30 })}${field({ label: "请求间隔（秒）", key: "huggingface_papers_request_interval_seconds", type: "number", min: 0, max: 60, step: 0.05, fallback: 0.25 })}</div>` : ""}` : '<p class="hint-text">开启后可选择内置来源；启用 OpenAlex 后可在此添加 ISSN 期刊来源。</p>'}`)}`;
 }

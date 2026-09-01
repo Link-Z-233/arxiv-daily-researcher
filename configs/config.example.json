@@ -244,7 +244,10 @@
   // ==================================================
   "report_settings": {
     "enable_html_report": true,
-    "enable_markdown_report": true
+    "enable_markdown_report": true,
+    // 日报目录结构：by_source = 每个数据源一个目录（默认）；
+    // date_grouped = 一次运行的全部报告存入同一个运行时间戳目录
+    "directory_structure": "by_source"
   },
 
   // ==================================================

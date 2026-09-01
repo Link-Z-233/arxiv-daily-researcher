@@ -177,7 +177,10 @@ class Settings(BaseSettings):
     TARGET_JOURNALS: List[str] = []  # 目标期刊列表（如 ["prl", "pra"]）
     EXTRA_SOURCES_ENABLED: bool = False
     EXTRA_SOURCE_DEFINITIONS: List[Dict[str, Any]] = []
-    REPORTS_BY_SOURCE: bool = True  # 是否按数据源分目录存放报告
+    REPORTS_BY_SOURCE: bool = True  # 是否按数据源分目录存放报告（旧布尔开关，向后兼容）
+    # 日报目录结构：date_grouped（按运行时间分目录）/ by_source（按数据源分目录）
+    # / flat（平铺，仅手工配置兼容）。空值 = 沿用上面布尔开关的旧逻辑。
+    REPORT_DIRECTORY_STRUCTURE: str = ""
     HISTORY_DIR: Path = DATA_DIR / "history"  # 历史记录目录
 
     # OpenAlex 配置
@@ -906,6 +909,9 @@ class Settings(BaseSettings):
                 rpt_cfg = config["report_settings"]
                 self.ENABLE_HTML_REPORT = rpt_cfg.get("enable_html_report", False)
                 self.ENABLE_MARKDOWN_REPORT = rpt_cfg.get("enable_markdown_report", True)
+                self.REPORT_DIRECTORY_STRUCTURE = rpt_cfg.get(
+                    "directory_structure", self.REPORT_DIRECTORY_STRUCTURE
+                )
 
             # 加载 daily research 模式配置
             if "daily_research" in config:

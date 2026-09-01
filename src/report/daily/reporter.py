@@ -174,6 +174,12 @@ class Reporter:
 
         generated_at = report_timestamp or datetime.now()
         timestamp = generated_at.strftime("%Y-%m-%d_%H-%M-%S_%f")
+        # 目录结构：date_grouped（一次运行的所有来源进同一个时间戳目录）/
+        # by_source（每个来源一个目录）/ flat（平铺，仅手工配置兼容）。
+        # 缺省沿用旧布尔 reports_by_source，老配置行为不变。
+        structure = getattr(settings, "REPORT_DIRECTORY_STRUCTURE", "") or (
+            "by_source" if settings.REPORTS_BY_SOURCE else "flat"
+        )
         report_paths = {}
 
         for source, papers in scored_papers_by_source.items():
@@ -196,11 +202,15 @@ class Reporter:
 
             # Markdown 报告（如果启用）
             if settings.ENABLE_MARKDOWN_REPORT:
-                if settings.REPORTS_BY_SOURCE:
-                    md_dir = self.report_base_dir / "markdown" / source
+                if structure == "date_grouped":
+                    md_dir = self.report_base_dir / "markdown" / timestamp
+                    filepath = md_dir / f"{source.upper()}_Report.md"
                 else:
-                    md_dir = self.report_base_dir / "markdown"
-                filepath = md_dir / f"{source.upper()}_Report_{timestamp}.md"
+                    if structure == "by_source":
+                        md_dir = self.report_base_dir / "markdown" / source
+                    else:
+                        md_dir = self.report_base_dir / "markdown"
+                    filepath = md_dir / f"{source.upper()}_Report_{timestamp}.md"
                 try:
                     report_paths[source] = self._generate_single_source_report(
                         filepath=filepath,
@@ -227,12 +237,17 @@ class Reporter:
 
             # 生成 HTML 报告（如果启用）
             if settings.ENABLE_HTML_REPORT:
-                # HTML 报告目录: reports/html/[source]/
-                if settings.REPORTS_BY_SOURCE:
-                    html_dir = self.report_base_dir / "html" / source
+                if structure == "date_grouped":
+                    # HTML 报告目录: reports/html/{运行时间戳}/
+                    html_dir = self.report_base_dir / "html" / timestamp
+                    html_filepath = html_dir / f"{source.upper()}_Report.html"
                 else:
-                    html_dir = self.report_base_dir / "html"
-                html_filepath = html_dir / f"{source.upper()}_Report_{timestamp}.html"
+                    # HTML 报告目录: reports/html/[source]/（by_source）或 reports/html/（flat）
+                    if structure == "by_source":
+                        html_dir = self.report_base_dir / "html" / source
+                    else:
+                        html_dir = self.report_base_dir / "html"
+                    html_filepath = html_dir / f"{source.upper()}_Report_{timestamp}.html"
                 try:
                     report_paths[f"{source}_html"] = self._generate_html_report(
                         filepath=html_filepath,

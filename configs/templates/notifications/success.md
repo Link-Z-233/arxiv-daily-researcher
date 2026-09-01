@@ -25,15 +25,19 @@
 
 <font color="info">**运行成功**</font> | {timestamp}
 
-**本次运行统计**
-> 抓取 <font color="info">**{total_fetched}**</font> 篇 | 及格 <font color="info">**{total_qualified}**</font> 篇 | 深度分析 <font color="info">**{total_analyzed}**</font> 篇
-
 {source_summary}
-
-{issues_section}
 
 {token_usage_section}
 
+ ---
+
 {top_papers}
+
+---
+
+**本次运行统计**
+> 抓取 <font color="info">**{total_fetched}**</font> 篇 | 及格 <font color="info">**{total_qualified}**</font> 篇 | 深度分析 <font color="info">**{total_analyzed}**</font> 篇
+
+{issues_section}
 
 {report_list}

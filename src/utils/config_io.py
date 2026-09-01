@@ -795,6 +795,7 @@ def build_config_dict(
     extra_sources_enabled: bool = False,
     extra_source_definitions: Optional[List[Dict[str, Any]]] = None,
     reports_by_source: bool = True,
+    directory_structure: str = "",
     arxiv_fetch_timeout_seconds: int = 180,
     arxiv_announcement_lookback_grace_days: int = 2,
     huggingface_papers_availability_lag_days: int = 2,
@@ -1200,6 +1201,7 @@ def build_config_dict(
         "report_settings": {
             "enable_html_report": enable_html_report,
             "enable_markdown_report": enable_markdown_report,
+            "directory_structure": directory_structure,
         },
         "auto_update": {
             "enabled": auto_update_enabled,
@@ -1586,6 +1588,7 @@ def flatten_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     rs = config.get("report_settings", {})
     flat["enable_html_report"] = rs.get("enable_html_report", True)
     flat["enable_markdown_report"] = rs.get("enable_markdown_report", True)
+    flat["directory_structure"] = rs.get("directory_structure", "")
 
     # Auto-update
     au = config.get("auto_update", {})

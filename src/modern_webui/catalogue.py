@@ -692,13 +692,21 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "extra_sources_added": {"zh": "已添加自定义来源。", "en": "Custom source added."},
     "extra_sources_removed": {"zh": "已移除自定义来源。", "en": "Custom source removed."},
     "extra_sources_invalid": {"zh": "来源定义无效", "en": "Invalid source definitions"},
-    "reports_by_source_toggle": {
-        "zh": "按数据源分类整理报告",
-        "en": "Organize reports by source",
+    "directory_structure_label": {
+        "zh": "报告目录结构",
+        "en": "Report directory layout",
     },
-    "reports_by_source_help": {
-        "zh": "为每个数据源创建独立报告目录",
-        "en": "Create separate report directories for each data source",
+    "directory_structure_help": {
+        "zh": "按数据源：每个数据源一个独立目录；按运行时间：一次运行的全部报告存入同一个时间戳目录",
+        "en": "By source: one directory per source. By run time: all reports of one run share a timestamped directory.",
+    },
+    "directory_structure_by_source": {
+        "zh": "按数据源分目录",
+        "en": "By source",
+    },
+    "directory_structure_date_grouped": {
+        "zh": "按运行时间分目录",
+        "en": "By run time",
     },
     "arxiv_fetch_timeout_label": {
         "zh": "ArXiv 抓取超时（秒）",

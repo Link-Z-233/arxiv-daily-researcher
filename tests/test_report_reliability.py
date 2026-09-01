@@ -285,3 +285,50 @@ class ReportReliabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReportDirectoryStructureTests(unittest.TestCase):
+    """报告目录结构三模式：date_grouped / by_source / flat（兼容旧布尔配置）。"""
+
+    def test_date_grouped_shares_one_timestamped_directory_per_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reporter = Reporter()
+            reporter.report_base_dir = Path(temp_dir)
+            paper = _scored_paper("2501.12345v1", 8, True)
+
+            with patch.object(settings, "ENABLE_MARKDOWN_REPORT", True), patch.object(
+                settings, "ENABLE_HTML_REPORT", False
+            ), patch.object(settings, "REPORT_DIRECTORY_STRUCTURE", "date_grouped"), patch.object(
+                settings, "INCLUDE_ALL_IN_REPORT", True
+            ):
+                paths = reporter.generate_reports_by_source(
+                    {"arxiv": [paper]}, {"keyword": 1.0}
+                )
+
+            md_path = paths["arxiv"]
+            self.assertEqual(md_path.name, "ARXIV_Report.md")
+            self.assertEqual(md_path.parent.parent, Path(temp_dir) / "markdown")
+            # 目录名 = 运行时间戳（秒.微秒）
+            self.assertRegex(md_path.parent.name, r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_\d{6}$")
+
+    def test_empty_structure_falls_back_to_legacy_boolean_layout(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reporter = Reporter()
+            reporter.report_base_dir = Path(temp_dir)
+            paper = _scored_paper("2501.12345v1", 8, True)
+
+            with patch.object(settings, "ENABLE_MARKDOWN_REPORT", True), patch.object(
+                settings, "ENABLE_HTML_REPORT", False
+            ), patch.object(settings, "REPORT_DIRECTORY_STRUCTURE", ""), patch.object(
+                settings, "REPORTS_BY_SOURCE", True
+            ), patch.object(
+                settings, "INCLUDE_ALL_IN_REPORT", True
+            ):
+                paths = reporter.generate_reports_by_source(
+                    {"arxiv": [paper]}, {"keyword": 1.0}
+                )
+
+            md_path = paths["arxiv"]
+            # 旧布局不变：markdown/arxiv/ARXIV_Report_{时间戳}.md
+            self.assertEqual(md_path.parent, Path(temp_dir) / "markdown" / "arxiv")
+            self.assertRegex(md_path.name, r"^ARXIV_Report_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_\d{6}\.md$")

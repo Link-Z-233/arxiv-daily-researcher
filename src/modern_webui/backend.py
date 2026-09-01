@@ -1466,8 +1466,27 @@ def analytics(
         raise ModernWebUIError(f"读取用量统计失败：{exc}") from exc
 
 
-def _report_sort_key(path: Path, modified_at: float | None = None) -> tuple[int, int, str]:
-    stem = path.stem
+# date_grouped 布局的运行目录名：秒级（v3.2 旧报告）或微秒级时间戳
+_RUN_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d+)?$")
+
+
+def _daily_timestamp_name(path: Path) -> str:
+    """Return the path component that carries a daily report's timestamp.
+
+    by_source / flat reports keep it in the filename; date_grouped reports
+    (``html/{run-ts}/{SOURCE}_Report.html``) carry it in the run directory
+    name instead, so directory-aware fallbacks keep labels, dates and
+    sorting working for both layouts.
+    """
+    if _RUN_DIR_RE.fullmatch(path.parent.name):
+        return path.parent.name
+    return path.stem
+
+
+def _report_sort_key(
+    path: Path, modified_at: float | None = None, timestamp_name: str | None = None
+) -> tuple[int, int, str]:
+    stem = timestamp_name or path.stem
     match = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})(?:_(\d+))?", stem)
     if match:
         micro = (match.group(5) or "").ljust(6, "0")
@@ -1524,7 +1543,12 @@ def list_reports(show_non_arxiv: bool = False) -> dict[str, list[dict[str, Any]]
             if not path.is_file():
                 continue
             relative = path.relative_to(daily_root)
-            source = relative.parts[0].lower() if len(relative.parts) > 1 else (re.match(r"(.+?)_Report_", path.stem, re.I).group(1).lower() if re.match(r"(.+?)_Report_", path.stem, re.I) else "unknown")
+            if len(relative.parts) > 1 and not _RUN_DIR_RE.fullmatch(relative.parts[0]):
+                source = relative.parts[0].lower()
+            else:
+                # 平铺文件名或 date_grouped 运行目录内的 {SOURCE}_Report
+                match = re.match(r"(.+?)_Report", path.stem, re.I)
+                source = match.group(1).lower() if match else "unknown"
             if not show_non_arxiv and source != "arxiv":
                 continue
             groups["daily"].append(_report_row(path, root, "daily", source, labels=labels))
@@ -1547,6 +1571,7 @@ def list_reports(show_non_arxiv: bool = False) -> dict[str, list[dict[str, Any]]
         _disambiguate_report_labels(values)
         for row in values:
             row.pop("sort_key", None)
+            row.pop("_ts_name", None)
     return groups
 
 
@@ -1565,13 +1590,17 @@ def _report_row(
         modified_at = stat.st_mtime
     except OSError:
         mtime, size, modified_at = "", 0, None
-    date_match = re.search(r"\d{4}-\d{2}-\d{2}", path.stem)
+    # date_grouped 日报的时间戳在运行目录名里，文件名只有 {SOURCE}_Report
+    ts_name = (
+        _daily_timestamp_name(path) if report_type == "daily" else path.stem
+    )
+    date_match = re.search(r"\d{4}-\d{2}-\d{2}", ts_name)
     source_key = str(source or "unknown").strip().lower() or "unknown"
     labels = labels or _report_source_labels()
     return {
         "id": _report_token(path, root),
         "name": path.name,
-        "label": _report_label(path, report_type),
+        "label": _report_label(path, report_type, timestamp_name=ts_name),
         "source": source_key,
         "source_label": labels.get(source_key, source),
         "type": report_type,
@@ -1579,7 +1608,8 @@ def _report_row(
         "modified_at": mtime,
         "size_bytes": size,
         "metadata": _trend_report_metadata(path) if report_type == "trend" else None,
-        "sort_key": _report_sort_key(path, modified_at),
+        "sort_key": _report_sort_key(path, modified_at, timestamp_name=ts_name),
+        "_ts_name": ts_name,
     }
 
 
@@ -1592,9 +1622,11 @@ def _report_source_labels() -> dict[str, str]:
         return source_display_names()
 
 
-def _report_label(path: Path, report_type: str) -> str:
+def _report_label(
+    path: Path, report_type: str, timestamp_name: str | None = None
+) -> str:
     """Format report labels exactly like the Streamlit select boxes."""
-    stem = path.stem
+    stem = timestamp_name or path.stem
     if report_type == "daily":
         match = re.search(
             r"(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})(?:_\d+)?$", stem
@@ -1632,7 +1664,9 @@ def _disambiguate_report_labels(rows: list[dict[str, Any]]) -> None:
         if counts.get(key, 0) <= 1:
             used.add(key)
             continue
-        micro = re.search(r"_(\d+)$", str(row.get("name") or "").rsplit(".", 1)[0])
+        micro = re.search(
+            r"_(\d+)$", str(row.get("_ts_name") or row.get("name") or "").rsplit(".", 1)[0]
+        )
         suffix = f".{micro.group(1)}" if micro else " · duplicate"
         candidate = f"{label}{suffix}"
         duplicate_number = 2
@@ -1672,9 +1706,9 @@ def _daily_report_source(path: Path, root: Path) -> str:
         relative = path.resolve().relative_to(daily_root.resolve())
     except ValueError:
         return "arxiv"
-    if len(relative.parts) > 1:
+    if len(relative.parts) > 1 and not _RUN_DIR_RE.fullmatch(relative.parts[0]):
         return relative.parts[0].strip().lower() or "arxiv"
-    match = re.match(r"(.+?)_Report_", path.stem, re.IGNORECASE)
+    match = re.match(r"(.+?)_Report", path.stem, re.IGNORECASE)
     return (match.group(1).strip().lower() if match else "arxiv") or "arxiv"
 
 

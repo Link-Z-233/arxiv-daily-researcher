@@ -712,3 +712,69 @@ class ModernBackendTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class DateGroupedReportDiscoveryTests(unittest.TestCase):
+    """date_grouped 布局：一次运行的全部报告存入同一个运行时间戳目录。"""
+
+    def test_run_directory_reports_are_discovered_with_recovered_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            daily_root = root / "daily_research" / "html"
+            run_dir = daily_root / "2026-08-30_08-00-01_123456"
+            run_dir.mkdir(parents=True)
+            (run_dir / "ARXIV_Report.html").write_text("<html></html>", encoding="utf-8")
+            (run_dir / "PRL_Report.html").write_text("<html></html>", encoding="utf-8")
+            legacy_dir = daily_root / "2026-06-24_08-00-01"
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "ARXIV_Report.html").write_text("<html></html>", encoding="utf-8")
+
+            with (
+                patch.object(backend, "configured_reports_dir", return_value=root),
+                patch.object(backend, "_report_source_labels", return_value={}),
+            ):
+                groups = backend.list_reports(show_non_arxiv=True)
+
+            daily = groups["daily"]
+            self.assertEqual(len(daily), 3)
+            self.assertEqual({row["source"] for row in daily}, {"arxiv", "prl"})
+            self.assertEqual({row["date"] for row in daily}, {"2026-08-30", "2026-06-24"})
+            self.assertTrue(
+                all(row["label"].startswith("2026-") for row in daily),
+                f"标签应取自运行目录时间戳: {[row['label'] for row in daily]}",
+            )
+            # 最新运行目录排在最前
+            self.assertEqual(daily[0]["date"], "2026-08-30")
+
+    def test_daily_report_source_supports_date_grouped_run_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "daily_research" / "html" / "2026-08-30_08-00-01_123456"
+            run_dir.mkdir(parents=True)
+            report = run_dir / "PRL_Report.html"
+            report.touch()
+            self.assertEqual(backend._daily_report_source(report, root), "prl")
+
+    def test_date_grouped_same_second_runs_keep_distinct_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            daily_root = root / "daily_research" / "html"
+            first_dir = daily_root / "2026-08-30_08-00-01_100001"
+            second_dir = daily_root / "2026-08-30_08-00-01_200002"
+            first_dir.mkdir(parents=True)
+            second_dir.mkdir(parents=True)
+            first = first_dir / "ARXIV_Report.html"
+            second = second_dir / "ARXIV_Report.html"
+            first.write_text("<html></html>", encoding="utf-8")
+            second.write_text("<html></html>", encoding="utf-8")
+
+            with patch.object(backend, "_report_source_labels", return_value={}):
+                rows = [
+                    backend._report_row(first, root, "daily", "arxiv"),
+                    backend._report_row(second, root, "daily", "arxiv"),
+                ]
+            backend._disambiguate_report_labels(rows)
+
+        self.assertEqual(len({row["label"] for row in rows}), 2)
+        self.assertIn(".200002", rows[1]["label"])
+        self.assertIn(".100001", rows[0]["label"])
